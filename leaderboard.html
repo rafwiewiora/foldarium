@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pose Quiz · Leaderboard</title>
+<style>
+  :root{--bg:#0d1117;--panel:#11161d;--line:#222c38;--ink:#e6edf3;--muted:#8b98a8;--faint:#5a6675;
+    --accent:#3fb6e0;--good:#2BA84A;--bad:#E23B2E}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  .wrap{max-width:720px;margin:40px auto;padding:0 20px}
+  h1{font-size:18px;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+  .sub{color:var(--muted);font-size:13px;margin-top:-8px}
+  a{color:var(--accent);text-decoration:none}
+  table{width:100%;border-collapse:collapse;margin-top:18px;font-size:14px}
+  th{text-align:left;color:var(--faint);font-weight:500;font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #1a212b;font-variant-numeric:tabular-nums}
+  tr:hover td{background:#131b24}
+  .rank{color:var(--faint);width:34px}
+  .acc{font-weight:600}
+  .pos{color:var(--good)} .neg{color:var(--bad)}
+  .empty{color:var(--muted);margin-top:24px}
+</style></head>
+<body><div class="wrap">
+  <h1>Pose Quiz — Leaderboard</h1>
+  <div class="sub">Which AlphaFold3 pose is correct? · accuracy on ambiguous single-pocket ensembles · <a href="index.html">play →</a></div>
+  <div id="tbl"></div>
+</div>
+<script>
+function localLeaderboard(){
+  const sessions=JSON.parse(localStorage.getItem('poseQuizSessions')||'[]'); const latest={};
+  for(const s of sessions) for(const a of (s.answers||[])){ const u=s.username||'anon'; (latest[u]??={});
+    const c=latest[u][a.item_id]; if(!c||(a.ts||0)>c.ts) latest[u][a.item_id]={pc:a.picked_correct?1:0,ac:a.af3_correct?1:0,ts:a.ts||0}; }
+  const out=[]; for(const u in latest){ const v=Object.values(latest[u]); const n=v.length,c=v.reduce((s,x)=>s+x.pc,0),a=v.reduce((s,x)=>s+x.ac,0);
+    out.push({username:u,items:n,accuracy:Math.round(100*c/n),af3_accuracy:Math.round(100*a/n),beat_af3_by:Math.round(100*(c-a)/n),
+      sessions:sessions.filter(s=>(s.username||'anon')===u).length}); }
+  return out.sort((p,q)=>q.accuracy-p.accuracy||q.items-p.items);
+}
+async function load(){
+  let rows=null; try{ rows=await fetch('api/leaderboard?v='+Date.now()).then(r=>r.ok?r.json():null); }catch(e){}
+  const local=!rows; if(local) rows=localLeaderboard();
+  if(local) document.querySelector('.sub').innerHTML+=' · <span style="color:var(--bad)">this browser only (static, no shared server)</span>';
+  if(!rows.length){ document.getElementById('tbl').innerHTML='<div class="empty">No sessions yet — be the first to play.</div>'; return; }
+  let h='<table><thead><tr><th class="rank">#</th><th>Player</th><th>Items</th><th>Sessions</th><th>Accuracy</th><th>AF3 (pLDDT)</th><th>vs AF3</th></tr></thead><tbody>';
+  rows.forEach((r,i)=>{
+    const cls = r.beat_af3_by>=0?'pos':'neg', sign=r.beat_af3_by>=0?'+':'';
+    h+=`<tr><td class="rank">${i+1}</td><td><b>${r.username}</b></td><td>${r.items}</td><td>${r.sessions}</td>`
+      +`<td class="acc">${r.accuracy}%</td><td>${r.af3_accuracy}%</td><td class="${cls}">${sign}${r.beat_af3_by}</td></tr>`;
+  });
+  document.getElementById('tbl').innerHTML=h+'</tbody></table>';
+}
+load();
+</script></body></html>
