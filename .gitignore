@@ -1,0 +1,10 @@
+# regenerated multi-GB pose/crystal data — rebuild with prep/ (see prep/README.md)
+app/data/
+app/data_rnp/
+_xtal_cache/
+# leaderboard DBs, python caches, cruft
+*.db
+*.sqlite
+__pycache__/
+*.pyc
+.DS_Store
