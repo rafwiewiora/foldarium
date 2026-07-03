@@ -15,6 +15,16 @@
 let viewer, plugin, DATA;
 const $ = s => document.querySelector(s);
 
+// ---- data sources (CAMEO ⇄ Runs-n-Poses) ------------------------------------
+// Both share the SAME schema + render path; only the manifest and the on-disk
+// system-dir prefix differ. RnP file paths are already baked with their
+// `systems_rnp/…` prefix inside systems_rnp.json, so the loaders need no change.
+const SOURCES = {
+  cameo: { manifest: './systems.json',      label: 'CAMEO' },
+  rnp:   { manifest: './systems_rnp.json',  label: 'Runs-n-Poses' },
+};
+let CURRENT_SOURCE = 'cameo';
+
 // Colors (RGB ints for Mol* uniform color).
 const COL = {
   truth:   0x2BA84A,  // crystal ligand — green
@@ -49,11 +59,33 @@ async function init() {
   plugin = viewer.plugin;
   // White background — the RCSB 3D-view look.
   try { plugin.canvas3d?.setProps({ renderer: { backgroundColor: 0xffffff } }); } catch (e) {}
-  DATA = await fetch('./systems.json?v=' + Date.now()).then(r => r.json());
+  DATA = await fetch(SOURCES[CURRENT_SOURCE].manifest + '?v=' + Date.now()).then(r => r.json());
   buildControls();
   // Share the single viewer/plugin with the within-target overlay mode (group.js).
   window.COFOLD = { viewer, plugin, OPTS, COL };
   initModeSwitch();
+  initSourceSwitch();
+  await render();
+}
+
+// ---- source switch (CAMEO ⇄ Runs-n-Poses) -----------------------------------
+// Reload the chosen manifest, reset selection state, and re-render. The RnP
+// systems carry their own `systems_rnp/…` paths so the render path is unchanged.
+function initSourceSwitch() {
+  document.querySelectorAll('#source-tabs .tab').forEach(t => {
+    t.onclick = () => loadSource(t.dataset.source);
+  });
+}
+async function loadSource(key) {
+  if (key === CURRENT_SOURCE || !SOURCES[key]) return;
+  CURRENT_SOURCE = key;
+  document.querySelectorAll('#source-tabs .tab')
+    .forEach(t => t.classList.toggle('on', t.dataset.source === key));
+  // Fresh manifest + reset the current selection so we don't index past the new list.
+  DATA = await fetch(SOURCES[key].manifest + '?v=' + Date.now()).then(r => r.json());
+  STATE.sys = 0; STATE.pose = 'all';
+  renderedSys = -1; savedCamera = null;
+  fillSystems(); fillPoses();
   await render();
 }
 
@@ -62,14 +94,14 @@ async function init() {
 // rebuilds with the other mode's data. The single-system view is untouched.
 let CURRENT_MODE = 'single';
 function initModeSwitch() {
-  document.querySelectorAll('.tab').forEach(t => {
+  document.querySelectorAll('.tab[data-mode]').forEach(t => {
     t.onclick = () => switchMode(t.dataset.mode);
   });
 }
 async function switchMode(mode) {
   if (mode === CURRENT_MODE) return;
   CURRENT_MODE = mode;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
+  document.querySelectorAll('.tab[data-mode]').forEach(t => t.classList.toggle('on', t.dataset.mode === mode));
   document.getElementById('mode-single').classList.toggle('on', mode === 'single');
   document.getElementById('mode-group').classList.toggle('on', mode === 'group');
   const badge = document.getElementById('badge');
