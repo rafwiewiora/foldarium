@@ -30,6 +30,9 @@ pre-cutoff training complex** (`train_pdb` set) and **4 do not**
 homologous pocket, i.e. genuinely novel ligands). Systems span the CAMEO weeks
 2026.05.16 – 2026.06.06.
 
+The **static demo** further applies the quiz's **≥15 heavy-atom** drug-like floor,
+leaving **32** systems (drops 11 small ligands such as ASN/GLU/NIO/ETE).
+
 ## Layout
 
 ```
@@ -45,7 +48,7 @@ app/                     The viewer to host (no bulk data).
 demo/                    Self-contained STATIC demo (committed, ~98 MB).
   index.html, app.js     Same viewer, paths rewritten to relative; group mode
                          stripped. Serve demo/ as web root.
-  systems.json           Trimmed to the 43 systems that have a neighbour.
+  systems.json           Trimmed to the 32 systems (neighbour + >=15 heavy).
   systems/<id>/...       Baked-in per-system + training-neighbour data.
 
 prep/                    The data pipeline (curated; no *.bak/*.log/experiments).
