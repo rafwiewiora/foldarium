@@ -86,11 +86,16 @@ def main():
     data = json.load(open(manifest))
     systems = data["systems"]
 
-    kept = [s for s in systems if s.get("train_pdb")]
+    # keep = has a training neighbour AND passes the quiz's >=15 heavy-atom drug-like floor
+    HEAVY_MIN = 15
+    kept = [s for s in systems if s.get("train_pdb") and (s.get("n_atoms") or 0) >= HEAVY_MIN]
     dropped_no_train = [s["id"] for s in systems if not s.get("train_pdb")]
+    dropped_small = [s["id"] for s in systems if s.get("train_pdb") and (s.get("n_atoms") or 0) < HEAVY_MIN]
     print(f"total systems in manifest : {len(systems)}")
-    print(f"have train neighbour       : {len(kept)}")
+    print(f"have train neighbour       : {sum(1 for s in systems if s.get('train_pdb'))}")
     print(f"no train neighbour (drop)  : {len(dropped_no_train)} -> {dropped_no_train}")
+    print(f"< {HEAVY_MIN} heavy (drop)        : {len(dropped_small)} -> {dropped_small}")
+    print(f"KEPT (>= {HEAVY_MIN} heavy)        : {len(kept)}")
 
     # Size-budget: greedily include smallest-first; round-robin drop the rest.
     sized = sorted(kept, key=lambda s: files_size(system_files(s)))
