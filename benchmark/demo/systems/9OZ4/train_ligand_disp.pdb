@@ -1,0 +1,11 @@
+HETATM    1 N    LIG X   1      23.793  22.601   1.970  1.00  0.00           N
+HETATM    2 CA   LIG X   1      24.357  21.289   2.405  1.00  0.00           C
+HETATM    3 C    LIG X   1      24.549  20.345   1.236  1.00  0.00           C
+HETATM    4 O    LIG X   1      23.775  20.438   0.257  1.00  0.00           O
+HETATM    5 CB   LIG X   1      23.427  20.651   3.449  1.00  0.00           C
+HETATM    6 CG   LIG X   1      23.264  21.501   4.689  1.00  0.00           C
+HETATM    7 CD   LIG X   1      22.300  20.917   5.698  1.00  0.00           C
+HETATM    8 OE1  LIG X   1      22.139  19.678   5.735  1.00  0.00           O
+HETATM    9 OE2  LIG X   1      21.721  21.702   6.474  1.00  0.00           O
+HETATM   10 OXT  LIG X   1      25.483  19.518   1.306  1.00  0.00           O
+END

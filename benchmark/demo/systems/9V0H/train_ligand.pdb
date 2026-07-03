@@ -1,0 +1,17 @@
+HETATM    1 C    LIG X   1      -13.44   14.84  -12.68  1.00  0.00           C
+HETATM    2 N    LIG X   1      -12.03   16.70  -13.24  1.00  0.00           N
+HETATM    3 O    LIG X   1      -14.42   15.16  -13.32  1.00  0.00           O
+HETATM    4 CA   LIG X   1      -12.49   15.89  -12.11  1.00  0.00           C
+HETATM    5 CB   LIG X   1      -13.13   16.85  -11.06  1.00  0.00           C
+HETATM    6 CD   LIG X   1      -13.76   15.93   -8.77  1.00  0.00           C
+HETATM    7 CE   LIG X   1      -14.86   16.65   -8.00  1.00  0.00           C
+HETATM    8 CG   LIG X   1      -14.23   16.24  -10.20  1.00  0.00           C
+HETATM    9 CK   LIG X   1      -15.27   15.94   -4.26  1.00  0.00           C
+HETATM   10 CL   LIG X   1      -16.28   17.11   -4.11  1.00  0.00           C
+HETATM   11 CP   LIG X   1      -17.14   17.02   -2.85  1.00  0.00           C
+HETATM   12 CX   LIG X   1      -15.38   15.64   -5.77  1.00  0.00           C
+HETATM   13 OX   LIG X   1      -16.02   14.68   -6.19  1.00  0.00           O
+HETATM   14 NZ   LIG X   1      -14.76   16.55   -6.55  1.00  0.00           N
+HETATM   15 OP1  LIG X   1      -17.49   18.11   -2.38  1.00  0.00           O
+HETATM   16 OP2  LIG X   1      -17.45   15.91   -2.37  1.00  0.00           O
+END

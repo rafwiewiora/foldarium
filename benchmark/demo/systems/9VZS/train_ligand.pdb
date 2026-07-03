@@ -1,0 +1,23 @@
+HETATM    1 C1   LIG X   1       14.96    2.47   -1.52  1.00  0.00           C
+HETATM    2 OA   LIG X   1       14.56    3.40   -0.77  1.00  0.00           O
+HETATM    3 OB   LIG X   1       15.40    1.39   -1.05  1.00  0.00           O
+HETATM    4 C2   LIG X   1       14.88    2.70   -3.02  1.00  0.00           C
+HETATM    5 C3   LIG X   1       13.89    1.70   -3.63  1.00  0.00           C
+HETATM    6 C4   LIG X   1       12.51    1.92   -3.05  1.00  0.00           C
+HETATM    7 C5   LIG X   1       11.44    1.14   -3.80  1.00  0.00           C
+HETATM    8 C6   LIG X   1       10.51    1.69   -4.55  1.00  0.00           C
+HETATM    9 C7   LIG X   1       10.45    3.18   -4.92  1.00  0.00           C
+HETATM   10 C8   LIG X   1        9.00    3.65   -5.09  1.00  0.00           C
+HETATM   11 C9   LIG X   1        8.51    4.23   -6.18  1.00  0.00           C
+HETATM   12 C10  LIG X   1        9.26    4.46   -7.51  1.00  0.00           C
+HETATM   13 C11  LIG X   1        9.61    5.94   -7.67  1.00  0.00           C
+HETATM   14 C12  LIG X   1       10.11    6.46   -8.77  1.00  0.00           C
+HETATM   15 C13  LIG X   1       10.38    5.61  -10.00  1.00  0.00           C
+HETATM   16 C14  LIG X   1       11.68    6.08  -10.62  1.00  0.00           C
+HETATM   17 C15  LIG X   1       11.78    6.94  -11.62  1.00  0.00           C
+HETATM   18 C16  LIG X   1       10.61    7.63  -12.31  1.00  0.00           C
+HETATM   19 C17  LIG X   1       10.32    8.96  -11.60  1.00  0.00           C
+HETATM   20 C18  LIG X   1       10.74   10.13  -12.05  1.00  0.00           C
+HETATM   21 C19  LIG X   1       11.54   10.34  -13.32  1.00  0.00           C
+HETATM   22 C20  LIG X   1       10.79   11.30  -14.23  1.00  0.00           C
+END

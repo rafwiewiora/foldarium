@@ -1,0 +1,10 @@
+HETATM    1  C1  LIG X   1       6.666   2.642   2.580  1.00  0.00           C
+HETATM    2  C2  LIG X   1       6.471   2.708   3.959  1.00  0.00           C
+HETATM    3  C3  LIG X   1       5.270   2.235   4.470  1.00  0.00           C
+HETATM    4  C4  LIG X   1       4.291   1.732   3.627  1.00  0.00           C
+HETATM    5  N1  LIG X   1       4.521   1.681   2.285  1.00  0.00           N
+HETATM    6  C5  LIG X   1       5.682   2.134   1.774  1.00  0.00           C
+HETATM    7  C6  LIG X   1       5.042   2.267   5.968  1.00  0.00           C
+HETATM    8  O1  LIG X   1       5.550   3.207   6.617  1.00  0.00           O
+HETATM    9  O2  LIG X   1       4.373   1.364   6.499  1.00  0.00           O
+END
