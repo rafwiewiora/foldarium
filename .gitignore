@@ -8,3 +8,9 @@ _xtal_cache/
 __pycache__/
 *.pyc
 .DS_Store
+# benchmark similarity viewer: exclude regenerable per-system data (the baked demo/ IS kept)
+benchmark/app/systems/
+benchmark/**/_refcache/
+benchmark/**/_fshits/
+benchmark/**/*.bak*
+benchmark/**/*.log
