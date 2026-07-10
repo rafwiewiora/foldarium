@@ -5,7 +5,6 @@
 | Path | Role |
 |------|------|
 | `index.html`, `app.js` | Quiz UI + Mol* viewer |
-| `leaderboard.html` | localStorage leaderboard |
 | `quiz_items*.json` | Novel-only item manifests |
 | `data/`, `data_rnp/` | Per-item pocket/pose PDBs |
 

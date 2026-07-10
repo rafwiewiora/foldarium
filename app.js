@@ -40,7 +40,6 @@ const applyUserView = () => {
   if (quizSource === 'rnp') proteinMode = 'crystal';   // RnP has no per-pose AF3 protein
 };
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
-let sessionAnswers = [];
 const $ = s => document.querySelector(s);
 const CACHE_BUST = Date.now();
 const hex = c => '#' + c.toString(16).padStart(6, '0');
@@ -291,7 +290,7 @@ function showIntro() {
   if (!pool.length) v.innerHTML += '<br><span style="color:var(--bad)">No items for this selection.</span>';
 }
 
-const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset, leaderboard accumulates
+const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
 function startQuiz() {
   ITEMS = DEV ? shuffle(filteredPool().slice())              // dev: browse the WHOLE filtered pool, no 30 cap
               : shuffle(filteredPool().slice()).slice(0, SESSION_SIZE);
@@ -300,7 +299,6 @@ function startQuiz() {
   $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#protmode').style.display = quizSource === 'rnp' ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
-  sessionAnswers = [];
   loadQuestion(0);
 }
 
@@ -401,7 +399,6 @@ function logAnswer(picked, af3) {
     picked_correct: !!picked.correct, picked_rmsd: picked.none ? null : picked.rmsd,
     af3_pick_sample: af3 ? af3.af3_sample : -1, af3_correct: !!(af3 && af3.correct),
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
-  sessionAnswers.push(rec);
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
 }
@@ -455,66 +452,7 @@ function finish() {
   $('#verdict').style.display = '';
   $('#verdict').innerHTML =
     `<b>You: ${pct(score.you, score.n)}%</b> · ${oppLabel()}: ${pct(score.af3, score.n)}% · random: ${pct(score.randExp, score.n)}%`
-    + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`
-    + `<div style="margin-top:12px;display:flex;gap:6px"><input id="uname" placeholder="username for leaderboard"`
-    + ` style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:8px;font-size:13px"/>`
-    + `<button class="primary" id="submit" style="padding:8px 12px">Save</button></div><div id="lbmsg" style="margin-top:10px"></div>`;
-  const saved = localStorage.getItem('poseQuizUser'); if (saved) $('#uname').value = saved;
-  $('#submit').onclick = submitSession;
-}
-
-// Aggregate this browser's localStorage sessions into a leaderboard (used when there's no backend, e.g.
-// static GitHub Pages hosting). Latest answer per (user,item) so re-plays + a growing pool accumulate.
-function localLeaderboard() {
-  const sessions = JSON.parse(localStorage.getItem('poseQuizSessions') || '[]');
-  const latest = {};   // user -> item -> {pc, ac, ts}
-  for (const s of sessions) for (const a of (s.answers || [])) {
-    const u = s.username || 'anon'; (latest[u] ??= {});
-    const key = (a.source || 'cameo') + ':' + a.item_id;
-    const cur = latest[u][key];
-    if (!cur || (a.ts || 0) > cur.ts) latest[u][key] = { pc: a.picked_correct ? 1 : 0, ac: a.af3_correct ? 1 : 0, ts: a.ts || 0 };
-  }
-  const counts = {};
-  for (const u in latest) counts[u] = Object.values(latest[u]).reduce((o, x) => ({ n: o.n + 1, c: o.c + x.pc, a: o.a + x.ac }), { n: 0, c: 0, a: 0 });
-  return Object.entries(counts).map(([username, x]) => ({ username, items: x.n, correct: x.c,
-    accuracy: x.n ? Math.round(100 * x.c / x.n) : 0, af3_accuracy: x.n ? Math.round(100 * x.a / x.n) : 0,
-    beat_af3_by: x.n ? Math.round(100 * (x.c - x.a) / x.n) : 0,
-    sessions: sessions.filter(s => (s.username || 'anon') === username).length }))
-    .sort((p, q) => q.accuracy - p.accuracy || q.items - p.items);
-}
-
-async function submitSession() {
-  const u = ($('#uname').value || 'anon').trim() || 'anon';
-  localStorage.setItem('poseQuizUser', u);
-  const sessions = JSON.parse(localStorage.getItem('poseQuizSessions') || '[]');
-  sessions.push({ username: u, source: quizSource, difficulty, answers: sessionAnswers, ts: Date.now() / 1000 });
-  localStorage.setItem('poseQuizSessions', JSON.stringify(sessions));
-  $('#submit').disabled = true; $('#lbmsg').textContent = 'saving…';
-  let backend = false;
-  try {
-    const r = await fetch('api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: u, source: quizSource, difficulty, answers: sessionAnswers, client_ts: Date.now() / 1000 }) });
-    backend = r.ok;
-  } catch (e) { backend = false; }
-  await showLeaderboard(u, backend);
-}
-
-async function showLeaderboard(me, backend = true) {
-  let rows = null;
-  if (backend) { try { rows = await fetch('api/leaderboard?v=' + Date.now()).then(r => r.ok ? r.json() : null); } catch (e) {} }
-  const local = !rows;
-  if (local) rows = localLeaderboard();
-  const head = `<div style="font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;margin:6px 0">`
-    + `leaderboard${local ? ' <span style="text-transform:none;color:var(--faint)">· this browser only (no shared server)</span>' : ''}</div>`;
-  const body = rows.map((r, i) => {
-    const mine = r.username === me;
-    return `<div style="display:flex;justify-content:space-between;padding:5px 8px;border-radius:6px;`
-      + `${mine ? 'background:#15212b;border:1px solid var(--accent)' : ''};font-size:13px">`
-      + `<span>${i + 1}. <b>${r.username}</b> <span style="color:var(--muted)">· ${r.items} items</span></span>`
-      + `<span><b>${r.accuracy}%</b> <span style="color:var(--muted)">(AI ${r.af3_accuracy}%, `
-      + `<span style="color:${r.beat_af3_by >= 0 ? 'var(--good)' : 'var(--bad)'}">${r.beat_af3_by >= 0 ? '+' : ''}${r.beat_af3_by}</span>)</span></span></div>`;
-  }).join('');
-  $('#lbmsg').innerHTML = head + body;
+    + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`;
 }
 
 async function init() {
