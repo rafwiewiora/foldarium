@@ -106,6 +106,15 @@ function configurePlugin(targetPlugin) {
     });
   } catch (e) {}
 }
+const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
+function focusLigandSpheres(targetPlugin, spheres) {
+  const valid = spheres.filter(Boolean);
+  if (!valid.length || !targetPlugin?.canvas3d) return false;
+  // Same radius/padding path Mol* uses for click-to-focus, but instant because the scene is still hidden.
+  targetPlugin.managers.camera.focusSpheres(valid, sphere => sphere,
+    { minRadius: 8, extraRadius: 4, durationMs: 0 });
+  return true;
+}
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
 function gridPageMethod() {
   const methods = cur?.gridMethods || [];
@@ -289,6 +298,7 @@ async function buildGridCell(cell, revision) {
     }
     const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
     await addPose(pose.struct, spec.answer ? (c.correct ? GOOD : BAD) : c.color, cell.plugin);
+    cell.poseSphere = structureSphere(pose.struct);
     const hbondPoses = [c.pose_file];
     if (spec.revealed && spec.showXtal && spec.item.xtal_lig_file) {
       const xtal = await loadStruct(spec.item.xtal_lig_file, 'pdb', cell.plugin);
@@ -316,7 +326,7 @@ async function buildGrid(preserveCamera = true) {
   view.classList.add('on', 'loading-grid');
   renderGridPages();
   const entries = gridEntries();
-  gridViewers = entries.map((entry, i) => {
+  const cells = entries.map((entry, i) => {
     const card = document.createElement('div');
     card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (entry.choice.correct ? ' correct' : ' wrong') : '');
     const head = document.createElement('button');
@@ -324,17 +334,23 @@ async function buildGrid(preserveCamera = true) {
     head.onclick = () => { if (!locked()) onPick(entry.choiceIndex, entry.choice); };
     const host = document.createElement('div'); host.className = 'grid-host';
     card.append(host, head); cellsBox.appendChild(card);
-    return { entry, card, head, host, viewer: null, plugin: null, disposed: false, index: i,
+    return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false, index: i,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         revealed: cur.revealed, showXtal, showHbonds } };
   });
+  gridViewers = cells;
   startGridLayout();
   syncGridSelection();
-  await Promise.allSettled(gridViewers.map(cell => buildGridCell(cell, revision)));
+  await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
   if (revision !== gridBuildRevision) return;
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  const active = gridViewers.filter(cell => cell.plugin?.canvas3d);
+  if (revision !== gridBuildRevision) return;
+  const active = cells.filter(cell => cell.plugin?.canvas3d);
   if (active.length) {
+    if (!previousCamera && focusLigandSpheres(active[0].plugin, active.map(cell => cell.poseSphere))) {
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (revision !== gridBuildRevision) return;
+    }
     const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
     for (const cell of active) cell.plugin.canvas3d.camera.setState(snapshot, 0);
     stopGridCameraSync = syncGridCameras(active);
@@ -405,6 +421,7 @@ async function buildHbonds(poseUrls) {
 async function buildSingleLayer() {     // only the moving ligand poses (+ crystal truth on reveal)
   await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
+  const ligandSpheres = [];
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
   const vis = visibleChoices();
   const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
@@ -412,6 +429,7 @@ async function buildSingleLayer() {     // only the moving ligand poses (+ cryst
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
     await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color);
+    ligandSpheres.push(structureSphere(s.struct));
   }
   // crystal reference (true pose) — only after reveal, when toggled on
   const hbondPoses = shown.map(c => c.pose_file);
@@ -419,9 +437,11 @@ async function buildSingleLayer() {     // only the moving ligand poses (+ cryst
     const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
     layerData.push(xl.data);
     await addPose(xl.struct, XTAL);
+    ligandSpheres.push(structureSphere(xl.struct));
     hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
+  return ligandSpheres;
 }
 async function buildLayer() {
   if (displayMode === 'grid') return buildGrid();
@@ -471,12 +491,12 @@ async function loadQuestion(i) {
     if (displayMode === 'grid') {
       // Preload and frame the singleton viewer behind the grid, so Grid -> All/One never exposes an
       // empty or stale camera. The grid overlay stays hidden until all of its viewers are ready.
-      await buildSingleLayer();
-      try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}
+      const ligandSpheres = await buildSingleLayer();
+      try { if (!focusLigandSpheres(plugin, ligandSpheres)) plugin.canvas3d?.requestCameraReset(); } catch (e) {}
       await buildGrid(false);
     } else {
-      await buildLayer();
-      try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
+      const ligandSpheres = await buildLayer();
+      try { if (!focusLigandSpheres(plugin, ligandSpheres)) plugin.canvas3d?.requestCameraReset(); } catch (e) {}
     }
   } finally {
     // Let Mol* apply the instant reset before revealing the completed scene; never show partial loading.
