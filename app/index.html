@@ -17,9 +17,33 @@
   #wrap{display:flex;height:100vh}
   #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
     padding:18px 18px 14px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
-  #app{flex:1;position:relative;background:#fff}
-  #app canvas{transition:opacity .14s ease-out}
-  #app.loading-system canvas{opacity:0;transition:none}
+  #stage{flex:1;position:relative;min-width:0;background:#fff}
+  #app{position:absolute;inset:0}
+  #stage canvas{transition:opacity .14s ease-out}
+  #stage.loading-system canvas{opacity:0;transition:none}
+  #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
+    transition:opacity .14s ease-out}
+  #gridview.on{display:block}
+  #stage.loading-system #gridview{opacity:0;transition:none}
+  #gridcells{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:10px;
+    align-content:start;transition:opacity .14s ease-out}
+  #gridview.loading-grid #gridcells{opacity:0;transition:none}
+  .grid-card{position:relative;min-width:0;aspect-ratio:4/3;overflow:hidden;background:#fff;
+    border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
+  .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
+  .grid-card.correct{border-color:var(--good)}
+  .grid-card.wrong{border-color:var(--bad)}
+  .grid-host{position:absolute;inset:0}
+  .grid-head{position:absolute;z-index:5;top:8px;left:8px;display:flex;align-items:center;gap:7px;
+    max-width:calc(100% - 16px);padding:5px 8px;border:1px solid #d5dde5;border-radius:6px;
+    background:#ffffffeb;color:#273444;font:600 11px/1.2 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  .grid-head:disabled{cursor:default}
+  .grid-dot{width:10px;height:10px;border-radius:3px;flex:none}
+  .grid-meta{color:#667587;font-weight:500;white-space:nowrap}
+  .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
+    font-size:12px;text-align:center;background:#fff}
+  #gridpages{overflow-x:auto}
+  #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
   h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
   .sub{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-top:4px}
   #setup{margin-top:2px}
@@ -52,7 +76,7 @@
   .score b{font-variant-numeric:tabular-nums}
   .hint{font-size:11px;color:var(--faint);line-height:1.5}
   .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
-    padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+    z-index:10;padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
 </style>
 </head>
 <body>
@@ -81,7 +105,9 @@
     <div class="seg" id="mode">
       <button data-m="all" class="on">Show all</button>
       <button data-m="one">One at a time</button>
+      <button data-m="grid">Grid</button>
     </div>
+    <div class="seg" id="gridpages" style="display:none;margin-top:6px"></div>
     <div class="seg" id="protmode" style="margin-top:6px">
       <button data-p="crystal" class="on">Crystal protein</button>
       <button data-p="af3">AF3 protein</button>
@@ -109,7 +135,11 @@
       <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
     </div>
   </div>
-  <div id="app"><div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div></div>
+  <div id="stage">
+    <div id="app"></div>
+    <div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div>
+    <div id="gridview"><div id="gridcells"></div></div>
+  </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js"></script>
 <script src="app.js"></script>
