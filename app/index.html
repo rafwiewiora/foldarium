@@ -18,6 +18,8 @@
   #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
     padding:18px 18px 14px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
   #app{flex:1;position:relative;background:#fff}
+  #app canvas{transition:opacity .14s ease-out}
+  #app.loading-system canvas{opacity:0;transition:none}
   h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
   .sub{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-top:4px}
   #setup{margin-top:2px}

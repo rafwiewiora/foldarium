@@ -92,11 +92,6 @@ function visibleChoices() {
   return clustered ? cur.clusters.map(c => c.rep) : cur.clusters.flatMap(c => c.members);
 }
 
-// ---- camera persistence (viewer pattern): keep the view while scrolling poses --------------------
-let savedCam = null;
-function saveCam() { try { savedCam = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) { savedCam = null; } }
-function restoreCam() { try { if (savedCam) plugin.canvas3d.camera.setState(savedCam, 0); } catch (e) {} }
-
 // ---- two layers: a FIXED reference (crystal protein cartoon + crystal pocket sticks, built once per
 //      question so the backbone never moves) and the rebuilt POSE layer (ligands + crystal-reveal). -----
 let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null;
@@ -155,7 +150,6 @@ async function buildHbonds(poseUrls) {
   await plugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
 }
 async function buildLayer() {           // only the moving ligand poses (+ crystal truth on reveal)
-  saveCam();
   await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
@@ -175,10 +169,11 @@ async function buildLayer() {           // only the moving ligand poses (+ cryst
     hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
-  restoreCam();
 }
 
 async function loadQuestion(i) {
+  const viewport = $('#app');
+  viewport.classList.add('loading-system');
   idx = i;
   const item = ITEMS[i];
   // build cluster objects in shuffled order, colour per cluster
@@ -199,11 +194,16 @@ async function loadQuestion(i) {
   $('#myview').style.display = 'none'; $('#start').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
   try { await plugin.clear(); } catch (e) {}
-  proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
+  proteinData = []; layerData = []; hbondData = []; currentProtUrl = null;
   showXtal = false;
   syncButtons();
-  await buildLayer();          // builds the protein (via buildProtein) + the poses
-  try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
+  try {
+    await buildLayer();          // builds the protein (via buildProtein) + the poses
+    try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
+  } finally {
+    // Let Mol* apply the instant reset before revealing the completed scene; never show partial loading.
+    requestAnimationFrame(() => requestAnimationFrame(() => viewport.classList.remove('loading-system')));
+  }
   renderUI();
 }
 
@@ -524,7 +524,13 @@ async function init() {
     document.title = 'Pose Quiz · DEV browse';
     const bd = $('#badge'); if (bd) bd.textContent = 'DEV browse · free Prev/Next · reveal answer + RMSDs on demand';
   }
-  try { plugin.canvas3d?.setProps({ renderer: { backgroundColor: 0xffffff } }); } catch (e) {}
+  try {
+    plugin.canvas3d?.setProps({
+      camera: { manualReset: true },       // structure swaps must never refit/animate the user's current view
+      cameraResetDurationMs: 0,            // new questions should appear already framed, never fly in
+      renderer: { backgroundColor: 0xffffff },
+    });
+  } catch (e) {}
   const fetchItems = async (f) => { try { const d = await fetch(f + '?v=' + Date.now()).then(r => r.ok ? r.json() : null); return d ? (d.items || d) : []; } catch (e) { return []; } };
   const norm = (it, source) => {
     const ch = it.choices.map(c => ({ ...c, correct: c.rmsd < CORRECT_THRESH }));   // strict: correct only if rmsd<1.5
