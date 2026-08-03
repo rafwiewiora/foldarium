@@ -25,10 +25,11 @@
     transition:opacity .14s ease-out}
   #gridview.on{display:block}
   #stage.loading-system #gridview{opacity:0;transition:none}
-  #gridcells{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:10px;
-    align-content:start;transition:opacity .14s ease-out}
+  #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
+    min-height:100%;transition:opacity .14s ease-out}
   #gridview.loading-grid #gridcells{opacity:0;transition:none}
-  .grid-card{position:relative;min-width:0;aspect-ratio:4/3;overflow:hidden;background:#fff;
+  .grid-card{position:relative;flex:0 0 var(--grid-card-w,300px);width:var(--grid-card-w,300px);
+    height:var(--grid-card-h,225px);min-width:0;overflow:hidden;background:#fff;
     border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
   .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
   .grid-card.correct{border-color:var(--good)}

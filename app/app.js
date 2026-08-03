@@ -38,7 +38,8 @@ let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
-let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0, stopGridCameraSync = null;
+let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
+let stopGridCameraSync = null, stopGridLayout = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
@@ -189,12 +190,61 @@ function gridHeader(entry) {
 }
 function disposeGridViewers() {
   if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
+  if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
   for (const cell of gridViewers) {
     cell.disposed = true;
     try { cell.viewer?.dispose(); } catch (e) {}
   }
   gridViewers = [];
   $('#gridcells').replaceChildren();
+}
+function layoutGrid() {
+  const view = $('#gridview'), box = $('#gridcells'), n = gridViewers.length;
+  if (!n || !view.classList.contains('on')) return;
+  const style = getComputedStyle(view);
+  const width = view.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const height = view.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+  if (width <= 0 || height <= 0) return;
+  const gap = 10, aspect = 4 / 3, minWidth = 260;
+  let best = null;
+  for (let columns = 1; columns <= n; columns++) {
+    const rows = Math.ceil(n / columns);
+    const cellWidth = (width - gap * (columns - 1)) / columns;
+    const cellHeight = (height - gap * (rows - 1)) / rows;
+    if (cellWidth <= 0 || cellHeight <= 0) continue;
+    const tileWidth = Math.min(cellWidth, cellHeight * aspect);
+    const tileHeight = tileWidth / aspect;
+    const candidate = { columns, rows, tileWidth, tileHeight,
+      area: tileWidth * tileHeight, empty: columns * rows - n };
+    if (!best || candidate.area > best.area + 1
+        || (Math.abs(candidate.area - best.area) <= 1 && candidate.empty < best.empty)) best = candidate;
+  }
+  if (!best) return;
+  const scrolling = best.tileWidth < minWidth;
+  if (scrolling) {
+    const columns = width < 560 ? 1 : Math.max(1, Math.min(n, Math.floor((width + gap) / (minWidth + gap))));
+    const tileWidth = (width - gap * (columns - 1)) / columns;
+    best = { columns, rows: Math.ceil(n / columns), tileWidth, tileHeight: tileWidth / aspect };
+  }
+  // Round down so fractional layout pixels can never force an accidental extra flex row.
+  const tileWidth = Math.floor(best.tileWidth * 10) / 10;
+  const tileHeight = Math.floor(best.tileHeight * 10) / 10;
+  box.style.setProperty('--grid-card-w', `${tileWidth}px`);
+  box.style.setProperty('--grid-card-h', `${tileHeight}px`);
+  box.style.minHeight = `${height}px`;
+  box.style.alignContent = scrolling ? 'flex-start' : 'center';
+  for (const cell of gridViewers) cell.viewer?.handleResize?.();
+}
+function startGridLayout() {
+  let raf = 0;
+  const schedule = () => {
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => { raf = 0; layoutGrid(); });
+  };
+  const observer = new ResizeObserver(schedule);
+  observer.observe($('#gridview'));
+  layoutGrid();
+  stopGridLayout = () => { observer.disconnect(); if (raf) cancelAnimationFrame(raf); };
 }
 function hideGrid() {
   gridBuildRevision++;
@@ -284,6 +334,7 @@ async function buildGrid(preserveCamera = true) {
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         revealed: cur.revealed, showXtal, showHbonds } };
   });
+  startGridLayout();
   syncGridSelection();
   await Promise.allSettled(gridViewers.map(cell => buildGridCell(cell, revision)));
   if (revision !== gridBuildRevision) return;
