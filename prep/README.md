@@ -49,6 +49,29 @@ Analyses (not part of the build): `pocket_bias_analysis.py` (single- vs multi-po
 `classify_dropped_74.py` (why novel systems drop out), `rule_search.py` / `analyze_plddt.py` /
 `consensus.py` (pose-selection rules; ligand-pLDDT beats ranking_score as the pooled selector).
 
+### Crystal-aligned Runs-n-Poses download
+
+The release prediction CIFs are stored in each model's own Cartesian frame. The
+published ligand RMSDs are evaluator outputs; the source archive is not a
+directly overlayable crystal/prediction ensemble. `rnp/export_crystal_aligned.py`
+builds that derived data product without modifying ligand coordinates
+independently:
+
+- the experimental system is the canonical frame;
+- each complete prediction is moved by one receptor-derived rigid transform;
+- a ligand-only PDB is emitted for fast browser overlays;
+- `alignment.json` records the raw archive member and SHA-256, receptor chain
+  mapping, rotation/translation, fit diagnostics, and validation status;
+- chemically identical ligand copies are treated as scorer-equivalent, with
+  both the indexed and resolved chain IDs retained in the manifest;
+- a system fails closed unless every selected pose passes the sequence,
+  receptor-fit, and published-RMSD geometry checks.
+
+The default export includes full aligned prediction CIFs. Pass
+`--no-include-full-predictions` for a lightweight browser-data build. The script
+requires Python 3.9+, Gemmi, NumPy, and SciPy; run `--help` for the required
+archive, index, selection, cache, and output paths.
+
 ## Downstream (at play time, in `app/app.js`)
 - **Strict thresholds**: correct <1.5 Å, wrong >3 Å (buckets re-derived per session).
 - **`HEAVY_MIN = 15`**: drop small fragments.

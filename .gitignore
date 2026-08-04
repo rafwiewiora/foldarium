@@ -8,6 +8,8 @@ _xtal_cache/
 __pycache__/
 *.pyc
 .DS_Store
+# local release bundles built from the source archives
+artifacts/
 # benchmark similarity viewer: exclude regenerable per-system data (the baked demo/ IS kept)
 benchmark/app/systems/
 benchmark/**/_refcache/

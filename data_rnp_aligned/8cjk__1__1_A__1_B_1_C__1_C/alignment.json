@@ -1,0 +1,854 @@
+{
+  "schemaVersion": "foldarium-crystal-aligned/v1",
+  "systemId": "8cjk__1__1_A__1_B_1_C__1_C",
+  "target": "8cjk__1__1.A__1.B_1.C",
+  "ligandInstance": "1.C",
+  "coordinateFrame": "experimental-system",
+  "crystal": {
+    "systemFile": "crystal.cif",
+    "proteinFile": "protein.pdb",
+    "pocketFile": "pocket.pdb",
+    "ligandFile": "xtal_lig.pdb",
+    "equivalentLigandInstances": [
+      "1.C"
+    ],
+    "equivalentLigandFile": null,
+    "equivalentLigandViewerChainMap": {},
+    "viewerChainMap": {
+      "1.A": "A"
+    },
+    "receptorSourceSha256": "5ba2b771e7e66fd7edf8699d59308bf5840d4a7beae7e79ec391d599b72d3c81",
+    "ligandSourceSha256": "6cfe04302b1e71c5989f3c613e83b57f79fd94102ed902f6e98ebb08ed8b6aff"
+  },
+  "predictions": [
+    {
+      "sample": 0,
+      "method": "af3",
+      "publishedRmsdAngstrom": 1.161,
+      "rankingScore": 0.9719280311308578,
+      "confidence": 88.286,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/af3/8cjk__1__1.A__1.B_1.C/seed-2238951465_sample-4.cif",
+        "sha256": "7a4203ffa4cf3adb1d072bbd78654918d818f7b58fca7f54e859bafe8ae8496b",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.4746,
+        "ligandCentroidDistanceAngstrom": 0.6947,
+        "ligandAssignmentRmsdAngstrom": 1.0795,
+        "geometryExcessAngstrom": -0.0815,
+        "rotation": [
+          [
+            -0.132832307,
+            -0.3011905661,
+            -0.9442668167
+          ],
+          [
+            0.9892913896,
+            -0.0984276622,
+            -0.1077707831
+          ],
+          [
+            -0.0604824321,
+            -0.948470473,
+            0.3110396072
+          ]
+        ],
+        "translation": [
+          -16.3673455858,
+          11.4118556734,
+          -17.115645935
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-0.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 1,
+      "method": "af3",
+      "publishedRmsdAngstrom": 1.326,
+      "rankingScore": 0.9701742043174256,
+      "confidence": 88.036,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/af3/8cjk__1__1.A__1.B_1.C/seed-2277422920_sample-2.cif",
+        "sha256": "b8576a072cbbf7c887b41e731722f2bc5f5ac065849f6e60847e54ba2dd7d8ff",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "full_chain",
+        "matchedCaCount": 291,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.4999,
+        "ligandCentroidDistanceAngstrom": 0.8358,
+        "ligandAssignmentRmsdAngstrom": 1.1728,
+        "geometryExcessAngstrom": -0.1532,
+        "rotation": [
+          [
+            -0.7946637723,
+            -0.1037572369,
+            -0.5981169826
+          ],
+          [
+            -0.0970723996,
+            0.9943254889,
+            -0.0435174838
+          ],
+          [
+            0.599238215,
+            0.0234788829,
+            -0.8002264078
+          ]
+        ],
+        "translation": [
+          -17.098814318,
+          14.5573567302,
+          -13.2354727815
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-1.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 2,
+      "method": "af3",
+      "publishedRmsdAngstrom": 1.183,
+      "rankingScore": 0.969557487715653,
+      "confidence": 88.431,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/af3/8cjk__1__1.A__1.B_1.C/seed-2238951465_sample-2.cif",
+        "sha256": "0897ee5261327937506aa94103e74f1917b68c5e5085b876fda53b943cde3306",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.4721,
+        "ligandCentroidDistanceAngstrom": 0.7361,
+        "ligandAssignmentRmsdAngstrom": 1.0694,
+        "geometryExcessAngstrom": -0.1136,
+        "rotation": [
+          [
+            -0.2395973403,
+            -0.9437749999,
+            -0.2277759076
+          ],
+          [
+            -0.962039479,
+            0.2623659055,
+            -0.0751277084
+          ],
+          [
+            0.1306642852,
+            0.2011290163,
+            -0.9708109823
+          ]
+        ],
+        "translation": [
+          -19.4617526395,
+          11.0182996843,
+          -14.3533918625
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-2.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 3,
+      "method": "boltz",
+      "publishedRmsdAngstrom": 6.47,
+      "rankingScore": 0.8854066133499146,
+      "confidence": 62.3,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz/8cjk__1__1.A__1.B_1.C/seed-2451779253_sample-0.cif",
+        "sha256": "bd71cc272a9e039715c89d974af45e36957f79a8fd2c538fad11b2c99d4c3157",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.6379,
+        "ligandCentroidDistanceAngstrom": 3.2637,
+        "ligandAssignmentRmsdAngstrom": 5.3069,
+        "geometryExcessAngstrom": -1.1631,
+        "rotation": [
+          [
+            0.2828498255,
+            -0.1110624588,
+            -0.9527124994
+          ],
+          [
+            -0.1839417434,
+            0.9685569432,
+            -0.1675197982
+          ],
+          [
+            0.9413614668,
+            0.2226265438,
+            0.2535271401
+          ]
+        ],
+        "translation": [
+          -17.1108458686,
+          10.5691136601,
+          -12.8028937001
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-3.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 4,
+      "method": "boltz",
+      "publishedRmsdAngstrom": 6.592,
+      "rankingScore": 0.8797569274902344,
+      "confidence": 60.58,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz/8cjk__1__1.A__1.B_1.C/seed-2451779253_sample-1.cif",
+        "sha256": "009927886a674f0df852ae5e0f96cb73a2bd3ade3a50c2bb011560da12cce5af",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.6729,
+        "ligandCentroidDistanceAngstrom": 3.3213,
+        "ligandAssignmentRmsdAngstrom": 5.4162,
+        "geometryExcessAngstrom": -1.1758,
+        "rotation": [
+          [
+            0.3365143194,
+            0.6229133624,
+            -0.7062131801
+          ],
+          [
+            -0.5854198727,
+            -0.4490308816,
+            -0.6750221034
+          ],
+          [
+            -0.737591815,
+            0.6405858337,
+            0.2135605398
+          ]
+        ],
+        "translation": [
+          -16.6716717929,
+          13.5406129169,
+          -13.817861968
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-4.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 5,
+      "method": "boltz",
+      "publishedRmsdAngstrom": 6.724,
+      "rankingScore": 0.8796934485435486,
+      "confidence": 64.82,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz/8cjk__1__1.A__1.B_1.C/seed-2451779253_sample-2.cif",
+        "sha256": "4051ee3197bb3b1a65d714ea14310b388d7f19374a4cdd08102ac9340ad01562",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.6144,
+        "ligandCentroidDistanceAngstrom": 3.2929,
+        "ligandAssignmentRmsdAngstrom": 5.343,
+        "geometryExcessAngstrom": -1.381,
+        "rotation": [
+          [
+            -0.4009191217,
+            0.3626281469,
+            0.8412875162
+          ],
+          [
+            -0.8903288786,
+            0.0621100788,
+            -0.4510618872
+          ],
+          [
+            -0.2158201702,
+            -0.9298619065,
+            0.2979571931
+          ]
+        ],
+        "translation": [
+          -16.0187483976,
+          10.9800937674,
+          -12.1698618496
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-5.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 6,
+      "method": "protenix",
+      "publishedRmsdAngstrom": 3.6,
+      "rankingScore": 0.9820096492767334,
+      "confidence": 92.099,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/protenix/8cjk__1__1.A__1.B_1.C/seed-54873535_sample-0.cif",
+        "sha256": "f6d435785b4914426f7af68268a729797bf9efa54e612032ff65619dbe45da06",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C0",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A0",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 2.8098,
+        "ligandCentroidDistanceAngstrom": 2.608,
+        "ligandAssignmentRmsdAngstrom": 3.8222,
+        "geometryExcessAngstrom": 0.2222,
+        "rotation": [
+          [
+            0.8371197627,
+            -0.1829468942,
+            0.5155200644
+          ],
+          [
+            0.0750772439,
+            0.9719227647,
+            0.2230012264
+          ],
+          [
+            -0.541843068,
+            -0.1479749081,
+            0.8273509027
+          ]
+        ],
+        "translation": [
+          -13.6849434861,
+          10.1690279632,
+          -11.7426782118
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-6.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 7,
+      "method": "protenix",
+      "publishedRmsdAngstrom": 6.264,
+      "rankingScore": 0.979848086833954,
+      "confidence": 94.573,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/protenix/8cjk__1__1.A__1.B_1.C/seed-718723866_sample-0.cif",
+        "sha256": "dc20b1c8ffee8491ccaf536e1c6b22d3a907d998339c796c0e925ed0890ef5ca",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C0",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A0",
+        "crystalAnchorChain": "1.A",
+        "scope": "full_chain",
+        "matchedCaCount": 291,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 1.835,
+        "ligandCentroidDistanceAngstrom": 2.9105,
+        "ligandAssignmentRmsdAngstrom": 4.7542,
+        "geometryExcessAngstrom": -1.5098,
+        "rotation": [
+          [
+            -0.0312868534,
+            -0.3595790125,
+            -0.9325899777
+          ],
+          [
+            -0.3412765432,
+            -0.8731295685,
+            0.3481021081
+          ],
+          [
+            -0.9394420971,
+            0.3291621035,
+            -0.0953984056
+          ]
+        ],
+        "translation": [
+          -17.1102648475,
+          9.3160109459,
+          -12.5144862672
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-7.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 8,
+      "method": "protenix",
+      "publishedRmsdAngstrom": 4.239,
+      "rankingScore": 0.9773119688034058,
+      "confidence": 93.151,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/protenix/8cjk__1__1.A__1.B_1.C/seed-3706246378_sample-0.cif",
+        "sha256": "26a5b7cd689918c72dcdf13f64a8ee654639d594334ac0c1b00659744280f92d",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C0",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A0",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 2.5639,
+        "ligandCentroidDistanceAngstrom": 3.0252,
+        "ligandAssignmentRmsdAngstrom": 4.6712,
+        "geometryExcessAngstrom": 0.4322,
+        "rotation": [
+          [
+            -0.407398526,
+            -0.2198013619,
+            -0.8864049877
+          ],
+          [
+            0.0151031751,
+            -0.9720932982,
+            0.2341079105
+          ],
+          [
+            -0.9131255856,
+            0.0819876879,
+            0.3993490753
+          ]
+        ],
+        "translation": [
+          -15.9822798591,
+          9.78878253,
+          -14.4735448269
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-8.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 9,
+      "method": "boltz2",
+      "publishedRmsdAngstrom": 1.076,
+      "rankingScore": 0.9285137057304382,
+      "confidence": 89.569,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz2/8cjk__1__1.A__1.B_1.C/seed-1124236625_sample-0.cif",
+        "sha256": "3b330f14d60dbb630f6e86f2a3efc6d7918ff319f641f12832d549149505c0d5",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.4922,
+        "ligandCentroidDistanceAngstrom": 0.3124,
+        "ligandAssignmentRmsdAngstrom": 0.9078,
+        "geometryExcessAngstrom": -0.1682,
+        "rotation": [
+          [
+            0.6459150747,
+            -0.5289682976,
+            -0.5504418738
+          ],
+          [
+            -0.048553026,
+            0.6911067076,
+            -0.7211200472
+          ],
+          [
+            0.7618637148,
+            0.4925079277,
+            0.4207132292
+          ]
+        ],
+        "translation": [
+          -16.2301107308,
+          10.1147867142,
+          -12.3130529712
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-9.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 10,
+      "method": "boltz2",
+      "publishedRmsdAngstrom": 1.204,
+      "rankingScore": 0.9282463192939758,
+      "confidence": 87.751,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz2/8cjk__1__1.A__1.B_1.C/seed-1124236625_sample-1.cif",
+        "sha256": "3ed9c23d1b4d8b63c42af941a93c4406ef93ad2b88b307a826f3d9dbbc4b17d6",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.628,
+        "ligandCentroidDistanceAngstrom": 0.4718,
+        "ligandAssignmentRmsdAngstrom": 1.0497,
+        "geometryExcessAngstrom": -0.1543,
+        "rotation": [
+          [
+            -0.7174558767,
+            0.6926900753,
+            0.073739573
+          ],
+          [
+            0.2193903749,
+            0.3251568681,
+            -0.9198591602
+          ],
+          [
+            -0.6611542395,
+            -0.6437806076,
+            -0.3852552411
+          ]
+        ],
+        "translation": [
+          -14.8554535717,
+          9.8060821861,
+          -12.8767273081
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-10.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 11,
+      "method": "boltz2",
+      "publishedRmsdAngstrom": 1.155,
+      "rankingScore": 0.9276647567749023,
+      "confidence": 92.476,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/boltz2/8cjk__1__1.A__1.B_1.C/seed-628902451_sample-0.cif",
+        "sha256": "ce37c92e56ba577f87d4d5631622688e28df1c96cd34fdf69c2ee3bc2ac41b76",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "crystal_pocket",
+        "matchedCaCount": 98,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 0.565,
+        "ligandCentroidDistanceAngstrom": 0.446,
+        "ligandAssignmentRmsdAngstrom": 1.0092,
+        "geometryExcessAngstrom": -0.1458,
+        "rotation": [
+          [
+            0.4686523592,
+            0.8268943347,
+            0.3108226591
+          ],
+          [
+            0.0690544621,
+            0.3164862189,
+            -0.9460803108
+          ],
+          [
+            -0.8806795373,
+            0.4648464612,
+            0.0912212696
+          ]
+        ],
+        "translation": [
+          -13.6643129769,
+          12.8616307982,
+          -11.9884614077
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-11.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 12,
+      "method": "chai",
+      "publishedRmsdAngstrom": 5.126,
+      "rankingScore": 0.7517739,
+      "confidence": 75.211,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/chai/8cjk__1__1.A__1.B_1.C/seed-9438_sample-4.cif",
+        "sha256": "3b7909f5e863436a24a8eaaafd6b3f10123ea4bf6f28f720f45ecd9f28d931b3",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "full_chain",
+        "matchedCaCount": 291,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 1.3226,
+        "ligandCentroidDistanceAngstrom": 2.0066,
+        "ligandAssignmentRmsdAngstrom": 4.3015,
+        "geometryExcessAngstrom": -0.8245,
+        "rotation": [
+          [
+            -0.7453846864,
+            0.5315177699,
+            0.4023562222
+          ],
+          [
+            -0.1476502262,
+            -0.7202035563,
+            0.6778689019
+          ],
+          [
+            0.6500777492,
+            0.4458651117,
+            0.6153074209
+          ]
+        ],
+        "translation": [
+          -16.637088163,
+          9.1346587399,
+          -13.7280092481
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-12.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 13,
+      "method": "chai",
+      "publishedRmsdAngstrom": 5.159,
+      "rankingScore": 0.750592,
+      "confidence": 74.989,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/chai/8cjk__1__1.A__1.B_1.C/seed-9438_sample-1.cif",
+        "sha256": "5264b8f39403a0f09c67b8e2514273c71fc50b6afab503290b34682c43b113aa",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "full_chain",
+        "matchedCaCount": 291,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 1.512,
+        "ligandCentroidDistanceAngstrom": 1.9586,
+        "ligandAssignmentRmsdAngstrom": 4.4272,
+        "geometryExcessAngstrom": -0.7318,
+        "rotation": [
+          [
+            -0.3450691328,
+            0.9107399379,
+            -0.226892175
+          ],
+          [
+            0.9011481262,
+            0.2538953159,
+            -0.3513818766
+          ],
+          [
+            -0.262410648,
+            -0.3257144979,
+            -0.908323025
+          ]
+        ],
+        "translation": [
+          -16.0472027175,
+          10.0888365106,
+          -12.4987480071
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-13.pdb",
+      "fullPredictionFile": null
+    },
+    {
+      "sample": 14,
+      "method": "chai",
+      "publishedRmsdAngstrom": 5.235,
+      "rankingScore": 0.750497,
+      "confidence": 78.686,
+      "source": {
+        "archiveMember": "scicore/home/schwede/durair0000/projects/plinder-org/Runs-N-Poses/data/paper_data/prediction_files/chai/8cjk__1__1.A__1.B_1.C/seed-9438_sample-3.cif",
+        "sha256": "931331d5a3888fbecafd318f448fca5def663a6e0177f74045786916fe5a3a6f",
+        "predictedLigandChain": "C",
+        "resolvedPredictedLigandChain": "C",
+        "symmetryCopyReassigned": false,
+        "resolvedCrystalLigandChain": "1.C",
+        "equivalentCrystalCopyUsed": false
+      },
+      "alignment": {
+        "predictedAnchorChain": "A",
+        "crystalAnchorChain": "1.A",
+        "scope": "full_chain",
+        "matchedCaCount": 291,
+        "sequenceIdentity": 0.892638,
+        "receptorRmsdAngstrom": 1.4472,
+        "ligandCentroidDistanceAngstrom": 2.3243,
+        "ligandAssignmentRmsdAngstrom": 4.5559,
+        "geometryExcessAngstrom": -0.6791,
+        "rotation": [
+          [
+            -0.5811070176,
+            0.7076648833,
+            0.4019017878
+          ],
+          [
+            -0.2146103367,
+            -0.609612236,
+            0.763095882
+          ],
+          [
+            0.7850204058,
+            0.3571880941,
+            0.5061221472
+          ]
+        ],
+        "translation": [
+          -16.931609336,
+          10.2312569474,
+          -10.8592416265
+        ]
+      },
+      "validation": {
+        "status": "validated",
+        "rmsdGeometryToleranceAngstrom": 2.0
+      },
+      "poseFile": "pose-14.pdb",
+      "fullPredictionFile": null
+    }
+  ],
+  "validation": {
+    "status": "validated",
+    "failures": []
+  }
+}
