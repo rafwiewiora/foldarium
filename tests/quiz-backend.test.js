@@ -85,6 +85,25 @@ test('empty configuration disables remote persistence without loading Supabase',
   await backend.flush();
 });
 
+test('configured initialization uses the publishable key', async () => {
+  let received;
+  const { client } = fakeSupabase();
+  const backend = await initQuizBackend(
+    { url: 'https://example.supabase.co', publishableKey: 'sb_publishable_test' },
+    {
+      createClient: (...args) => { received = args; return client; },
+      storage: memoryStorage(),
+      uuid: sequenceUuid('session-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    },
+  );
+  assert.deepEqual(received.slice(0, 2), [
+    'https://example.supabase.co',
+    'sb_publishable_test',
+  ]);
+  assert.equal(backend.startSession({ source: 'cameo', difficulty: 'easy' }), 'session-id');
+});
+
 test('queues a normalized session and answer and removes them after successful writes', async () => {
   const { client, writes } = fakeSupabase();
   const storage = memoryStorage();

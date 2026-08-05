@@ -160,6 +160,9 @@
     document.head.appendChild(css);
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
+      await loadScript('supabase-config.js');
+      const { initQuizBackend } = await import('./quiz-backend.js');
+      window.foldariumBackend = await initQuizBackend(window.FOLDARIUM_SUPABASE);
       await loadScript('app.js');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';

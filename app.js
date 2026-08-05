@@ -28,6 +28,7 @@ const OPTS = {
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
+let remoteSessionId = null;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -292,6 +293,10 @@ function showIntro() {
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
 function startQuiz() {
+  remoteSessionId = window.foldariumBackend?.startSession({
+    source: quizSource,
+    difficulty,
+  }) ?? null;
   ITEMS = DEV ? shuffle(filteredPool().slice())              // dev: browse the WHOLE filtered pool, no 30 cap
               : shuffle(filteredPool().slice()).slice(0, SESSION_SIZE);
   if (quizSource === 'rnp') proteinMode = 'crystal';
@@ -401,6 +406,7 @@ function logAnswer(picked, af3) {
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
+  window.foldariumBackend?.recordAnswer(remoteSessionId, idx, rec);
 }
 
 function syncButtons() {
@@ -443,6 +449,7 @@ function nextDev() { loadQuestion((idx + 1) % ITEMS.length); }
 
 function next() { if (DEV) return nextDev(); (idx + 1 < ITEMS.length) ? loadQuestion(idx + 1) : finish(); }
 function finish() {
+  window.foldariumBackend?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
