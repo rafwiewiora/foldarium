@@ -1,11 +1,17 @@
-# app/ — the full hosted quiz
+# app/ — the canonical full product app
 
-Same Mol* viewer as the live demo, but serving **all** buckets (not just novel) with a real leaderboard
-backend. This is the "requires hosting" version.
+This is the source to use for the full Foldarium product deployment. It has the same Mol* viewer and
+recent camera/grid work as the static demo, but serves **all** buckets (not just novel), retains balanced
+Hard-session sampling, and can use a shared leaderboard backend.
+
+For the Vercel + Supabase handoff—including what exists, what still needs replacing, and the API/pose
+asset contracts—read [`DEPLOYMENT.md`](DEPLOYMENT.md) first.
 
 ## Files
-- `index.html`, `app.js`, `leaderboard.html` — the viewer (identical to the demo's).
-- `server.py` — tiny Flask/stdlib server: serves the app + records sessions to a SQLite leaderboard.
+- `index.html`, `app.js`, `leaderboard.html` — the full product viewer. UI changes are mirrored to the
+  root demo; this `app.js` also retains balanced Hard-session sampling.
+- `server.py` — tiny stdlib server: serves the app + records sessions to a SQLite leaderboard. It is a
+  local/reference backend, not the planned Supabase implementation.
 - `quiz_items.json`, `quiz_items_allwrong.json`, `quiz_items_allcorrect.json`, `quiz_items_rnp.json` —
   the **canonical** item sets (all buckets). These reference per-item pose/pocket PDBs under `data/`
   (CAMEO) and `data_rnp/` (RnP), which are **not** in the repo — regenerate them with the `prep/` scripts.

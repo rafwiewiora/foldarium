@@ -22,15 +22,27 @@ head — especially on **novel** chemistry, where the automated pick has real he
 
 ## Repository layout
 ```
-/                    ← this live static demo (GitHub Pages, novel-only, localStorage leaderboard)
-app/                 ← the FULL hosted quiz: same viewer (Mol*) + server.py (SQLite leaderboard)
-                       + the 4 canonical quiz_items*.json (all buckets, not just novel)
+/                    ← the small static demo deployed to GitHub Pages (novel-only, localStorage scores)
+app/                 ← the canonical FULL product frontend: Mol* viewer + all four item manifests
+                       + a local SQLite reference backend
 prep/cameo/          ← CAMEO pipeline: process_cameo, drug-like filter, funnel, bucket builds, novelty
 prep/rnp/            ← Runs-n-Poses pipeline (full-archive rebuild) + analyses
 data_rnp_aligned/    ← provenance-preserving crystal-frame overlays for the live RnP subset
 benchmark/           ← training-similarity ("surprise") viewer: each system + its nearest
                        pre-cutoff training complex + pose overlaps  (app/ · demo/ · prep/)
 ```
+
+## Product-deployment handoff
+
+Use **`app/`**, not the repository root, as the source of the full product being moved to Vercel +
+Supabase. The recent camera, calm-loading, grid-view, full-stage-layout, and ligand-focus work is present
+in both copies of the viewer. `app/index.html` and `app/leaderboard.html` match the demo; `app/app.js`
+additionally keeps the full quiz's balanced Hard-session sampling.
+
+The Supabase integration itself is not implemented in this repository yet. `app/server.py` is a small
+SQLite reference backend, and the full structure directories referenced by the canonical manifests are
+regenerated data rather than committed product assets. See [`app/DEPLOYMENT.md`](app/DEPLOYMENT.md) for
+the exact frontend, API, and pose-asset handoff contract.
 
 ## Training-similarity viewer — `benchmark/`
 A companion viewer that shows each benchmark system alongside its **most-similar pre-cutoff training
