@@ -22,6 +22,7 @@ To enable remote quiz-result persistence:
 2. Enable anonymous sign-ins under Auth providers.
 3. Apply `supabase/migrations/20260805180000_create_quiz_results.sql`.
 4. Put the project URL and browser-safe publishable key in `supabase-config.js`; do not use credentials intended for privileged server-side access.
-5. Deploy through the existing Vercel Git integration.
+5. Before production, run live RLS checks with two anonymous accounts: verify own writes succeed, cross-user session updates and answer inserts fail, and answer updates/deletes fail. This is a required pre-production check.
+6. Deploy through the existing Vercel Git integration.
 
 Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.

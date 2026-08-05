@@ -1,4 +1,6 @@
-const QUEUE_KEY = 'foldariumSyncQueueV1';
+const OPERATION_PREFIX = 'foldariumSyncOpV2:';
+const DEAD_LETTER_PREFIX = 'foldariumSyncDeadV2:';
+const KIND_ORDER = { session: 0, answer: 1, complete: 2 };
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 const disabledBackend = {
@@ -10,76 +12,98 @@ const disabledBackend = {
 
 export function createQuizBackend({
   client,
+  getClient = async () => client,
   storage = window.localStorage,
   uuid = () => crypto.randomUUID(),
   now = () => new Date(),
 }) {
-  let queue = readQueue(storage);
   let flushing = null;
+  let flushAgain = false;
 
-  const save = () => {
+  const enqueue = (kind, value) => {
+    const entry = { kind, value };
     try {
-      storage.setItem(QUEUE_KEY, JSON.stringify(queue));
+      storage.setItem(operationKey(entry), JSON.stringify(entry));
+      if (flushing) flushAgain = true;
     } catch (error) {
       console.warn('Quiz result queue could not be saved:', error.message);
     }
-  };
-  const enqueue = (kind, value) => {
-    queue.push({ kind, value });
-    save();
     void flush();
   };
 
-  async function userId() {
-    const current = await client.auth.getSession();
+  async function userId(remoteClient) {
+    const current = await remoteClient.auth.getSession();
     if (current.error) throw current.error;
     if (current.data.session) return current.data.session.user.id;
-    const created = await client.auth.signInAnonymously();
+    const created = await remoteClient.auth.signInAnonymously();
     if (created.error) throw created.error;
     return created.data.user.id;
   }
 
-  async function write(entry, uid) {
+  async function write(remoteClient, entry, uid) {
     if (entry.kind === 'session') {
-      return client.from('quiz_sessions').upsert(
+      return remoteClient.from('quiz_sessions').upsert(
         { ...entry.value, user_id: uid },
         { onConflict: 'id', ignoreDuplicates: true },
       );
     }
     if (entry.kind === 'answer') {
-      return client.from('quiz_answers').upsert(
+      return remoteClient.from('quiz_answers').upsert(
         entry.value,
         { onConflict: 'id', ignoreDuplicates: true },
       );
     }
-    return client.from('quiz_sessions')
+    return remoteClient.from('quiz_sessions')
       .update({ completed_at: entry.value.completed_at })
       .eq('id', entry.value.id)
       .eq('user_id', uid);
   }
 
   async function drain() {
+    if (!readOperations(storage).length) return;
+    let remoteClient;
+    let uid;
     try {
-      const uid = await userId();
-      while (queue.length) {
-        const result = await write(queue[0], uid);
-        if (result.error) throw result.error;
-        queue.shift();
-        save();
-      }
+      remoteClient = await getClient();
+      uid = await userId(remoteClient);
     } catch (error) {
-      console.warn('Quiz results remain queued:', error.message);
+      if (isRetryable(error)) {
+        console.warn('Quiz results remain queued:', error.message);
+        return;
+      }
+      for (const stored of readOperations(storage)) deadLetter(storage, stored, error, now);
+      return;
+    }
+
+    for (const stored of readOperations(storage)) {
+      try {
+        const result = await write(remoteClient, stored.entry, uid);
+        if (result.error) throw result.error;
+        if (storage.getItem(stored.key) === stored.raw) storage.removeItem(stored.key);
+      } catch (error) {
+        if (isRetryable(error)) {
+          console.warn('Quiz results remain queued:', error.message);
+          return;
+        }
+        deadLetter(storage, stored, error, now);
+      }
     }
   }
 
+  async function drainRequested() {
+    do {
+      flushAgain = false;
+      await drain();
+    } while (flushAgain);
+  }
+
   function flush() {
-    if (!flushing) flushing = drain().finally(() => { flushing = null; });
+    if (!flushing) flushing = drainRequested().finally(() => { flushing = null; });
     return flushing;
   }
 
   return {
-    startSession({ source, difficulty }) {
-      const id = uuid();
+    startSession({ id = uuid(), source, difficulty }) {
       enqueue('session', {
         id,
         source,
@@ -115,27 +139,73 @@ export function createQuizBackend({
   };
 }
 
-export async function initQuizBackend(config = {}, dependencies = {}) {
+export function initQuizBackend(config = {}, dependencies = {}) {
   if (!config.url || !config.publishableKey) return disabledBackend;
+  let clientPromise;
+  const getClient = () => {
+    if (!clientPromise) {
+      const attempt = Promise.resolve().then(async () => {
+        const createClient = dependencies.createClient
+          || (await import(SUPABASE_ESM)).createClient;
+        return createClient(config.url, config.publishableKey, {
+          auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+        });
+      });
+      clientPromise = attempt.catch(error => {
+        clientPromise = null;
+        throw error;
+      });
+    }
+    return clientPromise;
+  };
+  const backend = createQuizBackend({ ...dependencies, getClient });
+  queueMicrotask(() => { void backend.flush(); });
+  return backend;
+}
+
+function operationKey(entry) {
+  return `${OPERATION_PREFIX}${KIND_ORDER[entry.kind]}:${entry.value.id}`;
+}
+
+function deadLetter(storage, stored, error, now) {
+  const key = `${DEAD_LETTER_PREFIX}${stored.key.slice(OPERATION_PREFIX.length)}`;
   try {
-    const createClient = dependencies.createClient
-      || (await import(SUPABASE_ESM)).createClient;
-    const client = createClient(config.url, config.publishableKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-    });
-    const backend = createQuizBackend({ client, ...dependencies });
-    void backend.flush();
-    return backend;
-  } catch (error) {
-    console.warn('Remote quiz persistence disabled:', error.message);
-    return disabledBackend;
+    storage.setItem(key, JSON.stringify({
+      ...stored.entry,
+      failed_at: now().toISOString(),
+      error: { message: error.message, status: error.status, code: error.code },
+    }));
+    if (storage.getItem(stored.key) === stored.raw) storage.removeItem(stored.key);
+  } catch (storageError) {
+    console.warn('Quiz result dead letter could not be saved:', storageError.message);
   }
 }
 
-function readQueue(storage) {
+function isRetryable(error = {}) {
+  const status = Number(error.status || error.statusCode || 0);
+  const message = String(error.message || '').toLowerCase();
+  if (String(error.code || '').startsWith('23') || error.code === '42501') return false;
+  return !status
+    || status === 408
+    || status === 425
+    || status === 429
+    || status >= 500
+    || error.name === 'AbortError'
+    || error.name === 'TimeoutError'
+    || /network|fetch|timeout|timed out/.test(message);
+}
+
+function readOperations(storage) {
   try {
-    const value = JSON.parse(storage.getItem(QUEUE_KEY) || '[]');
-    return Array.isArray(value) ? value : [];
+    const entries = [];
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (!key?.startsWith(OPERATION_PREFIX)) continue;
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      entries.push({ key, raw, entry: JSON.parse(raw) });
+    }
+    return entries.sort((left, right) => left.key.localeCompare(right.key));
   } catch {
     return [];
   }

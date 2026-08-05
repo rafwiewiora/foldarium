@@ -26,6 +26,7 @@ const OPTS = {
 };
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
+const researchBackend = () => DEV ? null : window.foldariumBackend;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
@@ -293,7 +294,7 @@ function showIntro() {
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
 function startQuiz() {
-  remoteSessionId = window.foldariumBackend?.startSession({
+  remoteSessionId = researchBackend()?.startSession({
     source: quizSource,
     difficulty,
   }) ?? null;
@@ -406,7 +407,7 @@ function logAnswer(picked, af3) {
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
-  window.foldariumBackend?.recordAnswer(remoteSessionId, idx, rec);
+  researchBackend()?.recordAnswer(remoteSessionId, idx, rec);
 }
 
 function syncButtons() {
@@ -449,7 +450,7 @@ function nextDev() { loadQuestion((idx + 1) % ITEMS.length); }
 
 function next() { if (DEV) return nextDev(); (idx + 1 < ITEMS.length) ? loadQuestion(idx + 1) : finish(); }
 function finish() {
-  window.foldariumBackend?.completeSession(remoteSessionId);
+  researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
