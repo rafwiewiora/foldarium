@@ -114,6 +114,13 @@ export function createQuizBackend({
     },
     recordAnswer(sessionId, questionIndex, record) {
       if (!sessionId) return;
+      let viewerTrace = record.viewer_trace ?? null;
+      try {
+        if (viewerTrace !== null) JSON.stringify(viewerTrace);
+      } catch (error) {
+        console.warn('Viewer trace omitted:', error.message);
+        viewerTrace = null;
+      }
       enqueue('answer', {
         id: uuid(),
         session_id: sessionId,
@@ -130,6 +137,7 @@ export function createQuizBackend({
         has_correct: record.has_correct,
         n_clusters: record.n_clusters,
         answered_at: new Date(record.ts * 1000).toISOString(),
+        viewer_trace: viewerTrace,
       });
     },
     completeSession(sessionId) {

@@ -94,6 +94,28 @@ function fakeSupabase() {
   };
 }
 
+function answerRecord(overrides = {}) {
+  return {
+    item_id: 'item-7',
+    source: 'cameo',
+    difficulty: 'hard',
+    picked_none: true,
+    picked_sample: -1,
+    picked_correct: true,
+    picked_rmsd: null,
+    af3_pick_sample: 3,
+    af3_correct: false,
+    has_correct: false,
+    n_clusters: 4,
+    ts: 1785952800,
+    ...overrides,
+  };
+}
+
+function answerWrite(writes) {
+  return writes.find(write => write.table === 'quiz_answers' && write.op === 'upsert');
+}
+
 test('empty configuration disables remote persistence without loading Supabase', async () => {
   const backend = await initQuizBackend({}, {
     createClient: () => { throw new Error('must not load'); },
@@ -489,6 +511,41 @@ test('ambiguous commit retry keeps one logical row for the stable UUID', async (
   assert.equal(attempts, 2);
   assert.equal(logicalSessions.size, 1);
   assert.ok(logicalSessions.has('stable-session-id'));
+});
+
+test('persists a serializable viewer trace with the answer', async () => {
+  const { client, writes } = fakeSupabase();
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('answer-id'),
+    now: () => new Date('2026-08-05T18:00:00.000Z'),
+  });
+  const trace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    duration_ms: 500,
+    truncated: false,
+    snapshots: [],
+  };
+  backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: trace }));
+  await backend.flush();
+  assert.deepEqual(answerWrite(writes).value.viewer_trace, trace);
+});
+
+test('stores the answer without a cyclic viewer trace', async () => {
+  const { client, writes } = fakeSupabase();
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('answer-id'),
+    now: () => new Date('2026-08-05T18:00:00.000Z'),
+  });
+  const trace = {};
+  trace.self = trace;
+  backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: trace }));
+  await backend.flush();
+  assert.equal(answerWrite(writes).value.viewer_trace, null);
 });
 
 test('retains queued writes after a Supabase error and retries idempotently', async () => {
