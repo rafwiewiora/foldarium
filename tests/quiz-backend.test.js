@@ -533,6 +533,50 @@ test('persists a serializable viewer trace with the answer', async () => {
   assert.deepEqual(answerWrite(writes).value.viewer_trace, trace);
 });
 
+test('retains a JSON-safe viewer trace snapshot after caller mutation before flush', async () => {
+  const { client, writes, setFailing } = fakeSupabase();
+  const storage = memoryStorage();
+  setFailing(true);
+  const trace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    duration_ms: 500,
+    truncated: false,
+    snapshots: [],
+  };
+  const expected = structuredClone(trace);
+  let stringifyCalls = 0;
+  const originalStringify = JSON.stringify;
+  JSON.stringify = (value, ...args) => {
+    stringifyCalls++;
+    const result = originalStringify(value, ...args);
+    if (stringifyCalls === 1 && value === trace) trace.self = trace;
+    return result;
+  };
+  try {
+    const backend = createQuizBackend({
+      client,
+      storage,
+      uuid: sequenceUuid('answer-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    });
+    backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: trace }));
+    await backend.flush();
+
+    const queueKey = storage.keys().find(key => key.startsWith('foldariumSyncOpV2:1:'));
+    assert.ok(queueKey, 'expected answer to remain queued');
+    const queued = JSON.parse(storage.getItem(queueKey));
+    assert.deepEqual(queued.value.viewer_trace, expected);
+    assert.notEqual(queued.value.viewer_trace, trace);
+
+    setFailing(false);
+    await backend.flush();
+    assert.deepEqual(answerWrite(writes).value.viewer_trace, expected);
+  } finally {
+    JSON.stringify = originalStringify;
+  }
+});
+
 test('stores the answer without a cyclic viewer trace', async () => {
   const { client, writes } = fakeSupabase();
   const backend = createQuizBackend({

@@ -121,6 +121,8 @@ export function createQuizBackend({
           if (serialized === undefined) {
             console.warn('Viewer trace omitted:', 'not JSON-serializable');
             viewerTrace = null;
+          } else {
+            viewerTrace = JSON.parse(serialized);
           }
         }
       } catch (error) {
