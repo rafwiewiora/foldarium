@@ -12,7 +12,7 @@ head — especially on **novel** chemistry, where the automated pick has real he
   head fumbles.
 - **HARD** — pick the correct pose *or* flag **"none of these"**. Value = catching the ensembles with no
   correct pose (the model can never say "none"). Hard sessions are drawn **class-balanced** so the score
-  reflects skill, not the base rate (see `app/app.js` `HARD_MIX`).
+  reflects skill, not the base rate (see `app.js` `HARD_MIX`).
 
 ## Two datasets
 - **CAMEO 3D** — AlphaFold3 poses from the weekly *prospective* co-folding benchmark (last ~12 months).
@@ -22,9 +22,8 @@ head — especially on **novel** chemistry, where the automated pick has real he
 
 ## Repository layout
 ```
-/                    ← the small static demo deployed to GitHub Pages (novel-only, localStorage scores)
-app/                 ← the canonical FULL product frontend: Mol* viewer + all four item manifests
-                       + a local SQLite reference backend
+/                    ← canonical frontend + current GitHub Pages demo (preset novel-only collection)
+app/                 ← legacy full-data/SQLite prototype; useful as a schema and pipeline reference
 prep/cameo/          ← CAMEO pipeline: process_cameo, drug-like filter, funnel, bucket builds, novelty
 prep/rnp/            ← Runs-n-Poses pipeline (full-archive rebuild) + analyses
 data_rnp_aligned/    ← provenance-preserving crystal-frame overlays for the live RnP subset
@@ -34,15 +33,15 @@ benchmark/           ← training-similarity ("surprise") viewer: each system + 
 
 ## Product-deployment handoff
 
-Use **`app/`**, not the repository root, as the source of the full product being moved to Vercel +
-Supabase. The recent camera, calm-loading, grid-view, full-stage-layout, and ligand-focus work is present
-in both copies of the viewer. `app/index.html` and `app/leaderboard.html` match the demo; `app/app.js`
-additionally keeps the full quiz's balanced Hard-session sampling.
+Deploy the **repository-root frontend** to Vercel and connect it to Supabase. The target architecture is
+static HTML/JavaScript on Vercel, metadata and scores in Supabase Postgres, and PDB/mmCIF assets in
+Supabase Storage. It does **not** require a continuously running Python process, OpenFold, or any other
+inference service.
 
-The Supabase integration itself is not implemented in this repository yet. `app/server.py` is a small
-SQLite reference backend, and the full structure directories referenced by the canonical manifests are
-regenerated data rather than committed product assets. See [`app/DEPLOYMENT.md`](app/DEPLOYMENT.md) for
-the exact frontend, API, and pose-asset handoff contract.
+The current GitHub Pages demo still loads a preset collection from the four root `quiz_items*.json`
+files. Database-backed item loading is the next integration step. The old `app/server.py` and SQLite
+leaderboard are reference code only; Brian does not need to deploy `app/`. See [`DEPLOYMENT.md`](DEPLOYMENT.md)
+for the current behavior, ownership split, and data contract.
 
 ## Training-similarity viewer — `benchmark/`
 A companion viewer that shows each benchmark system alongside its **most-similar pre-cutoff training

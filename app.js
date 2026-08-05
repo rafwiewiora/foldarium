@@ -19,6 +19,12 @@ const HEAVY_MIN = 15;   // drop tiny-fragment ligands (< 15 heavy atoms) — kee
 // all-correct ensembles are a Hard positive-control (catch over-"none"), NOT the main event — cap them so
 // they stay a sprinkle instead of flooding Hard with easy wins. Tunable: max fraction of the rest of the pool.
 const ALLCORRECT_MAX_FRAC = 0.2;
+// HARD sessions are drawn to THIS bucket mix, NOT the raw data proportions. The raw data is ~78% all-wrong,
+// which lets "always say none" score ~78% (base-rate gaming). Balancing toward ~40/45/15 makes constant
+// strategies score near chance, so the score reflects real discrimination + keeps game-able (rare pick
+// puzzles) well-populated. Applied automatically per session (see drawSession); tune here. Easy is unaffected
+// (game-able only). If a bucket is short (e.g. novel-only demo), the shortfall is back-filled from the rest.
+const HARD_MIX = { 'game-able': 0.40, 'all-wrong': 0.45, 'all-correct': 0.15 };
 
 const OPTS = {
   layoutIsExpanded: false, layoutShowControls: false, layoutShowRemoteState: false,
@@ -604,9 +610,23 @@ function showIntro() {
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset, leaderboard accumulates
+// Draw a session. Easy = plain random from the (game-able) pool. Hard = stratified toward HARD_MIX so the
+// score isn't gameable by base rate; shortfall in any bucket is back-filled from the rest. DEV = whole pool.
+function drawSession() {
+  const pool = filteredPool();
+  if (DEV) return shuffle(pool.slice());
+  if (difficulty !== 'hard') return shuffle(pool.slice()).slice(0, SESSION_SIZE);
+  const by = { 'game-able': [], 'all-wrong': [], 'all-correct': [] };
+  for (const it of shuffle(pool.slice())) if (by[it.bucket]) by[it.bucket].push(it);
+  const picked = [], used = new Set();
+  for (const b in HARD_MIX)
+    for (const it of by[b].slice(0, Math.round(SESSION_SIZE * HARD_MIX[b]))) { picked.push(it); used.add(it); }
+  if (picked.length < SESSION_SIZE)                          // back-fill from leftovers if a bucket was short
+    for (const it of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(it)) { picked.push(it); used.add(it); } }
+  return shuffle(picked).slice(0, SESSION_SIZE);
+}
 function startQuiz() {
-  ITEMS = DEV ? shuffle(filteredPool().slice())              // dev: browse the WHOLE filtered pool, no 30 cap
-              : shuffle(filteredPool().slice()).slice(0, SESSION_SIZE);
+  ITEMS = drawSession();
   if (quizSource === 'rnp') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';

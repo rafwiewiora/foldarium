@@ -72,7 +72,7 @@ The default export includes full aligned prediction CIFs. Pass
 requires Python 3.9+, Gemmi, NumPy, and SciPy; run `--help` for the required
 archive, index, selection, cache, and output paths.
 
-## Downstream (at play time, in `app/app.js`)
+## Downstream (at play time, in the root `app.js`)
 - **Strict thresholds**: correct <1.5 Å, wrong >3 Å (buckets re-derived per session).
 - **`HEAVY_MIN = 15`**: drop small fragments.
 - **`HARD_MIX = {game-able 0.40, all-wrong 0.45, all-correct 0.15}`**: class-balanced Hard draw so a
