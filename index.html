@@ -204,6 +204,7 @@
     document.head.appendChild(css);
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
+      await import('./structure-assets.js');
       void initPersistence();
       await loadScript('app.js');
     } catch (e) {

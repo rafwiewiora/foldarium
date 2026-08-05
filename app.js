@@ -27,6 +27,7 @@ const OPTS = {
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 const researchBackend = () => DEV ? null : window.foldariumBackend;
+const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
@@ -51,14 +52,14 @@ const locked = () => cur && cur.revealed && cur.showAnswer;
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)' : 'AlphaFold3 (pLDDT-ranked)');
 
 async function loadStruct(url, format) {
-  const data = await plugin.builders.data.download({ url: url + '?v=' + CACHE_BUST, isBinary: false });
+  const data = await plugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
   const traj = await plugin.builders.structure.parseTrajectory(data, format);
   const model = await plugin.builders.structure.createModel(traj);
   const struct = await plugin.builders.structure.createStructure(model);
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
-  const r = await fetch(url + '?v=' + CACHE_BUST);
+  const r = await fetch(assetUrl(url) + '?v=' + CACHE_BUST);
   return r.ok ? await r.text() : '';
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
