@@ -33,15 +33,16 @@ benchmark/           ← training-similarity ("surprise") viewer: each system + 
 
 ## Product-deployment handoff
 
-Deploy the **repository-root frontend** to Vercel and connect it to Supabase. The target architecture is
-static HTML/JavaScript on Vercel, metadata and scores in Supabase Postgres, and PDB/mmCIF assets in
-Supabase Storage. It does **not** require a continuously running Python process, OpenFold, or any other
-inference service.
+Deploy the **repository-root frontend** to Vercel and connect it to Supabase. Vercel serves the quiz;
+Supabase is the durable control plane and published catalog. Foldarium separately owns a
+provider-neutral prediction pipeline whose workers can run any configured co-folding method on GPU
+infrastructure. External predictions, including future OpenFold Portal OF3 results, enter through import
+adapters; Foldarium does not depend on or contain Portal code.
 
 The current GitHub Pages demo still loads a preset collection from the four root `quiz_items*.json`
 files. Database-backed item loading is the next integration step. The old `app/server.py` and SQLite
-leaderboard are reference code only; Brian does not need to deploy `app/`. See [`DEPLOYMENT.md`](DEPLOYMENT.md)
-for the current behavior, ownership split, and data contract.
+leaderboard are reference code only; do not deploy `app/`. See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the
+current behavior, weekly prediction lifecycle, ownership split, and data contract.
 
 ## Training-similarity viewer — `benchmark/`
 A companion viewer that shows each benchmark system alongside its **most-similar pre-cutoff training
