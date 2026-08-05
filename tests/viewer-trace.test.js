@@ -120,10 +120,54 @@ test('marks the trace truncated at 100 entries', () => {
   assert.equal(trace.truncated, true);
 });
 
-test('capture failures are skipped without throwing', () => {
+test('caps snapshots at 100 even when maxEntries exceeds 100', () => {
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({ plugin, maxEntries: 200 });
+  recorder.start();
+  for (let index = 0; index < 150; index += 1) recorder.captureState();
+  const trace = recorder.stop();
+  assert.equal(trace.snapshots.length, 100);
+  assert.equal(trace.truncated, true);
+});
+
+test('state capture failures are skipped without throwing', () => {
   const plugin = fakePlugin();
   const recorder = createViewerTraceRecorder({ plugin });
-  plugin.state.getSnapshot = () => { throw new Error('snapshot failed'); };
-  assert.doesNotThrow(() => recorder.start());
-  assert.equal(recorder.stop().snapshots.length, 0);
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    plugin.state.getSnapshot = () => { throw new Error('snapshot failed'); };
+    assert.doesNotThrow(() => recorder.start());
+    assert.equal(recorder.stop().snapshots.length, 0);
+    assert.deepEqual(warnings, [['Viewer snapshot skipped:', 'snapshot failed']]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('camera capture failures are skipped without throwing', () => {
+  const clock = fakeClock();
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({
+    plugin,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+    settleMs: 300,
+  });
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    recorder.start();
+    plugin.canvas3d.camera.getSnapshot = () => { throw new Error('camera failed'); };
+    plugin.cameraChanged();
+    const trace = recorder.stop();
+    assert.equal(trace.snapshots.length, 1);
+    assert.equal(trace.snapshots[0].kind, 'state');
+    assert.deepEqual(warnings, [['Viewer camera snapshot skipped:', 'camera failed']]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });

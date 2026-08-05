@@ -12,14 +12,17 @@ const SNAPSHOT_PARAMS = {
   cameraTransition: { name: 'animate', params: { durationInMs: 250 } },
 };
 
+const MAX_SNAPSHOTS = 100;
+
 export function createViewerTraceRecorder({
   plugin,
   now = () => performance.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   settleMs = 300,
-  maxEntries = 100,
+  maxEntries = MAX_SNAPSHOTS,
 }) {
+  const entryLimit = Math.min(maxEntries, MAX_SNAPSHOTS);
   let active = false;
   let startedAt = 0;
   let snapshots = [];
@@ -28,7 +31,7 @@ export function createViewerTraceRecorder({
 
   const append = entry => {
     if (!active) return;
-    if (snapshots.length >= maxEntries) {
+    if (snapshots.length >= entryLimit) {
       truncated = true;
       return;
     }
