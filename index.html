@@ -205,6 +205,12 @@
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
       await import('./structure-assets.js');
+      try {
+        const module = await import('./viewer-trace.js');
+        window.createViewerTraceRecorder = module.createViewerTraceRecorder;
+      } catch (error) {
+        console.warn('Viewer recording disabled:', error.message);
+      }
       void initPersistence();
       await loadScript('app.js');
     } catch (e) {

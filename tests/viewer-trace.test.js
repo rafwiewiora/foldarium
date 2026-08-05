@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createViewerTraceRecorder } from '../viewer-trace.js';
 
 function fakeClock() {
@@ -201,4 +202,29 @@ test('camera capture failures are skipped without throwing', () => {
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test('recorder import failure does not block quiz application startup', async () => {
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  const recorderImport = html.indexOf("await import('./viewer-trace.js')");
+  const warning = html.indexOf("console.warn('Viewer recording disabled:'", recorderImport);
+  const appLoad = html.indexOf("await loadScript('app.js')", recorderImport);
+
+  assert.notEqual(recorderImport, -1);
+  assert.ok(warning > recorderImport);
+  assert.ok(appLoad > warning);
+});
+
+test('quiz records only pre-reveal viewer interactions and keeps the local log lean', async () => {
+  const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+
+  assert.match(app, /if \(!DEV && typeof window\.createViewerTraceRecorder === 'function'\)/);
+  assert.match(app, /await buildLayer\(\);[\s\S]*?viewerTraceRecorder\?\.start\(\);/);
+  assert.match(app, /restoreCam\(\);\s*viewerTraceRecorder\?\.captureState\(\);/);
+  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\) \?\? null;\s*cur\.revealed = true/);
+  assert.match(app, /function logAnswer\(picked, af3, viewerTrace\)/);
+  assert.match(app, /log\.push\(rec\);[\s\S]*?recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);
+
+  const localRecord = app.slice(app.indexOf('function logAnswer('), app.indexOf('const log =', app.indexOf('function logAnswer(')));
+  assert.doesNotMatch(localRecord, /viewer_trace/);
 });

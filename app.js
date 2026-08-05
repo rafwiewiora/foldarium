@@ -31,6 +31,7 @@ const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
+let viewerTraceRecorder = null;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -178,6 +179,7 @@ async function buildLayer() {           // only the moving ligand poses (+ cryst
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
   restoreCam();
+  viewerTraceRecorder?.captureState();
 }
 
 async function loadQuestion(i) {
@@ -205,6 +207,7 @@ async function loadQuestion(i) {
   showXtal = false;
   syncButtons();
   await buildLayer();          // builds the protein (via buildProtein) + the poses
+  viewerTraceRecorder?.start();
   try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
   renderUI();
 }
@@ -326,6 +329,7 @@ function onPick(k) {
 
 async function reveal() {
   if (cur.selected == null || cur.revealed) return;
+  const viewerTrace = viewerTraceRecorder?.stop() ?? null;
   cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
   await buildLayer();
   const picked = cur.selected;
@@ -352,7 +356,7 @@ async function reveal() {
   $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Final score →';
   $('#myview').style.display = ''; $('#myview').textContent = '← Back to my view (hide answer)';
   if (cur.item.xtal_lig_file) $('#xtalrow').style.display = '';
-  updateScore(); logAnswer(picked, af3);
+  updateScore(); logAnswer(picked, af3, viewerTrace);
 }
 
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
@@ -400,7 +404,7 @@ function updateScore() {
   $('#sc-rand').textContent = score.n ? `${pct(score.randExp, score.n)}%`
     : `${Math.round(100 / (cur?.clusters.length || 3))}%`;
 }
-function logAnswer(picked, af3) {
+function logAnswer(picked, af3, viewerTrace) {
   const rec = { item_id: cur.item.id, source: cur.item.source, ligand: cur.item.ligand,
     difficulty, picked_none: !!picked.none, picked_sample: picked.none ? -1 : picked.af3_sample,
     picked_correct: !!picked.correct, picked_rmsd: picked.none ? null : picked.rmsd,
@@ -408,7 +412,7 @@ function logAnswer(picked, af3) {
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
-  researchBackend()?.recordAnswer(remoteSessionId, idx, rec);
+  researchBackend()?.recordAnswer(remoteSessionId, idx, { ...rec, viewer_trace: viewerTrace });
 }
 
 function syncButtons() {
@@ -467,6 +471,13 @@ function finish() {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
+  if (!DEV && typeof window.createViewerTraceRecorder === 'function') {
+    try {
+      viewerTraceRecorder = window.createViewerTraceRecorder({ plugin });
+    } catch (error) {
+      console.warn('Viewer recording disabled:', error.message);
+    }
+  }
   if (DEV) {                                            // browse/inspection mode banner + page title
     document.title = 'Pose Quiz · DEV browse';
     const bd = $('#badge'); if (bd) bd.textContent = 'DEV browse · free Prev/Next · reveal answer + RMSDs on demand';
