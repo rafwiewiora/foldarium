@@ -141,6 +141,8 @@ test('queues a normalized session and answer and removes them after successful w
 test('retains queued writes after a Supabase error and retries idempotently', async () => {
   const { client, setFailing } = fakeSupabase();
   const storage = memoryStorage();
+  const originalWarn = console.warn;
+  const warnings = [];
   const backend = createQuizBackend({
     client,
     storage,
@@ -148,12 +150,18 @@ test('retains queued writes after a Supabase error and retries idempotently', as
     now: () => new Date('2026-08-05T18:00:00.000Z'),
   });
 
-  setFailing(true);
-  backend.startSession({ source: 'rnp', difficulty: 'easy' });
-  await backend.flush();
-  assert.notEqual(storage.getItem('foldariumSyncQueueV1'), '[]');
+  console.warn = (...args) => warnings.push(args);
+  try {
+    setFailing(true);
+    backend.startSession({ source: 'rnp', difficulty: 'easy' });
+    await backend.flush();
+    assert.notEqual(storage.getItem('foldariumSyncQueueV1'), '[]');
 
-  setFailing(false);
-  await backend.flush();
-  assert.equal(storage.getItem('foldariumSyncQueueV1'), '[]');
+    setFailing(false);
+    await backend.flush();
+    assert.equal(storage.getItem('foldariumSyncQueueV1'), '[]');
+    assert.deepEqual(warnings, [['Quiz results remain queued:', 'write failed']]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
