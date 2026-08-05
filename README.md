@@ -26,3 +26,15 @@ To enable remote quiz-result persistence:
 6. Deploy through the existing Vercel Git integration.
 
 Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.
+
+## Uploading structure files
+
+Upload all PDB files in `data/` and `data_rnp/` to the public `structures` Storage bucket:
+
+```bash
+SUPABASE_URL=https://... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+npm run upload:structures
+```
+
+Keep the server credential uncommitted. Rerunning the command without `--overwrite` is safe: existing objects are skipped. Pass `-- --overwrite` to replace existing objects.
