@@ -130,6 +130,37 @@ test('caps snapshots at 100 even when maxEntries exceeds 100', () => {
   assert.equal(trace.truncated, true);
 });
 
+test('caps snapshots at 100 when maxEntries is NaN', () => {
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({ plugin, maxEntries: NaN });
+  recorder.start();
+  for (let index = 0; index < 150; index += 1) recorder.captureState();
+  const trace = recorder.stop();
+  assert.equal(trace.snapshots.length, 100);
+  assert.equal(trace.truncated, true);
+});
+
+test('caps snapshots at 100 when maxEntries is non-finite', () => {
+  for (const maxEntries of [Infinity, -Infinity]) {
+    const plugin = fakePlugin();
+    const recorder = createViewerTraceRecorder({ plugin, maxEntries });
+    recorder.start();
+    for (let index = 0; index < 150; index += 1) recorder.captureState();
+    const trace = recorder.stop();
+    assert.equal(trace.snapshots.length, 100, `expected cap for maxEntries=${maxEntries}`);
+    assert.equal(trace.truncated, true, `expected truncated for maxEntries=${maxEntries}`);
+  }
+});
+
+test('normalizes negative maxEntries to zero snapshots', () => {
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({ plugin, maxEntries: -5 });
+  recorder.start();
+  const trace = recorder.stop();
+  assert.equal(trace.snapshots.length, 0);
+  assert.equal(trace.truncated, true);
+});
+
 test('state capture failures are skipped without throwing', () => {
   const plugin = fakePlugin();
   const recorder = createViewerTraceRecorder({ plugin });

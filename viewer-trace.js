@@ -14,6 +14,12 @@ const SNAPSHOT_PARAMS = {
 
 const MAX_SNAPSHOTS = 100;
 
+function normalizeEntryLimit(maxEntries) {
+  const numeric = Number(maxEntries);
+  if (!Number.isFinite(numeric)) return MAX_SNAPSHOTS;
+  return Math.min(MAX_SNAPSHOTS, Math.max(0, Math.floor(numeric)));
+}
+
 export function createViewerTraceRecorder({
   plugin,
   now = () => performance.now(),
@@ -22,7 +28,7 @@ export function createViewerTraceRecorder({
   settleMs = 300,
   maxEntries = MAX_SNAPSHOTS,
 }) {
-  const entryLimit = Math.min(maxEntries, MAX_SNAPSHOTS);
+  const entryLimit = normalizeEntryLimit(maxEntries);
   let active = false;
   let startedAt = 0;
   let snapshots = [];
