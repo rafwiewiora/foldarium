@@ -116,7 +116,13 @@ export function createQuizBackend({
       if (!sessionId) return;
       let viewerTrace = record.viewer_trace ?? null;
       try {
-        if (viewerTrace !== null) JSON.stringify(viewerTrace);
+        if (viewerTrace !== null) {
+          const serialized = JSON.stringify(viewerTrace);
+          if (serialized === undefined) {
+            console.warn('Viewer trace omitted:', 'not JSON-serializable');
+            viewerTrace = null;
+          }
+        }
       } catch (error) {
         console.warn('Viewer trace omitted:', error.message);
         viewerTrace = null;

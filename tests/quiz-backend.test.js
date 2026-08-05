@@ -548,6 +548,50 @@ test('stores the answer without a cyclic viewer trace', async () => {
   assert.equal(answerWrite(writes).value.viewer_trace, null);
 });
 
+test('stores the answer without a function viewer trace', async () => {
+  const { client, writes } = fakeSupabase();
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const backend = createQuizBackend({
+      client,
+      storage: memoryStorage(),
+      uuid: sequenceUuid('answer-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    });
+    backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: () => {} }));
+    await backend.flush();
+    assert.equal(answerWrite(writes).value.viewer_trace, null);
+    assert.equal(answerWrite(writes).value.item_id, 'item-7');
+    assert.deepEqual(warnings, [['Viewer trace omitted:', 'not JSON-serializable']]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('stores the answer without a symbol viewer trace', async () => {
+  const { client, writes } = fakeSupabase();
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const backend = createQuizBackend({
+      client,
+      storage: memoryStorage(),
+      uuid: sequenceUuid('answer-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    });
+    backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: Symbol('trace') }));
+    await backend.flush();
+    assert.equal(answerWrite(writes).value.viewer_trace, null);
+    assert.equal(answerWrite(writes).value.item_id, 'item-7');
+    assert.deepEqual(warnings, [['Viewer trace omitted:', 'not JSON-serializable']]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('retains queued writes after a Supabase error and retries idempotently', async () => {
   const { client, setFailing } = fakeSupabase();
   const storage = memoryStorage();
