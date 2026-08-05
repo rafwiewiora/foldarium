@@ -26,8 +26,10 @@ const OPTS = {
 };
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
+const researchBackend = () => DEV ? null : window.foldariumBackend;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
+let remoteSessionId = null;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -292,6 +294,10 @@ function showIntro() {
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
 function startQuiz() {
+  remoteSessionId = researchBackend()?.startSession({
+    source: quizSource,
+    difficulty,
+  }) ?? null;
   ITEMS = DEV ? shuffle(filteredPool().slice())              // dev: browse the WHOLE filtered pool, no 30 cap
               : shuffle(filteredPool().slice()).slice(0, SESSION_SIZE);
   if (quizSource === 'rnp') proteinMode = 'crystal';
@@ -401,6 +407,7 @@ function logAnswer(picked, af3) {
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
+  researchBackend()?.recordAnswer(remoteSessionId, idx, rec);
 }
 
 function syncButtons() {
@@ -443,6 +450,7 @@ function nextDev() { loadQuestion((idx + 1) % ITEMS.length); }
 
 function next() { if (DEV) return nextDev(); (idx + 1 < ITEMS.length) ? loadQuestion(idx + 1) : finish(); }
 function finish() {
+  researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
@@ -462,7 +470,12 @@ async function init() {
     document.title = 'Pose Quiz · DEV browse';
     const bd = $('#badge'); if (bd) bd.textContent = 'DEV browse · free Prev/Next · reveal answer + RMSDs on demand';
   }
-  try { plugin.canvas3d?.setProps({ renderer: { backgroundColor: 0xffffff } }); } catch (e) {}
+  try {
+    plugin.canvas3d?.setProps({
+      renderer: { backgroundColor: 0xffffff },
+      camera: { helper: { axes: { name: 'off', params: {} } } },
+    });
+  } catch (e) {}
   const fetchItems = async (f) => { try { const d = await fetch(f + '?v=' + Date.now()).then(r => r.ok ? r.json() : null); return d ? (d.items || d) : []; } catch (e) { return []; } };
   const norm = (it, source) => {
     const ch = it.choices.map(c => ({ ...c, correct: c.rmsd < CORRECT_THRESH }));   // strict: correct only if rmsd<1.5
