@@ -32,7 +32,7 @@ let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
 let viewerTraceRecorder = null;
-let onePoseRebuild = null;
+let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -184,7 +184,6 @@ async function buildLayer() {           // only the moving ligand poses (+ cryst
 }
 
 async function loadQuestion(i) {
-  idx = i;
   const item = ITEMS[i];
   // build cluster objects in shuffled order, colour per cluster
   const byCluster = {};
@@ -194,20 +193,19 @@ async function loadQuestion(i) {
     members.forEach((m, j) => { m.color = color; m.label = label + (members.length > 1 ? '·' + (j + 1) : ''); });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
-  cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
-  // PERSIST across questions: seed displayMode / clustered / proteinMode from the user's last choice
-  // (userView), NOT from the live globals which reveal() may have overridden for its correctness list.
-  // RESET per question: shownOne (pose index differs) + the fresh-vote/reveal state (cur.selected /
-  // cur.revealed / cur.showAnswer, set above) so the answer starts hidden.
-  applyUserView();
-  shownOne = 0;
-  $('#myview').style.display = 'none'; $('#start').style.display = 'none';
-  $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
-  try { await plugin.clear(); } catch (e) {}
-  proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
-  showXtal = false;
-  syncButtons();
-  await buildLayer();          // builds the protein (via buildProtein) + the poses
+  await viewerRebuild.enqueue(async () => {
+    idx = i;
+    cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
+    // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
+    applyUserView();
+    shownOne = 0;
+    $('#myview').style.display = 'none'; $('#start').style.display = 'none';
+    $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
+    try { await plugin.clear(); } catch (e) {}
+    proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
+    showXtal = false;
+    syncButtons();
+  });                          // coordinator rebuilds protein + poses and captures only after mutation completes
   viewerTraceRecorder?.start();
   try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
   renderUI();
@@ -314,14 +312,19 @@ function startQuiz() {
 }
 
 async function onPick(k) {
-  if (locked() || onePoseRebuild?.pending) return;
-  if (cur.revealed) {
-    if (k !== 'none' && displayMode === 'one') {
+  if (locked()) return;
+  if (k !== 'none' && displayMode === 'one') {
+    const selected = cur.revealed ? null : visibleChoices()[k];
+    await viewerRebuild.enqueue(() => {
       shownOne = k;
-      await onePoseRebuild.run();
-    }
+      if (!cur.revealed) {
+        cur.selected = selected;
+        document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+      }
+    });
     return;
-  }  // my-view: navigate, don't re-vote
+  }
+  if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
   if (k === 'none') {
     cur.selected = { none: true, correct: !cur.item.has_correct, label: 'None of these' };
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
@@ -330,17 +333,22 @@ async function onPick(k) {
   }
   cur.selected = visibleChoices()[k];
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
-  if (displayMode === 'one') {
-    shownOne = k;
-    $('#lock').disabled = true;
-    await onePoseRebuild.run();
-  } else {
-    $('#lock').disabled = false;
-  }
+  $('#lock').disabled = false;
 }
 
 async function reveal() {
-  if (onePoseRebuild?.pending) return;
+  if (cur.selected == null || cur.revealed || revealRequested) return;
+  revealRequested = true;
+  $('#lock').disabled = true;
+  try {
+    await revealAfterIdle();
+  } finally {
+    revealRequested = false;
+    if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
+  }
+}
+
+async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
   const viewerTrace = viewerTraceRecorder?.stop() ?? null;
   cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
@@ -484,12 +492,16 @@ function finish() {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
-  onePoseRebuild = window.createExclusiveViewerRebuild({
+  viewerRebuild = window.createViewerRebuildCoordinator({
     rebuild: buildLayer,
     setBusy(busy) {
       if (busy) $('#lock').disabled = true;
-      else if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
+      else if (cur && !cur.revealed) $('#lock').disabled = revealRequested || cur.selected == null;
     },
+  });
+  revealAfterIdle = window.createRevealAfterIdle({
+    coordinator: viewerRebuild,
+    reveal: finalizeReveal,
   });
   if (!DEV && typeof window.createViewerTraceRecorder === 'function') {
     try {
@@ -538,28 +550,39 @@ async function init() {
     difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
   });
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
-    if (locked() || onePoseRebuild?.pending) return;
-    displayMode = b.dataset.m; if (displayMode === 'one') shownOne = 0;
-    if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
-    syncButtons(); await onePoseRebuild.run();
+    if (locked()) return;
+    const mode = b.dataset.m;
+    await viewerRebuild.enqueue(() => {
+      displayMode = mode; if (displayMode === 'one') shownOne = 0;
+      if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
+      syncButtons();
+    });
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
-    if (locked() || onePoseRebuild?.pending) return;
-    proteinMode = b.dataset.p;
-    if (!cur.revealed) rememberView();
-    syncButtons(); await onePoseRebuild.run();
+    if (locked()) return;
+    const mode = b.dataset.p;
+    await viewerRebuild.enqueue(() => {
+      proteinMode = mode;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+    });
   });
   $('#uncluster').onclick = async () => {
-    if (locked() || onePoseRebuild?.pending) return;
-    clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
-    if (!cur.revealed) rememberView();
-    syncButtons(); await onePoseRebuild.run(); renderUI();
+    if (locked()) return;
+    await viewerRebuild.enqueue(() => {
+      clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+      renderUI();
+    });
   };
   $('#hbonds').onclick = async () => {
-    if (locked() || onePoseRebuild?.pending) return;
-    showHbonds = !showHbonds;
-    if (!cur.revealed) rememberView();       // persist across questions like the other view choices
-    syncButtons(); await onePoseRebuild.run();
+    if (locked()) return;
+    await viewerRebuild.enqueue(() => {
+      showHbonds = !showHbonds;
+      if (!cur.revealed) rememberView();       // persist across questions like the other view choices
+      syncButtons();
+    });
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;
@@ -572,10 +595,18 @@ async function init() {
       if (e.key === 'ArrowUp') { e.preventDefault(); prevDev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); nextDev(); return; }
     }
-    if (!cur || locked() || onePoseRebuild?.pending || displayMode !== 'one') return;
-    const n = visibleChoices().length;
-    if (e.key === 'ArrowRight') { shownOne = (shownOne + 1) % n; await onePoseRebuild.run(); }
-    if (e.key === 'ArrowLeft') { shownOne = (shownOne - 1 + n) % n; await onePoseRebuild.run(); }
+    if (!cur || locked() || displayMode !== 'one') return;
+    if (e.key === 'ArrowRight') {
+      await viewerRebuild.enqueue(() => {
+        shownOne = (shownOne + 1) % visibleChoices().length;
+      });
+    }
+    if (e.key === 'ArrowLeft') {
+      await viewerRebuild.enqueue(() => {
+        const n = visibleChoices().length;
+        shownOne = (shownOne - 1 + n) % n;
+      });
+    }
   });
   if (!POOLS.cameo.length && !POOLS.rnp.length) { $('#ligand').textContent = 'no quiz items'; return; }
   showIntro();

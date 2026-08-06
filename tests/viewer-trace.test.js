@@ -219,7 +219,7 @@ test('quiz records only pre-reveal viewer interactions and keeps the local log l
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 
   assert.match(app, /if \(!DEV && typeof window\.createViewerTraceRecorder === 'function'\)/);
-  assert.match(app, /await buildLayer\(\);[\s\S]*?viewerTraceRecorder\?\.start\(\);/);
+  assert.match(app, /await viewerRebuild\.enqueue\([\s\S]*?viewerTraceRecorder\?\.start\(\);/);
   assert.match(app, /restoreCam\(\);\s*viewerTraceRecorder\?\.captureState\(\);/);
   assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\) \?\? null;\s*cur\.revealed = true/);
   assert.match(app, /function logAnswer\(picked, af3, viewerTrace\)/);
