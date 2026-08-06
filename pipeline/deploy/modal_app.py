@@ -190,21 +190,32 @@ if modal is not None:
         ],
     )
 
-    def _add_core(image):
-        return (
-            image.entrypoint([])
-            .add_local_dir(
-                _CORE_SOURCE,
-                remote_path=f"{_REMOTE_SOURCE_ROOT}/foldarium_pipeline",
-                copy=True,
-            )
-            .env({"PYTHONPATH": _REMOTE_SOURCE_ROOT})
-        )
+    def _add_core(image, *, clear_entrypoint: bool = True):
+        """Attach the portable core to a prediction image.
 
+        Images we build ourselves have no meaningful entrypoint, so clearing it
+        keeps the container command explicit. An upstream image may instead use
+        its entrypoint to activate the environment its tools live in; clearing
+        that would hide both the interpreter and the method CLI.
+        """
+
+        if clear_entrypoint:
+            image = image.entrypoint([])
+        return image.add_local_dir(
+            _CORE_SOURCE,
+            remote_path=f"{_REMOTE_SOURCE_ROOT}/foldarium_pipeline",
+            copy=True,
+        ).env({"PYTHONPATH": _REMOTE_SOURCE_ROOT})
+
+    # The official OpenFold3 image ships a pixi environment that is activated by
+    # its entrypoint (``source /opt/activate.sh && exec "$@"``). Neither Python
+    # nor ``setup_openfold`` is on PATH until that runs, so the entrypoint must be
+    # preserved: it is what places Modal's own command inside the environment.
     openfold3_image = _add_core(
         modal.Image.from_registry(OPENFOLD3_IMAGE_REF).env(
             {"OPENFOLD_CACHE": OPENFOLD_CACHE_ROOT}
-        )
+        ),
+        clear_entrypoint=False,
     )
 
     # This bootstrap recipe is version-pinned and deliberately contains no
