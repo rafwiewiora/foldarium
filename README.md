@@ -26,3 +26,26 @@ To enable remote quiz-result persistence:
 6. Deploy through the existing Vercel Git integration.
 
 Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.
+
+## Uploading structure files
+
+Upload all PDB files in `data/` and `data_rnp/` to the public `structures` Storage bucket:
+
+```bash
+SUPABASE_URL=https://... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+npm run upload:structures
+```
+
+Keep the server credential uncommitted. Rerunning the command without `--overwrite` is safe: existing objects are skipped. Pass `-- --overwrite` to replace existing objects.
+
+Production loads structures from the public Supabase Storage URL configured in `supabase-config.js`. The PDB files remain in Git as a backup, while `.vercelignore` excludes `data/` and `data_rnp/` from Vercel deployments.
+
+## Replaying recorded answers
+
+1. Apply `supabase/migrations/20260805230000_add_viewer_trace.sql` to the Supabase project.
+2. Set `REPLAY_PASSWORD`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` in the Vercel project environment.
+3. Use a strong, unique replay password. Keep both that password and the server credential out of browser files, including `supabase-config.js`.
+4. Open `/replay.html`, enter the password, select a recent session, then select and play one traced answer.
+
+Replay access deliberately uses one shared password. It has no individual replay accounts, per-user authorization, audit trail, or built-in rate limiting; anyone with the shared password can read every replay exposed by the endpoint. Use it only for a small trusted audience and rotate the password if it is disclosed.

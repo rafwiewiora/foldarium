@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pose Quiz · answer replay</title>
+<link rel="icon" href="data:,"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.css"/>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #11161d;
+    --line: #2a3441;
+    --ink: #e6edf3;
+    --muted: #8b98a8;
+    --accent: #3fb6e0;
+    --bad: #e23b2e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) 1fr;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  }
+  aside {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    overflow-y: auto;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+  }
+  h1 {
+    margin: 0;
+    font-size: 16px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+  input, select, button {
+    width: 100%;
+    min-height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: inherit;
+  }
+  input, select {
+    padding: 8px 10px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  button {
+    padding: 9px 12px;
+    background: var(--accent);
+    color: #06131a;
+    border-color: transparent;
+    cursor: pointer;
+    font-weight: 650;
+  }
+  button.secondary { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:disabled { cursor: default; opacity: .45; }
+  .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  #status {
+    min-height: 3em;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  #status[data-error="true"] { color: var(--bad); border-color: color-mix(in srgb, var(--bad), transparent 45%); }
+  #viewer { position: relative; min-width: 0; background: #fff; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto minmax(420px, 1fr); }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>Answer Replay</h1>
+    <p>Review one recorded quiz answer at a time.</p>
+  </div>
+
+  <label for="replay-password">
+    Replay password
+    <input id="replay-password" type="password" autocomplete="off"/>
+  </label>
+  <button id="connect" type="button">Connect</button>
+
+  <label for="sessions">
+    Recent session
+    <select id="sessions" disabled>
+      <option value="">Connect first</option>
+    </select>
+  </label>
+
+  <label for="answers">
+    Traced answer
+    <select id="answers" disabled>
+      <option value="">Select a session first</option>
+    </select>
+  </label>
+
+  <div class="buttons">
+    <button id="play" type="button" disabled>Play</button>
+    <button id="stop" class="secondary" type="button" disabled>Stop</button>
+  </div>
+
+  <div id="status" role="status" aria-live="polite">Loading viewer…</div>
+</aside>
+<main id="viewer" aria-label="Molecular viewer"></main>
+
+<script src="https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js"></script>
+<script type="module" src="replay.js"></script>
+</body>
+</html>
