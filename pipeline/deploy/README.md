@@ -37,6 +37,10 @@ immutable digest.
 The initial function requests an A100-40GB, matching upstream's commonly tested
 baseline; route genuinely larger targets to a separately costed A100-80GB policy
 instead of silently changing the standard campaign runtime.
+It also requests eight physical CPU cores and 32 GiB host RAM. Boltz-2 requests
+four cores and 16 GiB with its L40S. Both GPU functions have `max_containers=1`
+and scale to zero when idle, which is intentionally conservative for the first
+credit-limited smoke tests.
 
 Boltz is built with exactly `boltz[cuda]==2.2.1`. Model files persist in
 method-specific Modal Volumes to reduce cold starts. Those volumes are caches

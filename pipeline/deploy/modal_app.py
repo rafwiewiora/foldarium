@@ -209,7 +209,10 @@ if modal is not None:
 
     @app.function(
         image=openfold3_image,
+        cpu=2.0,
+        memory=8192,
         timeout=60 * 60,
+        max_containers=1,
         volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
     )
     def bootstrap_openfold3_cache() -> dict[str, str]:
@@ -243,8 +246,11 @@ if modal is not None:
 
     @app.function(
         image=openfold3_image,
+        cpu=8.0,
+        memory=32768,
         gpu="A100-40GB",
         timeout=FUNCTION_TIMEOUT_SECONDS,
+        max_containers=1,
         volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
         secrets=[control_plane_secret],
     )
@@ -256,8 +262,11 @@ if modal is not None:
 
     @app.function(
         image=boltz2_image,
+        cpu=4.0,
+        memory=16384,
         gpu="L40S",
         timeout=FUNCTION_TIMEOUT_SECONDS,
+        max_containers=1,
         volumes={BOLTZ_CACHE_ROOT: boltz_cache},
         secrets=[control_plane_secret],
     )
@@ -277,7 +286,12 @@ if modal is not None:
         )
         return call.object_id
 
-    @app.function(image=control_image)
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        max_containers=1,
+    )
     def submit_tasks(task_jsons: list[str | dict[str, Any]]) -> list[str]:
         """Fan out already-planned tasks; return Modal call IDs for observability."""
 
@@ -285,9 +299,12 @@ if modal is not None:
 
     @app.function(
         image=control_image,
+        cpu=0.5,
+        memory=512,
         schedule=modal.Cron(WEEKLY_CRON_UTC),
         secrets=[control_plane_secret],
         timeout=30 * 60,
+        max_containers=1,
     )
     def weekly_tick() -> dict[str, Any]:
         """Deployment-owned cron seam for a provider-neutral campaign producer.
