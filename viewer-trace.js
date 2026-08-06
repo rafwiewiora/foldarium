@@ -82,14 +82,15 @@ export function createViewerTraceRecorder({
     }
   };
 
-  const cameraSubscription = plugin.canvas3d.camera.changed.subscribe(() => {
+  const cameraChanges = plugin.canvas3d.camera.changed ?? plugin.canvas3d.camera.stateChanged;
+  const cameraSubscription = cameraChanges?.subscribe(() => {
     if (!active) return;
     if (cameraTimer !== null) clearTimer(cameraTimer);
     cameraTimer = setTimer(() => {
       cameraTimer = null;
       captureCamera();
     }, settleMs);
-  });
+  }) ?? { unsubscribe() {} };
 
   return {
     start() {

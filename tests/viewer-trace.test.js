@@ -72,6 +72,21 @@ function fakePlugin() {
   };
 }
 
+test('uses the Molstar stateChanged camera observable when changed is unavailable', () => {
+  const plugin = fakePlugin();
+  plugin.canvas3d.camera.stateChanged = plugin.canvas3d.camera.changed;
+  delete plugin.canvas3d.camera.changed;
+
+  let recorder;
+  assert.doesNotThrow(() => {
+    recorder = createViewerTraceRecorder({ plugin });
+  });
+  recorder.start();
+  plugin.cameraChanged();
+  const trace = recorder.stop();
+  assert.deepEqual(trace.snapshots.map(entry => entry.kind), ['state', 'camera']);
+});
+
 test('captures an initial data-tree snapshot and a settled camera endpoint', () => {
   const clock = fakeClock();
   const plugin = fakePlugin();
