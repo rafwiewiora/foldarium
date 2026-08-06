@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Sequence
 
 from .contracts import make_prediction_task, validate_prediction_task, validate_target
+from .staging import (
+    DEFAULT_EXECUTION_BACKEND,
+    DEFAULT_SELECTION_POLICY_VERSION,
+    build_staging_plan,
+    render_staging_sql,
+)
 from .worker import execute_task_json
 
 
@@ -37,6 +43,24 @@ def build_parser() -> argparse.ArgumentParser:
     make.add_argument("--image", required=True)
     make.add_argument("--config-json", required=True)
     make.add_argument("--output-prefix", required=True)
+    make.add_argument(
+        "--resources-json",
+        help="execution budget (e.g. timeout_seconds); part of the task, not its identity",
+    )
+
+    stage = commands.add_parser(
+        "stage-sql", help="render idempotent control-plane rows for planned tasks"
+    )
+    stage.add_argument("task_json", nargs="+")
+    stage.add_argument("--adapter-version", required=True)
+    stage.add_argument("--campaign-name")
+    stage.add_argument("--campaign-source", default="synthetic-smoke-test")
+    stage.add_argument(
+        "--selection-policy-version", default=DEFAULT_SELECTION_POLICY_VERSION
+    )
+    stage.add_argument("--execution-backend", default=DEFAULT_EXECUTION_BACKEND)
+    stage.add_argument("--max-attempts", type=int, default=1)
+    stage.add_argument("--status", default="pending", choices=("pending", "queued"))
 
     plan = commands.add_parser("plan", help="materialize inputs without launching a model")
     plan.add_argument("task_json")
@@ -64,7 +88,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 container_image=args.image,
                 config=_read(args.config_json),
                 output_uri_prefix=args.output_prefix,
+                resources=_read(args.resources_json) if args.resources_json else None,
             )
+        )
+    elif args.command == "stage-sql":
+        print(
+            render_staging_sql(
+                build_staging_plan(
+                    [_read(path) for path in args.task_json],
+                    adapter_version=args.adapter_version,
+                    campaign_name=args.campaign_name,
+                    campaign_source=args.campaign_source,
+                    selection_policy_version=args.selection_policy_version,
+                    execution_backend=args.execution_backend,
+                    max_attempts=args.max_attempts,
+                    status=args.status,
+                )
+            ),
+            end="",
         )
     elif args.command in {"plan", "run"}:
         _print(
