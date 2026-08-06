@@ -11,8 +11,15 @@
 ## Modes
 
 - **Easy** — ensembles that contain a correct pose; pick it.
-- **Hard** — pick the correct pose or **"none of these"** (class-balanced draw).
-- **CAMEO** / **Runs-n-Poses** — prospective AF3 vs multi-method retrospective poses.
+- **Hard** — pick the correct pose or **"none of these"** (class-balanced sessions).
+- **CAMEO** / **Runs-n-Poses** — prospective AF3 vs multi-method retrospective poses, with a Grid for comparing candidates.
+
+## Benchmark demo and preparation pipelines
+
+- The training-similarity benchmark viewer and its static demo live under
+  [`benchmark/`](benchmark/README.md); see its README for how to serve the demo.
+- Upstream CAMEO and Runs-n-Poses preparation scripts are in
+  [`prep/`](prep/README.md).
 
 ## Supabase quiz persistence
 
@@ -45,6 +52,20 @@ npm run upload:structures
 Keep the server credential uncommitted. Rerunning the command without `--overwrite` is safe: existing objects are skipped. Pass `-- --overwrite` to replace existing objects.
 
 Production loads structures from the public Supabase Storage URL configured in `supabase-config.js`. The PDB files remain in Git as a backup, while `.vercelignore` excludes `data/` and `data_rnp/` from Vercel deployments.
+
+## Uploading benchmark demo assets
+
+Materialize the benchmark demo's `systems*` files outside this repository, then
+upload them to the public `structures` bucket:
+
+```bash
+BENCHMARK_DEMO_DIR=/path/to/benchmark/demo \
+SUPABASE_URL=https://... \
+SUPABASE_SERVICE_ROLE_KEY=... \
+npm run upload:benchmark
+```
+
+Keep the service credential and generated benchmark assets uncommitted.
 
 ## Replaying recorded answers
 
