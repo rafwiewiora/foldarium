@@ -112,7 +112,7 @@ const SNAPSHOT_PARAMS = {
   canvas3d: false,
   canvas3dContext: false,
   interactivity: false,
-  structureSelection: false,
+  structureSelection: true,
   camera: true,
   cameraTransition: { name: 'animate', params: { durationInMs: 250 } },
 };
@@ -122,7 +122,7 @@ export function createViewerTraceRecorder({
   now = () => performance.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  settleMs = 300,
+  settleMs = 100,
   maxEntries = 100,
 }) {
   let active = false;
@@ -143,7 +143,6 @@ export function createViewerTraceRecorder({
   const captureState = () => {
     try {
       const snapshot = plugin.state.getSnapshot(SNAPSHOT_PARAMS);
-      delete snapshot.structureFocus;
       append({ kind: 'state', snapshot });
     } catch (error) {
       console.warn('Viewer snapshot skipped:', error.message);
@@ -158,7 +157,8 @@ export function createViewerTraceRecorder({
     }
   };
 
-  const cameraSubscription = plugin.canvas3d.camera.changed.subscribe(() => {
+  const cameraChanges = plugin.canvas3d.camera.changed ?? plugin.canvas3d.camera.stateChanged;
+  const cameraSubscription = cameraChanges.subscribe(() => {
     if (!active) return;
     if (cameraTimer !== null) clearTimer(cameraTimer);
     cameraTimer = setTimer(() => {
@@ -201,6 +201,10 @@ export function createViewerTraceRecorder({
 ```
 
 Adjust the exact implementation to satisfy tests without adding semantic event logging or image capture.
+Subscribe to `plugin.managers.structure.focus.behaviors.current` and
+`plugin.managers.structure.selection.events.changed`, debounce both for
+100 ms, and capture a state snapshot so focus, selection, and generated
+nearby-residue representations are replayable.
 
 - [ ] **Step 4: Run recorder tests**
 

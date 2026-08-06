@@ -35,7 +35,7 @@ Add a nullable `viewer_trace jsonb` column to `quiz_answers`. A trace is:
 }
 ```
 
-`state` entries contain a serialized Mol* data-tree snapshot and camera. `camera` entries contain only the camera snapshot. Downloaded structures normally remain URL-backed; raw structures created in the browser, such as merged H-bond PDB data, can appear as JSON text in the tree.
+`state` entries contain a serialized Mol* data tree, structure focus, structure selection, and camera. `camera` entries contain only the camera snapshot. Downloaded structures normally remain URL-backed; raw structures created in the browser, such as merged H-bond PDB data, can appear as JSON text in the tree.
 
 The trace contains at most 100 entries. Once that limit is reached, recording stops and `truncated` becomes `true`.
 
@@ -45,9 +45,10 @@ Create a focused recorder module with `start()`, `captureState()`, and `stop()` 
 
 1. `start()` records the question-relative start time and captures the initial data tree plus camera.
 2. After a Foldarium action rebuilds the scene—display mode, pose navigation, clustering, protein mode, or H-bond visibility—the caller awaits the rebuild and then calls `captureState()`.
-3. Subscribe to Mol* camera changes. Debounce changes for 300 ms and append a camera-only snapshot when rotation, pan, or zoom settles.
-4. Programmatic replay and answer reveal do not run through the recorder.
-5. `stop()` flushes the current settled camera, unsubscribes, and returns an immutable trace.
+3. Subscribe to Mol* camera changes. Debounce changes for 100 ms and append a camera-only snapshot when rotation, pan, or zoom settles.
+4. Subscribe to Mol* focus and structure-selection changes. Debounce them together for 100 ms and append a state snapshot so residue focus and nearby-residue representations can be restored.
+5. Programmatic replay and answer reveal do not run through the recorder.
+6. `stop()` flushes pending focus, selection, and camera captures, then returns an immutable trace.
 
 The answer-lock path stops the recorder before modifying reveal state. The completed trace is passed into the existing answer record and persisted by the current retry queue. If trace serialization fails, the answer is still stored with `viewer_trace: null`.
 
