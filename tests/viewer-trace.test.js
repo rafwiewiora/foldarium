@@ -33,6 +33,8 @@ function fakeClock() {
 
 function fakePlugin() {
   let cameraCallback = null;
+  let focusCallback = null;
+  let selectionCallback = null;
   let cameraReads = 0;
   let stateReads = 0;
 
@@ -44,12 +46,37 @@ function fakePlugin() {
       return stateReads;
     },
     state: {
-      getSnapshot: (_params) => {
+      getSnapshot: (params) => {
         stateReads += 1;
         return {
           data: { tree: { id: 'mock' } },
-          structureFocus: 'remove-me',
+          structureFocus: { current: 'focused-residue' },
+          structureSelection: params.structureSelection ? { entries: ['selected-residue'] } : undefined,
         };
+      },
+    },
+    managers: {
+      structure: {
+        focus: {
+          behaviors: {
+            current: {
+              subscribe(callback) {
+                focusCallback = callback;
+                return { unsubscribe: () => { focusCallback = null; } };
+              },
+            },
+          },
+        },
+        selection: {
+          events: {
+            changed: {
+              subscribe(callback) {
+                selectionCallback = callback;
+                return { unsubscribe: () => { selectionCallback = null; } };
+              },
+            },
+          },
+        },
       },
     },
     canvas3d: {
@@ -69,8 +96,48 @@ function fakePlugin() {
     cameraChanged() {
       if (cameraCallback) cameraCallback();
     },
+    focusChanged() {
+      if (focusCallback) focusCallback();
+    },
+    selectionChanged() {
+      if (selectionCallback) selectionCallback();
+    },
   };
 }
+
+test('records focus and structure selection in state snapshots', () => {
+  const recorder = createViewerTraceRecorder({ plugin: fakePlugin() });
+  recorder.start();
+  const trace = recorder.stop();
+  const snapshot = trace.snapshots[0].snapshot;
+
+  assert.deepEqual(snapshot.structureFocus, { current: 'focused-residue' });
+  assert.deepEqual(snapshot.structureSelection, { entries: ['selected-residue'] });
+});
+
+test('captures debounced focus and selection changes after 100 ms', () => {
+  const clock = fakeClock();
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({
+    plugin,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+
+  recorder.start();
+  plugin.focusChanged();
+  clock.advance(50);
+  plugin.selectionChanged();
+  clock.advance(99);
+  assert.equal(plugin.stateReads, 1);
+  clock.advance(1);
+  assert.equal(plugin.stateReads, 2);
+
+  const trace = recorder.stop();
+  assert.deepEqual(trace.snapshots.map(entry => entry.kind), ['state', 'state']);
+  assert.equal(trace.snapshots[1].t_ms, 150);
+});
 
 test('uses the Molstar stateChanged camera observable when changed is unavailable', () => {
   const plugin = fakePlugin();

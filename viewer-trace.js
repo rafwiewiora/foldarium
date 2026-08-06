@@ -7,7 +7,7 @@ const SNAPSHOT_PARAMS = {
   canvas3d: false,
   canvas3dContext: false,
   interactivity: false,
-  structureSelection: false,
+  structureSelection: true,
   camera: true,
   cameraTransition: { name: 'animate', params: { durationInMs: 250 } },
 };
@@ -32,7 +32,7 @@ export function createViewerTraceRecorder({
   now = () => performance.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  settleMs = 300,
+  settleMs = 100,
   maxEntries = MAX_SNAPSHOTS,
 }) {
   const entryLimit = normalizeEntryLimit(maxEntries);
@@ -41,11 +41,14 @@ export function createViewerTraceRecorder({
   let snapshots = [];
   let truncated = false;
   let cameraTimer = null;
+  let stateTimer = null;
 
   const stopCaptureWork = () => {
     active = false;
     if (cameraTimer !== null) clearTimer(cameraTimer);
+    if (stateTimer !== null) clearTimer(stateTimer);
     cameraTimer = null;
+    stateTimer = null;
   };
 
   const append = entry => {
@@ -64,9 +67,10 @@ export function createViewerTraceRecorder({
 
   const captureState = () => {
     if (!active) return;
+    if (stateTimer !== null) clearTimer(stateTimer);
+    stateTimer = null;
     try {
       const snapshot = plugin.state.getSnapshot(SNAPSHOT_PARAMS);
-      delete snapshot.structureFocus;
       append({ kind: 'state', snapshot });
     } catch (error) {
       console.warn('Viewer snapshot skipped:', error.message);
@@ -91,6 +95,18 @@ export function createViewerTraceRecorder({
       captureCamera();
     }, settleMs);
   }) ?? { unsubscribe() {} };
+  const scheduleStateCapture = () => {
+    if (!active) return;
+    if (stateTimer !== null) clearTimer(stateTimer);
+    stateTimer = setTimer(() => {
+      stateTimer = null;
+      captureState();
+    }, settleMs);
+  };
+  const focusSubscription = plugin.managers?.structure?.focus?.behaviors?.current
+    ?.subscribe(scheduleStateCapture) ?? { unsubscribe() {} };
+  const selectionSubscription = plugin.managers?.structure?.selection?.events?.changed
+    ?.subscribe(scheduleStateCapture) ?? { unsubscribe() {} };
 
   return {
     start() {
@@ -99,11 +115,18 @@ export function createViewerTraceRecorder({
       snapshots = [];
       truncated = entryLimit === 0;
       if (cameraTimer !== null) clearTimer(cameraTimer);
+      if (stateTimer !== null) clearTimer(stateTimer);
       cameraTimer = null;
+      stateTimer = null;
       captureState();
     },
     captureState,
     stop() {
+      if (stateTimer !== null) {
+        clearTimer(stateTimer);
+        stateTimer = null;
+        captureState();
+      }
       if (cameraTimer !== null) {
         clearTimer(cameraTimer);
         cameraTimer = null;
@@ -120,6 +143,8 @@ export function createViewerTraceRecorder({
     },
     dispose() {
       cameraSubscription.unsubscribe();
+      focusSubscription.unsubscribe();
+      selectionSubscription.unsubscribe();
     },
   };
 }
