@@ -38,8 +38,84 @@ const disabledBackend = {
   startSession: () => null,
   recordAnswer: () => {},
   completeSession: () => {},
-  flush: async () => {},
+  flush: async ({ strict = false } = {}) => {
+    if (strict) throw persistenceUnavailableError();
+  },
+  claimUsername: async () => {
+    throw new Error('Leaderboard persistence is unavailable.');
+  },
+  getLeaderboard: async () => {
+    throw new Error('Leaderboard persistence is unavailable.');
+  },
 };
+
+export function createDeferredBackend({
+  uuid = () => crypto.randomUUID(),
+} = {}) {
+  let target = null;
+  let failure = null;
+  const pending = [];
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  void ready.catch(() => {});
+
+  const call = (method, args) => {
+    try {
+      if (target) return target[method](...args);
+      pending.push([method, args]);
+    } catch (error) {
+      console.warn('Quiz persistence event ignored:', error.message);
+    }
+  };
+
+  const requireTarget = async () => {
+    if (target) return target;
+    if (failure) throw failure;
+    return ready;
+  };
+
+  return {
+    startSession(values) {
+      try {
+        const id = uuid();
+        call('startSession', [{ ...values, id }]);
+        return id;
+      } catch {
+        return null;
+      }
+    },
+    recordAnswer: (...args) => { call('recordAnswer', args); },
+    completeSession: (...args) => { call('completeSession', args); },
+    flush(options = {}) {
+      if (!options.strict) return target?.flush(options) || Promise.resolve();
+      return requireTarget().then(backend => backend.flush(options));
+    },
+    async claimUsername(...args) {
+      return (await requireTarget()).claimUsername(...args);
+    },
+    async getLeaderboard() {
+      return (await requireTarget()).getLeaderboard();
+    },
+    attach(backend) {
+      if (target || failure) return;
+      target = backend;
+      for (const [method, args] of pending.splice(0)) call(method, args);
+      resolveReady(backend);
+    },
+    fail(error) {
+      if (target || failure) return;
+      failure = persistenceUnavailableError(
+        `Quiz persistence initialization failed: ${error.message}`,
+        error,
+      );
+      rejectReady(failure);
+    },
+  };
+}
 
 export function createQuizBackend({
   client,
@@ -49,14 +125,19 @@ export function createQuizBackend({
   now = () => new Date(),
 }) {
   let flushing = null;
+  let flushOutcome = null;
   let flushAgain = false;
+  const enqueueFailures = new Map();
 
   const enqueue = (kind, value, { warnOnFailure = true } = {}) => {
     const entry = { kind, value };
+    const key = operationKey(entry);
     try {
-      storage.setItem(operationKey(entry), JSON.stringify(entry));
+      storage.setItem(key, JSON.stringify(entry));
+      enqueueFailures.delete(key);
       if (flushing) flushAgain = true;
     } catch (error) {
+      enqueueFailures.set(key, error);
       if (warnOnFailure) console.warn('Quiz result queue could not be saved:', error.message);
       return false;
     }
@@ -92,7 +173,7 @@ export function createQuizBackend({
       .eq('user_id', uid);
   }
 
-  async function drain() {
+  async function drain(outcome) {
     if (!readOperations(storage).length) return;
     let remoteClient;
     let uid;
@@ -104,7 +185,10 @@ export function createQuizBackend({
         console.warn('Quiz results remain queued:', error.message);
         return;
       }
-      for (const stored of readOperations(storage)) deadLetter(storage, stored, error, now);
+      for (const stored of readOperations(storage)) {
+        deadLetter(storage, stored, error, now);
+        outcome.deadLettered++;
+      }
       return;
     }
 
@@ -119,20 +203,67 @@ export function createQuizBackend({
           return;
         }
         deadLetter(storage, stored, error, now);
+        outcome.deadLettered++;
       }
     }
   }
 
-  async function drainRequested() {
+  async function drainRequested(outcome) {
     do {
       flushAgain = false;
-      await drain();
+      await drain(outcome);
     } while (flushAgain);
   }
 
-  function flush() {
-    if (!flushing) flushing = drainRequested().finally(() => { flushing = null; });
-    return flushing;
+  function flush({ strict = false } = {}) {
+    if (!flushing) {
+      const outcome = { deadLettered: 0 };
+      flushOutcome = outcome;
+      const finalized = drainRequested(outcome).finally(() => {
+        if (flushing === finalized) {
+          flushing = null;
+          flushOutcome = null;
+        }
+      });
+      flushing = finalized;
+    }
+    const currentFlush = flushing;
+    const currentOutcome = flushOutcome;
+    if (!strict) return currentFlush;
+    return currentFlush.then(() => {
+      if (enqueueFailures.size) {
+        const firstFailure = enqueueFailures.values().next().value;
+        throw persistenceIncompleteError(
+          `${enqueueFailures.size} quiz operation(s) could not be queued in browser storage`
+          + ` (${firstFailure.message}). Free browser storage space and try saving again.`,
+        );
+      }
+      const deadLettered = currentOutcome.deadLettered;
+      if (deadLettered) {
+        throw persistenceIncompleteError(
+          `${deadLettered} quiz operation(s) were dead-lettered.`,
+        );
+      }
+      const queued = readOperations(storage).length;
+      if (queued) {
+        throw persistenceIncompleteError(`${queued} quiz operation(s) remain queued.`);
+      }
+    });
+  }
+
+  async function leaderboardRpc(name, args, authenticate = false) {
+    let remoteClient;
+    try {
+      remoteClient = await getClient();
+    } catch (error) {
+      throw new Error(`Leaderboard persistence is unavailable: ${error.message}`, {
+        cause: error,
+      });
+    }
+    if (authenticate) await userId(remoteClient);
+    const result = await remoteClient.rpc(name, args);
+    if (result.error) throw result.error;
+    return result.data;
   }
 
   return {
@@ -177,6 +308,14 @@ export function createQuizBackend({
       if (sessionId) enqueue('complete', { id: sessionId, completed_at: now().toISOString() });
     },
     flush,
+    async claimUsername(username) {
+      return leaderboardRpc('claim_leaderboard_username', {
+        p_username: username,
+      }, true);
+    },
+    async getLeaderboard() {
+      return (await leaderboardRpc('get_leaderboard')) ?? [];
+    },
   };
 }
 
@@ -206,6 +345,21 @@ export function initQuizBackend(config = {}, dependencies = {}) {
 
 function operationKey(entry) {
   return `${OPERATION_PREFIX}${KIND_ORDER[entry.kind]}:${entry.value.id}`;
+}
+
+function persistenceUnavailableError(
+  message = 'Quiz persistence is unavailable.',
+  cause,
+) {
+  const error = new Error(message, cause ? { cause } : undefined);
+  error.code = 'QUIZ_PERSISTENCE_UNAVAILABLE';
+  return error;
+}
+
+function persistenceIncompleteError(message) {
+  const error = new Error(`Quiz persistence is incomplete: ${message}`);
+  error.code = 'QUIZ_PERSISTENCE_INCOMPLETE';
+  return error;
 }
 
 function deadLetter(storage, stored, error, now) {

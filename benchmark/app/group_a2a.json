@@ -1,0 +1,4342 @@
+{
+  "name": "a2a",
+  "label": "Adenosine A2A receptor",
+  "reference_pdb": "7IN9",
+  "ref_file": "systems/group_a2a/ref.cif",
+  "seqlen": 433,
+  "n_members": 79,
+  "n_included": 79,
+  "n_correct": 38,
+  "n_wrong": 41,
+  "fragments": [
+    {
+      "id": "7IN9",
+      "ligand": "A1COM",
+      "n_atoms": 12,
+      "correct": false,
+      "pose1_rmsd": 4.75,
+      "center": [
+        -19.96,
+        6.06,
+        18.39
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 4.75,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IN9_A1COM-pose-1.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 4.77,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IN9_A1COM-pose-2.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.59,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IN9_A1COM-pose-3.pdb",
+          "align_rmsd": 0.76,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 4.76,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IN9_A1COM-pose-4.pdb",
+          "align_rmsd": 0.97,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 4.77,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IN9_A1COM-pose-5.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IN9_A1COM-truth.pdb"
+    },
+    {
+      "id": "7INA",
+      "ligand": "A1CON",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 31.79,
+      "center": [
+        -20.7,
+        6.15,
+        17.92
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 31.79,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INA_A1CON-pose-1.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.58,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INA_A1CON-pose-2.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 3.28,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INA_A1CON-pose-3.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.4,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INA_A1CON-pose-4.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.52,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INA_A1CON-pose-5.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INA_A1CON-truth.pdb"
+    },
+    {
+      "id": "7INB",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.44,
+      "center": [
+        -20.41,
+        6.29,
+        18.2
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.44,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INB_TEP-pose-1.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INB_TEP-pose-2.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.32,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INB_TEP-pose-3.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.45,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INB_TEP-pose-4.pdb",
+          "align_rmsd": 0.99,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INB_TEP-pose-5.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INB_TEP-truth.pdb"
+    },
+    {
+      "id": "7INC",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.74,
+      "center": [
+        -20.55,
+        6.6,
+        18.05
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.74,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INC_TEP-pose-1.pdb",
+          "align_rmsd": 0.53,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.39,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INC_TEP-pose-2.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.48,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INC_TEP-pose-3.pdb",
+          "align_rmsd": 0.73,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.44,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INC_TEP-pose-4.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.48,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INC_TEP-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INC_TEP-truth.pdb"
+    },
+    {
+      "id": "7IND",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.41,
+      "center": [
+        -20.46,
+        6.24,
+        18.14
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IND_TEP-pose-1.pdb",
+          "align_rmsd": 0.5,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.43,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IND_TEP-pose-2.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IND_TEP-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.47,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IND_TEP-pose-4.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.72,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IND_TEP-pose-5.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IND_TEP-truth.pdb"
+    },
+    {
+      "id": "7INE",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.34,
+      "center": [
+        -20.58,
+        6.25,
+        18.06
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INE_TEP-pose-1.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.35,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INE_TEP-pose-2.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INE_TEP-pose-3.pdb",
+          "align_rmsd": 0.53,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.57,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INE_TEP-pose-4.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.4,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INE_TEP-pose-5.pdb",
+          "align_rmsd": 1.16,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INE_TEP-truth.pdb"
+    },
+    {
+      "id": "7INF",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.58,
+      "center": [
+        -20.52,
+        6.43,
+        18.24
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.58,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INF_TEP-pose-1.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INF_TEP-pose-2.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INF_TEP-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INF_TEP-pose-4.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.45,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INF_TEP-pose-5.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INF_TEP-truth.pdb"
+    },
+    {
+      "id": "7ING",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.47,
+      "center": [
+        -20.43,
+        6.39,
+        18.25
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.47,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7ING_TEP-pose-1.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.36,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7ING_TEP-pose-2.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.35,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7ING_TEP-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.54,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7ING_TEP-pose-4.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7ING_TEP-pose-5.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7ING_TEP-truth.pdb"
+    },
+    {
+      "id": "7INH",
+      "ligand": "A1COR",
+      "n_atoms": 13,
+      "correct": false,
+      "pose1_rmsd": 33.26,
+      "center": [
+        -20.66,
+        6.52,
+        18.12
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.26,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INH_A1COR-pose-1.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.33,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INH_A1COR-pose-2.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 33.29,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INH_A1COR-pose-3.pdb",
+          "align_rmsd": 0.92,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.8,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INH_A1COR-pose-4.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.24,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INH_A1COR-pose-5.pdb",
+          "align_rmsd": 0.59,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INH_A1COR-truth.pdb"
+    },
+    {
+      "id": "7INI",
+      "ligand": "A1COV",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 2.45,
+      "center": [
+        -20.35,
+        6.16,
+        18.3
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INI_A1COV-pose-1.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INI_A1COV-pose-2.pdb",
+          "align_rmsd": 0.93,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.65,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INI_A1COV-pose-3.pdb",
+          "align_rmsd": 0.95,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 4.56,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INI_A1COV-pose-4.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INI_A1COV-pose-5.pdb",
+          "align_rmsd": 0.53,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INI_A1COV-truth.pdb"
+    },
+    {
+      "id": "7INJ",
+      "ligand": "A1COW",
+      "n_atoms": 16,
+      "correct": false,
+      "pose1_rmsd": 2.15,
+      "center": [
+        -20.28,
+        -25.59,
+        15.08
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.15,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INJ_A1COW-pose-1.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.69,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INJ_A1COW-pose-2.pdb",
+          "align_rmsd": 0.73,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.61,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INJ_A1COW-pose-3.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 2.32,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INJ_A1COW-pose-4.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.55,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INJ_A1COW-pose-5.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INJ_A1COW-truth.pdb"
+    },
+    {
+      "id": "7INK",
+      "ligand": "A1COX",
+      "n_atoms": 13,
+      "correct": false,
+      "pose1_rmsd": 29.41,
+      "center": [
+        -20.3,
+        7.01,
+        18.1
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 29.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INK_A1COX-pose-1.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 29.56,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INK_A1COX-pose-2.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 29.08,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INK_A1COX-pose-3.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 29.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INK_A1COX-pose-4.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 29.38,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INK_A1COX-pose-5.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INK_A1COX-truth.pdb"
+    },
+    {
+      "id": "7INL",
+      "ligand": "A1COY",
+      "n_atoms": 9,
+      "correct": true,
+      "pose1_rmsd": 0.18,
+      "center": [
+        -20.02,
+        6.4,
+        18.43
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.18,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INL_A1COY-pose-1.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.18,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INL_A1COY-pose-2.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.49,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INL_A1COY-pose-3.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.15,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INL_A1COY-pose-4.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.21,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INL_A1COY-pose-5.pdb",
+          "align_rmsd": 0.5,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INL_A1COY-truth.pdb"
+    },
+    {
+      "id": "7INM",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.59,
+      "center": [
+        -20.41,
+        6.32,
+        18.38
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.59,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INM_TEP-pose-1.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.44,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INM_TEP-pose-2.pdb",
+          "align_rmsd": 0.76,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.46,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INM_TEP-pose-3.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.36,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INM_TEP-pose-4.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INM_TEP-pose-5.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INM_TEP-truth.pdb"
+    },
+    {
+      "id": "7INN",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.63,
+      "center": [
+        -20.33,
+        6.3,
+        18.38
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.63,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INN_TEP-pose-1.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INN_TEP-pose-2.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INN_TEP-pose-3.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INN_TEP-pose-4.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INN_TEP-pose-5.pdb",
+          "align_rmsd": 0.53,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INN_TEP-truth.pdb"
+    },
+    {
+      "id": "7INO",
+      "ligand": "A1CO0",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 2.06,
+      "center": [
+        -20.89,
+        -24.28,
+        14.51
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.06,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INO_A1CO0-pose-1.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.15,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INO_A1CO0-pose-2.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.26,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INO_A1CO0-pose-3.pdb",
+          "align_rmsd": 0.94,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 2.22,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INO_A1CO0-pose-4.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.69,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INO_A1CO0-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INO_A1CO0-truth.pdb"
+    },
+    {
+      "id": "7INP",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.32,
+      "center": [
+        -20.58,
+        6.23,
+        18.07
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.32,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INP_TEP-pose-1.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.36,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INP_TEP-pose-2.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INP_TEP-pose-3.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.45,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INP_TEP-pose-4.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.46,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INP_TEP-pose-5.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INP_TEP-truth.pdb"
+    },
+    {
+      "id": "7INQ",
+      "ligand": "2O8",
+      "n_atoms": 14,
+      "correct": true,
+      "pose1_rmsd": 1.67,
+      "center": [
+        -20.59,
+        -23.51,
+        15.2
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.67,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INQ_2O8-pose-1.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.81,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INQ_2O8-pose-2.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 32.59,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INQ_2O8-pose-3.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.03,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INQ_2O8-pose-4.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.66,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INQ_2O8-pose-5.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INQ_2O8-truth.pdb"
+    },
+    {
+      "id": "7INR",
+      "ligand": "LR5",
+      "n_atoms": 13,
+      "correct": false,
+      "pose1_rmsd": 30.53,
+      "center": [
+        -22.24,
+        6.03,
+        17.59
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 30.53,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INR_LR5-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 30.57,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INR_LR5-pose-2.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 30.46,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INR_LR5-pose-3.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 30.93,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INR_LR5-pose-4.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 31.27,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INR_LR5-pose-5.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INR_LR5-truth.pdb"
+    },
+    {
+      "id": "7INT",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.54,
+      "center": [
+        -20.33,
+        6.28,
+        18.38
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.54,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INT_TEP-pose-1.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INT_TEP-pose-2.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INT_TEP-pose-3.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.51,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INT_TEP-pose-4.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.33,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INT_TEP-pose-5.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INT_TEP-truth.pdb"
+    },
+    {
+      "id": "7INU",
+      "ligand": "A1CO2",
+      "n_atoms": 16,
+      "correct": true,
+      "pose1_rmsd": 1.31,
+      "center": [
+        -20.98,
+        -24.22,
+        14.72
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.31,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INU_A1CO2-pose-1.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INU_A1CO2-pose-2.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.14,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INU_A1CO2-pose-3.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.29,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INU_A1CO2-pose-4.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.19,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INU_A1CO2-pose-5.pdb",
+          "align_rmsd": 0.59,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INU_A1CO2-truth.pdb"
+    },
+    {
+      "id": "7INV",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.52,
+      "center": [
+        -20.62,
+        6.42,
+        18.0
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.52,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INV_TEP-pose-1.pdb",
+          "align_rmsd": 0.98,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.43,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INV_TEP-pose-2.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INV_TEP-pose-3.pdb",
+          "align_rmsd": 0.5,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INV_TEP-pose-4.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.33,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INV_TEP-pose-5.pdb",
+          "align_rmsd": 1.1,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INV_TEP-truth.pdb"
+    },
+    {
+      "id": "7INW",
+      "ligand": "A1BL1",
+      "n_atoms": 14,
+      "correct": true,
+      "pose1_rmsd": 1.5,
+      "center": [
+        -20.8,
+        -23.92,
+        14.7
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INW_A1BL1-pose-1.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.6,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INW_A1BL1-pose-2.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.6,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INW_A1BL1-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.13,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INW_A1BL1-pose-4.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.69,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INW_A1BL1-pose-5.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INW_A1BL1-truth.pdb"
+    },
+    {
+      "id": "7INX",
+      "ligand": "A1CO3",
+      "n_atoms": 17,
+      "correct": true,
+      "pose1_rmsd": 1.16,
+      "center": [
+        -21.15,
+        -24.73,
+        14.91
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.16,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INX_A1CO3-pose-1.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.39,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INX_A1CO3-pose-2.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.13,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INX_A1CO3-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.15,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INX_A1CO3-pose-4.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.65,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INX_A1CO3-pose-5.pdb",
+          "align_rmsd": 0.59,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INX_A1CO3-truth.pdb"
+    },
+    {
+      "id": "7INY",
+      "ligand": "A1CS6",
+      "n_atoms": 21,
+      "correct": true,
+      "pose1_rmsd": 1.91,
+      "center": [
+        -20.29,
+        -26.65,
+        15.01
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.91,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INY_A1CS6-pose-1.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 3.57,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INY_A1CS6-pose-2.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.88,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INY_A1CS6-pose-3.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.63,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7INY_A1CS6-pose-4.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.3,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INY_A1CS6-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INY_A1CS6-truth.pdb"
+    },
+    {
+      "id": "7INZ",
+      "ligand": "A1CO5",
+      "n_atoms": 14,
+      "correct": false,
+      "pose1_rmsd": 30.69,
+      "center": [
+        -21.52,
+        6.02,
+        17.65
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 30.69,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INZ_A1CO5-pose-1.pdb",
+          "align_rmsd": 0.52,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 31.25,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INZ_A1CO5-pose-2.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 31.27,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INZ_A1CO5-pose-3.pdb",
+          "align_rmsd": 1.1,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 31.23,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INZ_A1CO5-pose-4.pdb",
+          "align_rmsd": 0.75,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 31.64,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7INZ_A1CO5-pose-5.pdb",
+          "align_rmsd": 0.76,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7INZ_A1CO5-truth.pdb"
+    },
+    {
+      "id": "7IO0",
+      "ligand": "A1CO6",
+      "n_atoms": 16,
+      "correct": false,
+      "pose1_rmsd": 32.04,
+      "center": [
+        -21.43,
+        6.57,
+        17.48
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 32.04,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO0_A1CO6-pose-1.pdb",
+          "align_rmsd": 0.98,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 31.97,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO0_A1CO6-pose-2.pdb",
+          "align_rmsd": 1.07,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 31.9,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO0_A1CO6-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 31.79,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO0_A1CO6-pose-4.pdb",
+          "align_rmsd": 1.2,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 31.76,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO0_A1CO6-pose-5.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO0_A1CO6-truth.pdb"
+    },
+    {
+      "id": "7IO1",
+      "ligand": "A1CO7",
+      "n_atoms": 14,
+      "correct": false,
+      "pose1_rmsd": 31.84,
+      "center": [
+        -20.56,
+        6.8,
+        17.97
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 31.84,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO1_A1CO7-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 31.83,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO1_A1CO7-pose-2.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 31.04,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO1_A1CO7-pose-3.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 32.12,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO1_A1CO7-pose-4.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 32.18,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO1_A1CO7-pose-5.pdb",
+          "align_rmsd": 0.93,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO1_A1CO7-truth.pdb"
+    },
+    {
+      "id": "7IO2",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.39,
+      "center": [
+        -20.55,
+        6.41,
+        18.19
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.39,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO2_TEP-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO2_TEP-pose-2.pdb",
+          "align_rmsd": 0.94,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.35,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO2_TEP-pose-3.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.35,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO2_TEP-pose-4.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO2_TEP-pose-5.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO2_TEP-truth.pdb"
+    },
+    {
+      "id": "7IO3",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.42,
+      "center": [
+        -20.64,
+        6.42,
+        18.14
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.42,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO3_TEP-pose-1.pdb",
+          "align_rmsd": 0.86,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.21,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO3_TEP-pose-2.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.42,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO3_TEP-pose-3.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO3_TEP-pose-4.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.51,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO3_TEP-pose-5.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO3_TEP-truth.pdb"
+    },
+    {
+      "id": "7IO4",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.77,
+      "center": [
+        -20.54,
+        6.6,
+        18.05
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.77,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO4_TEP-pose-1.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO4_TEP-pose-2.pdb",
+          "align_rmsd": 0.5,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.4,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO4_TEP-pose-3.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.71,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO4_TEP-pose-4.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO4_TEP-pose-5.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO4_TEP-truth.pdb"
+    },
+    {
+      "id": "7IO5",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.38,
+      "center": [
+        -20.66,
+        6.37,
+        18.07
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO5_TEP-pose-1.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.33,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO5_TEP-pose-2.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.33,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO5_TEP-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.43,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO5_TEP-pose-4.pdb",
+          "align_rmsd": 0.92,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO5_TEP-pose-5.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO5_TEP-truth.pdb"
+    },
+    {
+      "id": "7IO6",
+      "ligand": "A1CPB",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 32.36,
+      "center": [
+        -20.59,
+        6.89,
+        17.85
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 32.36,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO6_A1CPB-pose-1.pdb",
+          "align_rmsd": 0.95,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.74,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO6_A1CPB-pose-2.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 32.7,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO6_A1CPB-pose-3.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 32.53,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO6_A1CPB-pose-4.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.12,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO6_A1CPB-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO6_A1CPB-truth.pdb"
+    },
+    {
+      "id": "7IO7",
+      "ligand": "A1CPC",
+      "n_atoms": 18,
+      "correct": false,
+      "pose1_rmsd": 34.03,
+      "center": [
+        -20.68,
+        6.88,
+        17.75
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.03,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO7_A1CPC-pose-1.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.58,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO7_A1CPC-pose-2.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 33.36,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO7_A1CPC-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.52,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO7_A1CPC-pose-4.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.7,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO7_A1CPC-pose-5.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO7_A1CPC-truth.pdb"
+    },
+    {
+      "id": "7IO8",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.4,
+      "center": [
+        -20.42,
+        6.37,
+        18.23
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.4,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO8_TEP-pose-1.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.29,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO8_TEP-pose-2.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.49,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO8_TEP-pose-3.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO8_TEP-pose-4.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.55,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IO8_TEP-pose-5.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO8_TEP-truth.pdb"
+    },
+    {
+      "id": "7IO9",
+      "ligand": "A1CPE",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 2.05,
+      "center": [
+        -20.7,
+        -24.7,
+        15.03
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.05,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO9_A1CPE-pose-1.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.0,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO9_A1CPE-pose-2.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.04,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO9_A1CPE-pose-3.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 2.02,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO9_A1CPE-pose-4.pdb",
+          "align_rmsd": 1.09,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.01,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IO9_A1CPE-pose-5.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IO9_A1CPE-truth.pdb"
+    },
+    {
+      "id": "7IOA",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.48,
+      "center": [
+        -20.73,
+        6.22,
+        18.1
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.48,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOA_TEP-pose-1.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.46,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOA_TEP-pose-2.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.27,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOA_TEP-pose-3.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.47,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOA_TEP-pose-4.pdb",
+          "align_rmsd": 0.95,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.57,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOA_TEP-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOA_TEP-truth.pdb"
+    },
+    {
+      "id": "7IOB",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.52,
+      "center": [
+        -20.64,
+        6.25,
+        18.17
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.52,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOB_TEP-pose-1.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.43,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOB_TEP-pose-2.pdb",
+          "align_rmsd": 0.98,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.53,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOB_TEP-pose-3.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOB_TEP-pose-4.pdb",
+          "align_rmsd": 0.54,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.62,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOB_TEP-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOB_TEP-truth.pdb"
+    },
+    {
+      "id": "7IOC",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.49,
+      "center": [
+        -20.54,
+        6.38,
+        18.24
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.49,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOC_TEP-pose-1.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 3.0,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOC_TEP-pose-2.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.55,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOC_TEP-pose-3.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOC_TEP-pose-4.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.31,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOC_TEP-pose-5.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOC_TEP-truth.pdb"
+    },
+    {
+      "id": "7IOD",
+      "ligand": "A1CPJ",
+      "n_atoms": 14,
+      "correct": false,
+      "pose1_rmsd": 32.41,
+      "center": [
+        -20.24,
+        6.35,
+        18.22
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 32.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOD_A1CPJ-pose-1.pdb",
+          "align_rmsd": 0.86,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.84,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOD_A1CPJ-pose-2.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 32.55,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOD_A1CPJ-pose-3.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 32.73,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOD_A1CPJ-pose-4.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 32.64,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOD_A1CPJ-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOD_A1CPJ-truth.pdb"
+    },
+    {
+      "id": "7IOE",
+      "ligand": "A1CPK",
+      "n_atoms": 14,
+      "correct": false,
+      "pose1_rmsd": 32.49,
+      "center": [
+        -20.33,
+        6.74,
+        18.06
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 32.49,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOE_A1CPK-pose-1.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.87,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOE_A1CPK-pose-2.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.78,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOE_A1CPK-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.09,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOE_A1CPK-pose-4.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.95,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOE_A1CPK-pose-5.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOE_A1CPK-truth.pdb"
+    },
+    {
+      "id": "7IOF",
+      "ligand": "A1CPL",
+      "n_atoms": 20,
+      "correct": false,
+      "pose1_rmsd": 34.5,
+      "center": [
+        -21.0,
+        6.64,
+        17.71
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.5,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOF_A1CPL-pose-1.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 36.2,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOF_A1CPL-pose-2.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 36.77,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOF_A1CPL-pose-4.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.39,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOF_A1CPL-pose-5.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOF_A1CPL-truth.pdb"
+    },
+    {
+      "id": "7IOG",
+      "ligand": "A1CPM",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 33.78,
+      "center": [
+        -21.65,
+        7.78,
+        17.27
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.78,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOG_A1CPM-pose-1.pdb",
+          "align_rmsd": 0.91,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOG_A1CPM-pose-2.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.11,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOG_A1CPM-pose-3.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.13,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOG_A1CPM-pose-4.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.46,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOG_A1CPM-pose-5.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOG_A1CPM-truth.pdb"
+    },
+    {
+      "id": "7IOH",
+      "ligand": "A1CPN",
+      "n_atoms": 16,
+      "correct": false,
+      "pose1_rmsd": 3.4,
+      "center": [
+        -20.78,
+        -25.81,
+        14.42
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 3.4,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOH_A1CPN-pose-1.pdb",
+          "align_rmsd": 0.51,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 3.29,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOH_A1CPN-pose-2.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 34.03,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOH_A1CPN-pose-3.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 3.97,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOH_A1CPN-pose-4.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 4.35,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOH_A1CPN-pose-5.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOH_A1CPN-truth.pdb"
+    },
+    {
+      "id": "7IOI",
+      "ligand": "A1CPO",
+      "n_atoms": 17,
+      "correct": false,
+      "pose1_rmsd": 33.29,
+      "center": [
+        -21.81,
+        6.55,
+        17.2
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.29,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOI_A1CPO-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.05,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOI_A1CPO-pose-2.pdb",
+          "align_rmsd": 0.75,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 33.84,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOI_A1CPO-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.47,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOI_A1CPO-pose-4.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 32.9,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOI_A1CPO-pose-5.pdb",
+          "align_rmsd": 0.59,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOI_A1CPO-truth.pdb"
+    },
+    {
+      "id": "7IOJ",
+      "ligand": "A1CPP",
+      "n_atoms": 14,
+      "correct": true,
+      "pose1_rmsd": 1.29,
+      "center": [
+        -21.63,
+        -24.93,
+        14.62
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.29,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOJ_A1CPP-pose-1.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOJ_A1CPP-pose-2.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.39,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOJ_A1CPP-pose-3.pdb",
+          "align_rmsd": 0.91,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.23,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOJ_A1CPP-pose-4.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOJ_A1CPP-pose-5.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOJ_A1CPP-truth.pdb"
+    },
+    {
+      "id": "7IOK",
+      "ligand": "A1CPQ",
+      "n_atoms": 15,
+      "correct": true,
+      "pose1_rmsd": 0.55,
+      "center": [
+        -21.22,
+        -24.73,
+        14.2
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.55,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOK_A1CPQ-pose-1.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.02,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOK_A1CPQ-pose-2.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.28,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOK_A1CPQ-pose-3.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOK_A1CPQ-pose-4.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.58,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOK_A1CPQ-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOK_A1CPQ-truth.pdb"
+    },
+    {
+      "id": "7IOL",
+      "ligand": "A1CPR",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 31.35,
+      "center": [
+        -20.14,
+        5.01,
+        18.72
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 31.35,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOL_A1CPR-pose-1.pdb",
+          "align_rmsd": 0.92,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 31.26,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOL_A1CPR-pose-2.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 32.3,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOL_A1CPR-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 31.15,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOL_A1CPR-pose-4.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 31.23,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOL_A1CPR-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOL_A1CPR-truth.pdb"
+    },
+    {
+      "id": "7IOM",
+      "ligand": "A1CPS",
+      "n_atoms": 15,
+      "correct": true,
+      "pose1_rmsd": 0.82,
+      "center": [
+        -21.07,
+        -25.38,
+        15.09
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.82,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOM_A1CPS-pose-1.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.52,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOM_A1CPS-pose-2.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.65,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOM_A1CPS-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.66,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOM_A1CPS-pose-4.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.67,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOM_A1CPS-pose-5.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOM_A1CPS-truth.pdb"
+    },
+    {
+      "id": "7ION",
+      "ligand": "A1CPT",
+      "n_atoms": 19,
+      "correct": false,
+      "pose1_rmsd": 34.78,
+      "center": [
+        -21.72,
+        7.6,
+        17.19
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.78,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7ION_A1CPT-pose-1.pdb",
+          "align_rmsd": 0.78,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.61,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7ION_A1CPT-pose-2.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 3.71,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7ION_A1CPT-pose-3.pdb",
+          "align_rmsd": 0.96,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 3.99,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7ION_A1CPT-pose-4.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.93,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7ION_A1CPT-pose-5.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7ION_A1CPT-truth.pdb"
+    },
+    {
+      "id": "7IOO",
+      "ligand": "A1CPU",
+      "n_atoms": 14,
+      "correct": false,
+      "pose1_rmsd": 34.42,
+      "center": [
+        -21.61,
+        7.45,
+        17.34
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.42,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOO_A1CPU-pose-1.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 34.35,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOO_A1CPU-pose-2.pdb",
+          "align_rmsd": 0.92,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 34.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOO_A1CPU-pose-3.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.11,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOO_A1CPU-pose-4.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 34.46,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOO_A1CPU-pose-5.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOO_A1CPU-truth.pdb"
+    },
+    {
+      "id": "7IOP",
+      "ligand": "A1CPV",
+      "n_atoms": 14,
+      "correct": true,
+      "pose1_rmsd": 0.38,
+      "center": [
+        -21.55,
+        -24.95,
+        14.47
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.38,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOP_A1CPV-pose-1.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.1,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOP_A1CPV-pose-2.pdb",
+          "align_rmsd": 0.93,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.49,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOP_A1CPV-pose-3.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOP_A1CPV-pose-4.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOP_A1CPV-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOP_A1CPV-truth.pdb"
+    },
+    {
+      "id": "7IOQ",
+      "ligand": "A1CPW",
+      "n_atoms": 23,
+      "correct": false,
+      "pose1_rmsd": 2.12,
+      "center": [
+        -21.56,
+        -26.46,
+        13.19
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.12,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOQ_A1CPW-pose-1.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 1.72,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOQ_A1CPW-pose-2.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.35,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOQ_A1CPW-pose-3.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 1.75,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOQ_A1CPW-pose-4.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.96,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOQ_A1CPW-pose-5.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOQ_A1CPW-truth.pdb"
+    },
+    {
+      "id": "7IOR",
+      "ligand": "A1CPX",
+      "n_atoms": 20,
+      "correct": false,
+      "pose1_rmsd": 33.13,
+      "center": [
+        -20.82,
+        6.51,
+        17.83
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.13,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOR_A1CPX-pose-1.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.98,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOR_A1CPX-pose-2.pdb",
+          "align_rmsd": 0.59,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.19,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOR_A1CPX-pose-3.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.92,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOR_A1CPX-pose-4.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 34.05,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOR_A1CPX-pose-5.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOR_A1CPX-truth.pdb"
+    },
+    {
+      "id": "7IOS",
+      "ligand": "A1CPY",
+      "n_atoms": 23,
+      "correct": false,
+      "pose1_rmsd": 34.16,
+      "center": [
+        -20.5,
+        6.89,
+        17.66
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.16,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOS_A1CPY-pose-1.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 34.35,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOS_A1CPY-pose-2.pdb",
+          "align_rmsd": 0.98,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 34.34,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOS_A1CPY-pose-3.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.24,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOS_A1CPY-pose-4.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 34.32,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOS_A1CPY-pose-5.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOS_A1CPY-truth.pdb"
+    },
+    {
+      "id": "7IOT",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.39,
+      "center": [
+        -20.66,
+        6.26,
+        18.13
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.39,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOT_TEP-pose-1.pdb",
+          "align_rmsd": 0.53,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.57,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOT_TEP-pose-2.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.68,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOT_TEP-pose-3.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.62,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOT_TEP-pose-4.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.69,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOT_TEP-pose-5.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOT_TEP-truth.pdb"
+    },
+    {
+      "id": "7IOU",
+      "ligand": "A1CP0",
+      "n_atoms": 17,
+      "correct": true,
+      "pose1_rmsd": 1.15,
+      "center": [
+        -21.48,
+        -25.7,
+        13.73
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.15,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOU_A1CP0-pose-1.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.92,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOU_A1CP0-pose-2.pdb",
+          "align_rmsd": 0.86,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.96,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOU_A1CP0-pose-3.pdb",
+          "align_rmsd": 0.95,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.15,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOU_A1CP0-pose-4.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 1.2,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOU_A1CP0-pose-5.pdb",
+          "align_rmsd": 0.94,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOU_A1CP0-truth.pdb"
+    },
+    {
+      "id": "7IOV",
+      "ligand": "A1CP1",
+      "n_atoms": 16,
+      "correct": false,
+      "pose1_rmsd": 33.53,
+      "center": [
+        -20.27,
+        7.77,
+        17.59
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.53,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOV_A1CP1-pose-1.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.38,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOV_A1CP1-pose-2.pdb",
+          "align_rmsd": 0.93,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 33.46,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOV_A1CP1-pose-3.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOV_A1CP1-pose-4.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.49,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOV_A1CP1-pose-5.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOV_A1CP1-truth.pdb"
+    },
+    {
+      "id": "7IOW",
+      "ligand": "A1CP2",
+      "n_atoms": 25,
+      "correct": false,
+      "pose1_rmsd": 4.21,
+      "center": [
+        -21.17,
+        -27.18,
+        14.46
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 4.21,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOW_A1CP2-pose-1.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOW_A1CP2-pose-2.pdb",
+          "align_rmsd": 0.87,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 4.06,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOW_A1CP2-pose-3.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 5.18,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOW_A1CP2-pose-4.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 4.18,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOW_A1CP2-pose-5.pdb",
+          "align_rmsd": 0.81,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOW_A1CP2-truth.pdb"
+    },
+    {
+      "id": "7IOX",
+      "ligand": "A1CP3",
+      "n_atoms": 27,
+      "correct": false,
+      "pose1_rmsd": 37.15,
+      "center": [
+        -20.79,
+        8.21,
+        16.81
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 37.15,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOX_A1CP3-pose-1.pdb",
+          "align_rmsd": 0.85,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 37.32,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOX_A1CP3-pose-2.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 38.27,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOX_A1CP3-pose-3.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 37.2,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOX_A1CP3-pose-4.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 37.61,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOX_A1CP3-pose-5.pdb",
+          "align_rmsd": 0.96,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOX_A1CP3-truth.pdb"
+    },
+    {
+      "id": "7IOY",
+      "ligand": "A1CP4",
+      "n_atoms": 24,
+      "correct": false,
+      "pose1_rmsd": 35.81,
+      "center": [
+        -21.3,
+        7.36,
+        17.34
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 35.81,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOY_A1CP4-pose-1.pdb",
+          "align_rmsd": 0.87,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 36.71,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOY_A1CP4-pose-2.pdb",
+          "align_rmsd": 0.99,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 36.49,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOY_A1CP4-pose-3.pdb",
+          "align_rmsd": 0.77,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 36.61,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOY_A1CP4-pose-4.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 36.13,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IOY_A1CP4-pose-5.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOY_A1CP4-truth.pdb"
+    },
+    {
+      "id": "7IOZ",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.59,
+      "center": [
+        -20.62,
+        6.49,
+        18.23
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.59,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOZ_TEP-pose-1.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.45,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOZ_TEP-pose-2.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.3,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOZ_TEP-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.37,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOZ_TEP-pose-4.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.48,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IOZ_TEP-pose-5.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IOZ_TEP-truth.pdb"
+    },
+    {
+      "id": "7IP0",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.93,
+      "center": [
+        -20.64,
+        6.4,
+        18.13
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.93,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP0_TEP-pose-1.pdb",
+          "align_rmsd": 0.87,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.87,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP0_TEP-pose-2.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.96,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP0_TEP-pose-3.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.95,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP0_TEP-pose-4.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.94,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP0_TEP-pose-5.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP0_TEP-truth.pdb"
+    },
+    {
+      "id": "7IP1",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.71,
+      "center": [
+        -20.44,
+        6.39,
+        18.23
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.71,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP1_TEP-pose-1.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.74,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP1_TEP-pose-2.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.71,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP1_TEP-pose-3.pdb",
+          "align_rmsd": 0.56,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.67,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP1_TEP-pose-4.pdb",
+          "align_rmsd": 0.5,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.68,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP1_TEP-pose-5.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP1_TEP-truth.pdb"
+    },
+    {
+      "id": "7IP2",
+      "ligand": "A1CP8",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 32.07,
+      "center": [
+        -22.27,
+        7.23,
+        16.91
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 32.07,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP2_A1CP8-pose-1.pdb",
+          "align_rmsd": 0.89,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 32.19,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP2_A1CP8-pose-2.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 31.51,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP2_A1CP8-pose-3.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 32.34,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP2_A1CP8-pose-4.pdb",
+          "align_rmsd": 0.73,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 32.57,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP2_A1CP8-pose-5.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP2_A1CP8-truth.pdb"
+    },
+    {
+      "id": "7IP3",
+      "ligand": "A1CP9",
+      "n_atoms": 20,
+      "correct": false,
+      "pose1_rmsd": 2.39,
+      "center": [
+        -21.2,
+        -25.45,
+        14.19
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.39,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP3_A1CP9-pose-1.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.98,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP3_A1CP9-pose-2.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 2.8,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP3_A1CP9-pose-3.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 2.22,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP3_A1CP9-pose-4.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 2.32,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP3_A1CP9-pose-5.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP3_A1CP9-truth.pdb"
+    },
+    {
+      "id": "7IP4",
+      "ligand": "A1CQA",
+      "n_atoms": 15,
+      "correct": true,
+      "pose1_rmsd": 1.97,
+      "center": [
+        -21.31,
+        -25.55,
+        14.56
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 1.97,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP4_A1CQA-pose-1.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.4,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP4_A1CQA-pose-2.pdb",
+          "align_rmsd": 0.73,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 1.46,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP4_A1CQA-pose-3.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 36.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP4_A1CQA-pose-4.pdb",
+          "align_rmsd": 0.89,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 37.79,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP4_A1CQA-pose-5.pdb",
+          "align_rmsd": 0.57,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP4_A1CQA-truth.pdb"
+    },
+    {
+      "id": "7IP5",
+      "ligand": "A1CQB",
+      "n_atoms": 15,
+      "correct": false,
+      "pose1_rmsd": 33.37,
+      "center": [
+        -19.95,
+        7.1,
+        18.08
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 33.37,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP5_A1CQB-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 33.73,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP5_A1CQB-pose-2.pdb",
+          "align_rmsd": 0.94,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 33.29,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP5_A1CQB-pose-3.pdb",
+          "align_rmsd": 0.65,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.21,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP5_A1CQB-pose-4.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 33.24,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP5_A1CQB-pose-5.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP5_A1CQB-truth.pdb"
+    },
+    {
+      "id": "7IP6",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.41,
+      "center": [
+        -20.43,
+        6.37,
+        18.23
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.41,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP6_TEP-pose-1.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.23,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP6_TEP-pose-2.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.55,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP6_TEP-pose-3.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.34,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP6_TEP-pose-4.pdb",
+          "align_rmsd": 0.87,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.29,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP6_TEP-pose-5.pdb",
+          "align_rmsd": 0.55,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP6_TEP-truth.pdb"
+    },
+    {
+      "id": "7IP7",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.51,
+      "center": [
+        -20.51,
+        6.38,
+        18.15
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.51,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP7_TEP-pose-1.pdb",
+          "align_rmsd": 0.74,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.45,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP7_TEP-pose-2.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.53,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP7_TEP-pose-3.pdb",
+          "align_rmsd": 0.58,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.27,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IP7_TEP-pose-4.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 3.0,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP7_TEP-pose-5.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP7_TEP-truth.pdb"
+    },
+    {
+      "id": "7IP8",
+      "ligand": "A1CQD",
+      "n_atoms": 20,
+      "correct": false,
+      "pose1_rmsd": 34.39,
+      "center": [
+        -20.95,
+        7.09,
+        17.18
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.39,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP8_A1CQD-pose-1.pdb",
+          "align_rmsd": 0.64,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 34.47,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP8_A1CQD-pose-2.pdb",
+          "align_rmsd": 0.89,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 38.78,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP8_A1CQD-pose-3.pdb",
+          "align_rmsd": 0.73,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.59,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP8_A1CQD-pose-4.pdb",
+          "align_rmsd": 0.86,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 34.37,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP8_A1CQD-pose-5.pdb",
+          "align_rmsd": 1.02,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP8_A1CQD-truth.pdb"
+    },
+    {
+      "id": "7IP9",
+      "ligand": "A1CQE",
+      "n_atoms": 23,
+      "correct": false,
+      "pose1_rmsd": 4.78,
+      "center": [
+        -21.06,
+        -26.04,
+        13.44
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 4.78,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP9_A1CQE-pose-1.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 4.67,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP9_A1CQE-pose-2.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 5.08,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP9_A1CQE-pose-3.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 4.17,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP9_A1CQE-pose-4.pdb",
+          "align_rmsd": 0.88,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 5.03,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IP9_A1CQE-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IP9_A1CQE-truth.pdb"
+    },
+    {
+      "id": "7IPA",
+      "ligand": "A1CQF",
+      "n_atoms": 22,
+      "correct": false,
+      "pose1_rmsd": 2.54,
+      "center": [
+        -20.94,
+        -27.07,
+        14.87
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.54,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPA_A1CQF-pose-1.pdb",
+          "align_rmsd": 0.75,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 3.09,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPA_A1CQF-pose-3.pdb",
+          "align_rmsd": 0.7,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 3.93,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPA_A1CQF-pose-4.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 3.24,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPA_A1CQF-pose-5.pdb",
+          "align_rmsd": 0.47,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPA_A1CQF-truth.pdb"
+    },
+    {
+      "id": "7IPB",
+      "ligand": "A1CQG",
+      "n_atoms": 23,
+      "correct": false,
+      "pose1_rmsd": 5.79,
+      "center": [
+        -20.83,
+        -26.61,
+        13.04
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 5.79,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPB_A1CQG-pose-1.pdb",
+          "align_rmsd": 0.84,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 5.81,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPB_A1CQG-pose-2.pdb",
+          "align_rmsd": 0.93,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 6.11,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPB_A1CQG-pose-3.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 5.94,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPB_A1CQG-pose-4.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 5.68,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPB_A1CQG-pose-5.pdb",
+          "align_rmsd": 0.71,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPB_A1CQG-truth.pdb"
+    },
+    {
+      "id": "7IPC",
+      "ligand": "A1CQH",
+      "n_atoms": 21,
+      "correct": false,
+      "pose1_rmsd": 5.78,
+      "center": [
+        -20.72,
+        -26.33,
+        12.57
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 5.78,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPC_A1CQH-pose-1.pdb",
+          "align_rmsd": 0.91,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 5.58,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPC_A1CQH-pose-2.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 6.17,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPC_A1CQH-pose-3.pdb",
+          "align_rmsd": 0.6,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 5.97,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPC_A1CQH-pose-4.pdb",
+          "align_rmsd": 0.83,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 5.54,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPC_A1CQH-pose-5.pdb",
+          "align_rmsd": 0.82,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPC_A1CQH-truth.pdb"
+    },
+    {
+      "id": "7IPD",
+      "ligand": "TEP",
+      "n_atoms": 13,
+      "correct": true,
+      "pose1_rmsd": 0.49,
+      "center": [
+        -20.68,
+        6.31,
+        18.09
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 0.49,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IPD_TEP-pose-1.pdb",
+          "align_rmsd": 0.79,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 0.44,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IPD_TEP-pose-2.pdb",
+          "align_rmsd": 0.86,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 0.27,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IPD_TEP-pose-3.pdb",
+          "align_rmsd": 0.8,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 0.5,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IPD_TEP-pose-4.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 0.47,
+          "correct": true,
+          "pose_file": "systems/group_a2a/7IPD_TEP-pose-5.pdb",
+          "align_rmsd": 0.68,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPD_TEP-truth.pdb"
+    },
+    {
+      "id": "7IPE",
+      "ligand": "A1CQJ",
+      "n_atoms": 22,
+      "correct": false,
+      "pose1_rmsd": 34.71,
+      "center": [
+        -21.19,
+        7.66,
+        17.29
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 34.71,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPE_A1CQJ-pose-1.pdb",
+          "align_rmsd": 0.87,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 34.86,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPE_A1CQJ-pose-2.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 34.42,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPE_A1CQJ-pose-3.pdb",
+          "align_rmsd": 0.48,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 34.04,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPE_A1CQJ-pose-4.pdb",
+          "align_rmsd": 1.01,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 34.75,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPE_A1CQJ-pose-5.pdb",
+          "align_rmsd": 0.67,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPE_A1CQJ-truth.pdb"
+    },
+    {
+      "id": "7IPF",
+      "ligand": "A1CQK",
+      "n_atoms": 21,
+      "correct": false,
+      "pose1_rmsd": 36.45,
+      "center": [
+        -21.59,
+        7.93,
+        15.57
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 36.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPF_A1CQK-pose-1.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 34.41,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPF_A1CQK-pose-2.pdb",
+          "align_rmsd": 0.66,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 39.45,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPF_A1CQK-pose-3.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 35.6,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPF_A1CQK-pose-4.pdb",
+          "align_rmsd": 0.63,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 35.08,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPF_A1CQK-pose-5.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPF_A1CQK-truth.pdb"
+    },
+    {
+      "id": "7IPG",
+      "ligand": "A1CS8",
+      "n_atoms": 23,
+      "correct": false,
+      "pose1_rmsd": 2.98,
+      "center": [
+        -20.97,
+        -26.01,
+        14.12
+      ],
+      "poses": [
+        {
+          "sample": 1,
+          "rmsd": 2.98,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPG_A1CS8-pose-1.pdb",
+          "align_rmsd": 0.62,
+          "align_n": 390
+        },
+        {
+          "sample": 2,
+          "rmsd": 2.04,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPG_A1CS8-pose-2.pdb",
+          "align_rmsd": 0.61,
+          "align_n": 390
+        },
+        {
+          "sample": 3,
+          "rmsd": 3.1,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPG_A1CS8-pose-3.pdb",
+          "align_rmsd": 0.69,
+          "align_n": 390
+        },
+        {
+          "sample": 4,
+          "rmsd": 33.39,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPG_A1CS8-pose-4.pdb",
+          "align_rmsd": 0.72,
+          "align_n": 390
+        },
+        {
+          "sample": 5,
+          "rmsd": 3.08,
+          "correct": false,
+          "pose_file": "systems/group_a2a/7IPG_A1CS8-pose-5.pdb",
+          "align_rmsd": 0.94,
+          "align_n": 390
+        }
+      ],
+      "truth_file": "systems/group_a2a/7IPG_A1CS8-truth.pdb"
+    }
+  ]
+}

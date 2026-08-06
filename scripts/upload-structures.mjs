@@ -3,6 +3,10 @@ import path from 'node:path';
 
 const BUCKET = 'structures';
 const DEFAULT_CONCURRENCY = 6;
+const CONTENT_TYPES = {
+  '.pdb': 'chemical/x-pdb',
+  '.cif': 'chemical/x-cif',
+};
 
 function authHeaders(key) {
   const headers = { apikey: key };
@@ -14,17 +18,19 @@ function storageUrl(url, pathname) {
   return `${url.replace(/\/$/, '')}${pathname}`;
 }
 
-async function walkPdbFiles(rootDir, directory) {
+async function walkStructureFiles(rootDir, directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(entries.map(async (entry) => {
     const absolutePath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return walkPdbFiles(rootDir, absolutePath);
+      return walkStructureFiles(rootDir, absolutePath);
     }
-    if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.pdb') {
+    const contentType = CONTENT_TYPES[path.extname(entry.name).toLowerCase()];
+    if (entry.isFile() && contentType) {
       return [{
         absolutePath,
         objectKey: path.relative(rootDir, absolutePath).split(path.sep).join('/'),
+        contentType,
       }];
     }
     return [];
@@ -33,17 +39,35 @@ async function walkPdbFiles(rootDir, directory) {
   return files.flat();
 }
 
-export async function discoverPdbFiles(rootDir) {
+export async function discoverStructureFiles(rootDir, benchmarkDir) {
   const groups = await Promise.all(
     ['data', 'data_rnp'].map(async (name) => {
       try {
-        return await walkPdbFiles(rootDir, path.join(rootDir, name));
+        return await walkStructureFiles(rootDir, path.join(rootDir, name));
       } catch (error) {
         if (error.code === 'ENOENT') return [];
         throw error;
       }
     }),
   );
+
+  if (benchmarkDir) {
+    const benchmarkGroups = await Promise.all(
+      ['systems', 'systems_rnp'].map(async (name) => {
+        try {
+          const files = await walkStructureFiles(benchmarkDir, path.join(benchmarkDir, name));
+          return files.map((file) => ({
+            ...file,
+            objectKey: `benchmark/demo/${file.objectKey}`,
+          }));
+        } catch (error) {
+          if (error.code === 'ENOENT') return [];
+          throw error;
+        }
+      }),
+    );
+    groups.push(...benchmarkGroups);
+  }
 
   return groups.flat().sort((left, right) => (
     left.objectKey < right.objectKey ? -1 : left.objectKey > right.objectKey ? 1 : 0
@@ -113,7 +137,7 @@ async function uploadOne({ file, fetchImpl, url, key, overwrite }) {
       method: 'POST',
       headers: {
         ...authHeaders(key),
-        'Content-Type': 'chemical/x-pdb',
+        'Content-Type': file.contentType || 'chemical/x-pdb',
         'cache-control': 'max-age=31536000',
         'x-upsert': String(overwrite),
       },
@@ -184,12 +208,27 @@ export async function runCli({
   error = console.error,
 } = {}) {
   const { SUPABASE_URL: url, SUPABASE_SERVICE_ROLE_KEY: key } = env;
+  const benchmarkMode = args.includes('--benchmark');
+  if (benchmarkMode && !env.BENCHMARK_DEMO_DIR) {
+    error('BENCHMARK_DEMO_DIR is required in benchmark mode.');
+    return 1;
+  }
   if (!url || !key) {
     error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
     return 1;
   }
 
-  const files = await discoverPdbFiles(rootDir);
+  const discovered = await discoverStructureFiles(
+    rootDir,
+    benchmarkMode ? env.BENCHMARK_DEMO_DIR : undefined,
+  );
+  const files = benchmarkMode
+    ? discovered.filter(file => file.objectKey.startsWith('benchmark/demo/'))
+    : discovered;
+  if (benchmarkMode && !files.length) {
+    error(`No benchmark PDB/CIF files found in BENCHMARK_DEMO_DIR: ${env.BENCHMARK_DEMO_DIR}`);
+    return 1;
+  }
   await ensurePublicBucket({ fetchImpl, url, key });
   const failures = [];
   const summary = await uploadStructures({
