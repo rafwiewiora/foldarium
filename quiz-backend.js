@@ -39,6 +39,12 @@ const disabledBackend = {
   recordAnswer: () => {},
   completeSession: () => {},
   flush: async () => {},
+  claimUsername: async () => {
+    throw new Error('Leaderboard persistence is unavailable.');
+  },
+  getLeaderboard: async () => {
+    throw new Error('Leaderboard persistence is unavailable.');
+  },
 };
 
 export function createQuizBackend({
@@ -135,6 +141,21 @@ export function createQuizBackend({
     return flushing;
   }
 
+  async function leaderboardRpc(name, args, authenticate = false) {
+    let remoteClient;
+    try {
+      remoteClient = await getClient();
+    } catch (error) {
+      throw new Error(`Leaderboard persistence is unavailable: ${error.message}`, {
+        cause: error,
+      });
+    }
+    if (authenticate) await userId(remoteClient);
+    const result = await remoteClient.rpc(name, args);
+    if (result.error) throw result.error;
+    return result.data;
+  }
+
   return {
     startSession({ id = uuid(), source, difficulty }) {
       enqueue('session', {
@@ -177,6 +198,14 @@ export function createQuizBackend({
       if (sessionId) enqueue('complete', { id: sessionId, completed_at: now().toISOString() });
     },
     flush,
+    async claimUsername(username) {
+      return leaderboardRpc('claim_leaderboard_username', {
+        p_username: username,
+      }, true);
+    },
+    async getLeaderboard() {
+      return (await leaderboardRpc('get_leaderboard')) ?? [];
+    },
   };
 }
 

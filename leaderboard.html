@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pose Quiz · Leaderboard</title>
+<style>
+  :root{--bg:#0d1117;--line:#222c38;--ink:#e6edf3;--muted:#8b98a8;--faint:#5a6675;
+    --accent:#3fb6e0;--good:#2BA84A;--bad:#E23B2E}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  .wrap{max-width:760px;margin:40px auto;padding:0 20px;overflow-x:auto}
+  h1{font-size:18px;letter-spacing:.12em;text-transform:uppercase;font-weight:600}
+  .sub{color:var(--muted);font-size:13px;margin-top:-8px}
+  a{color:var(--accent);text-decoration:none}
+  table{width:100%;border-collapse:collapse;margin-top:18px;font-size:14px}
+  th{text-align:left;color:var(--faint);font-weight:500;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:9px 10px;border-bottom:1px solid #1a212b;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr:hover td{background:#131b24}
+  .rank{color:var(--faint);width:34px}
+  .acc{font-weight:600}
+  .pos{color:var(--good)} .neg{color:var(--bad)}
+  .status{color:var(--muted);margin-top:24px}
+  .error{color:var(--bad)}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Pose Quiz — Leaderboard</h1>
+  <div class="sub">Shared results from completed quiz sessions · <a href="index.html">play →</a></div>
+  <div id="tbl" class="status" role="status" aria-live="polite">Loading shared leaderboard…</div>
+</main>
+<script src="supabase-config.js"></script>
+<script type="module">
+import { initQuizBackend } from './quiz-backend.js';
+
+const container = document.getElementById('tbl');
+
+function cell(row, value, className = '') {
+  const element = document.createElement('td');
+  element.textContent = value;
+  if (className) element.className = className;
+  row.appendChild(element);
+}
+
+function render(rows) {
+  if (!rows.length) {
+    container.className = 'status';
+    container.textContent = 'No completed sessions yet — be the first to play.';
+    return;
+  }
+
+  const table = document.createElement('table');
+  const header = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  for (const label of ['#', 'Player', 'Items', 'Sessions', 'Accuracy', 'AI baseline', 'vs AI']) {
+    const heading = document.createElement('th');
+    heading.textContent = label;
+    headerRow.appendChild(heading);
+  }
+  headerRow.firstElementChild.className = 'rank';
+  header.appendChild(headerRow);
+  table.appendChild(header);
+
+  const body = document.createElement('tbody');
+  rows.forEach((entry, index) => {
+    const row = document.createElement('tr');
+    const difference = Number(entry.beat_af3_by);
+    cell(row, index + 1, 'rank');
+    cell(row, entry.username);
+    cell(row, entry.items);
+    cell(row, entry.sessions);
+    cell(row, `${entry.accuracy}%`, 'acc');
+    cell(row, `${entry.af3_accuracy}%`);
+    cell(row, `${difference >= 0 ? '+' : ''}${difference}`, difference >= 0 ? 'pos' : 'neg');
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  container.className = '';
+  container.replaceChildren(table);
+}
+
+try {
+  const backend = initQuizBackend(window.FOLDARIUM_SUPABASE || {});
+  render(await backend.getLeaderboard());
+} catch (error) {
+  console.warn('Shared leaderboard unavailable:', error.message);
+  container.className = 'status error';
+  container.textContent = 'The shared leaderboard is unavailable. Please try again later.';
+}
+</script>
+</body>
+</html>

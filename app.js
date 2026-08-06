@@ -775,7 +775,6 @@ function next() {
 }
 function finish() {
   hideGrid();
-  researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
@@ -785,7 +784,68 @@ function finish() {
   $('#verdict').style.display = '';
   $('#verdict').innerHTML =
     `<b>You: ${pct(score.you, score.n)}%</b> · ${oppLabel()}: ${pct(score.af3, score.n)}% · random: ${pct(score.randExp, score.n)}%`
-    + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`;
+    + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`
+    + `<div style="margin-top:12px;display:flex;gap:6px"><input id="uname" aria-label="Leaderboard username"`
+    + ` placeholder="username for leaderboard" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]+"`
+    + ` style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:8px;font-size:13px"/>`
+    + `<button class="primary" id="submit" style="padding:8px 12px">Save</button></div>`
+    + `<div id="lbmsg" role="status" aria-live="polite" style="margin-top:10px"></div>`;
+  $('#submit').onclick = submitSession;
+}
+
+async function submitSession() {
+  const input = $('#uname');
+  const button = $('#submit');
+  const message = $('#lbmsg');
+  const username = input.value.trim();
+  input.value = username;
+  if (!input.checkValidity() || username.length < 3) {
+    message.textContent = 'Use 3-24 letters, numbers, underscores, or hyphens.';
+    input.focus();
+    return;
+  }
+
+  button.disabled = true;
+  message.textContent = 'Saving completed session…';
+  try {
+    const backend = researchBackend();
+    if (!backend) throw new Error('Leaderboard persistence is unavailable.');
+    researchBackend()?.completeSession(remoteSessionId);
+    await backend.flush();
+    const claimedUsername = await backend.claimUsername(username);
+    const rows = await backend.getLeaderboard();
+    showLeaderboard(claimedUsername, rows);
+  } catch (error) {
+    button.disabled = false;
+    if (error.code === '23505' || /already taken|unique/i.test(error.message || '')) {
+      message.textContent = 'That username is already taken. Choose another.';
+      input.focus();
+      input.select();
+      return;
+    }
+    if (error.code === '22023') {
+      message.textContent = error.message;
+      input.focus();
+      return;
+    }
+    console.warn('Shared leaderboard unavailable:', error.message);
+    message.textContent = 'Shared leaderboard is unavailable. Your results remain queued; try again.';
+  }
+}
+
+function showLeaderboard(me, rows) {
+  const normalizedMe = String(me).toLowerCase();
+  const head = `<div style="font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase;margin:6px 0">shared leaderboard</div>`;
+  const body = rows.map((row, index) => {
+    const mine = String(row.username).toLowerCase() === normalizedMe;
+    const difference = Number(row.beat_af3_by);
+    return `<div style="display:flex;justify-content:space-between;padding:5px 8px;border-radius:6px;`
+      + `${mine ? 'background:#15212b;border:1px solid var(--accent)' : ''};font-size:13px">`
+      + `<span>${index + 1}. <b>${row.username}</b> <span style="color:var(--muted)">· ${row.items} items</span></span>`
+      + `<span><b>${row.accuracy}%</b> <span style="color:var(--muted)">(AI ${row.af3_accuracy}%, `
+      + `<span style="color:${difference >= 0 ? 'var(--good)' : 'var(--bad)'}">${difference >= 0 ? '+' : ''}${difference}</span>)</span></span></div>`;
+  }).join('');
+  $('#lbmsg').innerHTML = head + (body || '<span style="color:var(--muted)">No completed sessions yet.</span>');
 }
 
 async function init() {

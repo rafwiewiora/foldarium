@@ -35,8 +35,10 @@ function sequenceUuid(...ids) {
 
 function fakeSupabase() {
   const writes = [];
+  const rpcs = [];
   let failing = false;
   let errors = [];
+  const rpcResults = new Map();
 
   function writeResult(write) {
     if (failing) return Promise.resolve({ error: new Error('write failed') });
@@ -81,16 +83,26 @@ function fakeSupabase() {
       }),
     },
     from,
+    rpc(name, args) {
+      rpcs.push({ name, args });
+      return Promise.resolve(
+        rpcResults.get(name) ?? { data: null, error: null },
+      );
+    },
   };
 
   return {
     client,
     writes,
+    rpcs,
     setFailing(value) {
       failing = value;
     },
     setErrors(...values) {
       errors = values;
+    },
+    setRpcResult(name, result) {
+      rpcResults.set(name, result);
     },
   };
 }
@@ -135,6 +147,60 @@ test('empty configuration disables remote persistence without loading Supabase',
   });
   assert.equal(backend.startSession({ source: 'cameo', difficulty: 'easy' }), null);
   await backend.flush();
+  await assert.rejects(
+    backend.claimUsername('player_one'),
+    /leaderboard persistence is unavailable/i,
+  );
+  await assert.rejects(
+    backend.getLeaderboard(),
+    /leaderboard persistence is unavailable/i,
+  );
+});
+
+test('claims a username and loads shared leaderboard rows through Supabase RPCs', async () => {
+  const { client, rpcs, setRpcResult } = fakeSupabase();
+  const rows = [{
+    username: 'player_one',
+    items: 12,
+    sessions: 2,
+    accuracy: 75,
+    af3_accuracy: 50,
+    beat_af3_by: 25,
+  }];
+  setRpcResult('claim_leaderboard_username', { data: 'player_one', error: null });
+  setRpcResult('get_leaderboard', { data: rows, error: null });
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+
+  assert.equal(await backend.claimUsername('player_one'), 'player_one');
+  assert.deepEqual(await backend.getLeaderboard(), rows);
+  assert.deepEqual(rpcs, [
+    {
+      name: 'claim_leaderboard_username',
+      args: { p_username: 'player_one' },
+    },
+    { name: 'get_leaderboard', args: undefined },
+  ]);
+});
+
+test('leaderboard RPC errors reject without creating a local fallback', async () => {
+  const { client, setRpcResult } = fakeSupabase();
+  const storage = memoryStorage();
+  setRpcResult('claim_leaderboard_username', {
+    data: null,
+    error: Object.assign(new Error('username is already taken'), { code: '23505' }),
+  });
+  setRpcResult('get_leaderboard', {
+    data: null,
+    error: Object.assign(new Error('leaderboard unavailable'), { status: 503 }),
+  });
+  const backend = createQuizBackend({ client, storage });
+
+  await assert.rejects(
+    backend.claimUsername('Player_One'),
+    /username is already taken/,
+  );
+  await assert.rejects(backend.getLeaderboard(), /leaderboard unavailable/);
+  assert.deepEqual(storage.keys(), []);
 });
 
 test('configured initialization returns immediately and acquires the remote client only for queued work', async () => {
