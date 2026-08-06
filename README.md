@@ -39,6 +39,8 @@ npm run upload:structures
 
 Keep the server credential uncommitted. Rerunning the command without `--overwrite` is safe: existing objects are skipped. Pass `-- --overwrite` to replace existing objects.
 
+Production loads structures from the public Supabase Storage URL configured in `supabase-config.js`. The PDB files remain in Git as a backup, while `.vercelignore` excludes `data/` and `data_rnp/` from Vercel deployments.
+
 ## Replaying recorded answers
 
 1. Apply `supabase/migrations/20260805230000_add_viewer_trace.sql` to the Supabase project.
