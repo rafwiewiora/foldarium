@@ -226,6 +226,55 @@ export function createReplayPlaybackUi({
   };
 }
 
+export function createReplayConnectHandler({
+  sessionLoader,
+  answerRequests,
+  playbackUi,
+  readPassword,
+  rememberPassword,
+  clearPasswordInput,
+  clearAnswerState,
+  clearSessionState,
+  setConnectDisabled,
+  setStatus,
+}) {
+  let generation = 0;
+
+  return async function connect() {
+    const connectGeneration = ++generation;
+    sessionLoader.cancel();
+    answerRequests.cancel();
+    const password = readPassword();
+    rememberPassword(password);
+    clearPasswordInput();
+    const stopping = playbackUi.stop({ announce: false });
+    clearAnswerState();
+
+    if (!password) {
+      setStatus('Enter the replay password.', true);
+      setConnectDisabled(false);
+      return false;
+    }
+
+    setConnectDisabled(true);
+    setStatus('Loading recent sessions…');
+    await stopping;
+    if (connectGeneration !== generation) return false;
+
+    try {
+      const applied = await sessionLoader.load();
+      return connectGeneration === generation && applied;
+    } catch (error) {
+      if (connectGeneration !== generation) return false;
+      clearSessionState();
+      setStatus(error.message, true);
+      return false;
+    } finally {
+      if (connectGeneration === generation) setConnectDisabled(false);
+    }
+  };
+}
+
 async function initReplayPage() {
   const passwordInput = document.getElementById('replay-password');
   const connectButton = document.getElementById('connect');
@@ -285,6 +334,30 @@ async function initReplayPage() {
       setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
     },
   });
+  const connect = createReplayConnectHandler({
+    sessionLoader,
+    answerRequests,
+    playbackUi,
+    readPassword: () => passwordInput.value,
+    rememberPassword(value) {
+      replayPassword = value;
+    },
+    clearPasswordInput() {
+      passwordInput.value = '';
+    },
+    clearAnswerState() {
+      answersById.clear();
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
+    },
+    clearSessionState() {
+      replaceSelectOptions(sessionSelect, [], formatSessionLabel);
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
+    },
+    setConnectDisabled(value) {
+      connectButton.disabled = value;
+    },
+    setStatus,
+  });
 
   async function loadAnswers() {
     const sessionId = sessionSelect.value;
@@ -312,34 +385,6 @@ async function initReplayPage() {
     } catch (error) {
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(error.message, true);
-    }
-  }
-
-  async function connect() {
-    sessionLoader.cancel();
-    answerRequests.cancel();
-    replayPassword = passwordInput.value;
-    passwordInput.value = '';
-    if (!replayPassword) {
-      setStatus('Enter the replay password.', true);
-      connectButton.disabled = false;
-      return;
-    }
-
-    connectButton.disabled = true;
-    setStatus('Loading recent sessions…');
-    let completedCurrentRequest = false;
-    try {
-      const applied = await sessionLoader.load();
-      if (!applied) return;
-      completedCurrentRequest = true;
-    } catch (error) {
-      completedCurrentRequest = true;
-      replaceSelectOptions(sessionSelect, [], formatSessionLabel);
-      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
-      setStatus(error.message, true);
-    } finally {
-      if (completedCurrentRequest) connectButton.disabled = false;
     }
   }
 

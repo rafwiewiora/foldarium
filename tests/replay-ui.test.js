@@ -247,6 +247,105 @@ test('concurrent Connect submissions apply only the latest session list', async 
   assert.deepEqual(applied, [['new-session']]);
 });
 
+test('reconnecting during playback prevents the old operation from changing new session UI', async () => {
+  assert.equal(
+    typeof replayModule.createReplayConnectHandler,
+    'function',
+    'expected replay Connect coordinator export',
+  );
+  const playback = deferred();
+  const sessions = deferred();
+  const events = [];
+  const answers = new Map([['old-answer', {}]]);
+  let rememberedPassword = '';
+  let controls = {};
+  let connectDisabled = false;
+  let status = { message: '', isError: false };
+  let sessionRows = [];
+  const setStatus = (message, isError = false) => {
+    status = { message, isError };
+  };
+  const playbackUi = replayModule.createReplayPlaybackUi({
+    replayController: {
+      play: () => playback.promise,
+      stop() {
+        events.push('stop-playback');
+      },
+    },
+    hasSelectedAnswer: () => answers.has('old-answer'),
+    setControls(next) {
+      controls = next;
+    },
+    setStatus,
+  });
+  const sessionLoader = createSessionListLoader({
+    requestSessions() {
+      events.push(`load-sessions-with-${answers.size}-answers`);
+      return sessions.promise;
+    },
+    applySessions(rows) {
+      sessionRows = rows;
+      setStatus('Select a session.');
+    },
+  });
+  const connect = replayModule.createReplayConnectHandler({
+    sessionLoader,
+    answerRequests: { cancel: () => events.push('cancel-answer-request') },
+    playbackUi,
+    readPassword: () => 'replacement-password',
+    rememberPassword(value) {
+      rememberedPassword = value;
+    },
+    clearPasswordInput: () => events.push('clear-password-input'),
+    clearAnswerState() {
+      answers.clear();
+      events.push('clear-answers');
+    },
+    clearSessionState: () => {},
+    setConnectDisabled(value) {
+      connectDisabled = value;
+    },
+    setStatus,
+  });
+
+  const oldPlayback = playbackUi.play(validTrace('old-answer'));
+  const reconnecting = connect();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(events, [
+    'cancel-answer-request',
+    'clear-password-input',
+    'stop-playback',
+    'clear-answers',
+    'load-sessions-with-0-answers',
+  ]);
+  assert.equal(rememberedPassword, 'replacement-password');
+
+  sessions.resolve(['new-session']);
+  assert.equal(await reconnecting, true);
+  const newSessionUi = {
+    connectDisabled,
+    controls,
+    sessionRows,
+    status,
+  };
+  assert.deepEqual(newSessionUi, {
+    connectDisabled: false,
+    controls: { playDisabled: true, stopDisabled: true },
+    sessionRows: ['new-session'],
+    status: { message: 'Select a session.', isError: false },
+  });
+
+  playback.resolve(true);
+  await oldPlayback;
+  assert.deepEqual({
+    connectDisabled,
+    controls,
+    sessionRows,
+    status,
+  }, newSessionUi);
+});
+
 test('displays replay identifiers and answer time as option text', () => {
   const session = {
     id: '00000000-0000-4000-8000-000000000001',
