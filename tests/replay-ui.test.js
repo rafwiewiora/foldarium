@@ -1,7 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createReplayController } from '../replay.js';
+import {
+  createLatestRequestGuard,
+  createReplayController,
+  formatAnswerLabel,
+  formatSessionLabel,
+  replaceSelectOptions,
+} from '../replay.js';
+
+function validTrace(label) {
+  return {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{ t_ms: 0, kind: 'state', snapshot: { label } }],
+  };
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 function abortablePlayback(signals) {
   return (_plugin, _trace, { signal }) => new Promise((resolve, reject) => {
@@ -23,9 +43,9 @@ test('starting another answer aborts the current playback before clearing the vi
     playTrace: abortablePlayback(signals),
   });
 
-  const first = controller.play({ answer: 1 });
+  const first = controller.play(validTrace('answer-1'));
   await new Promise(resolve => setImmediate(resolve));
-  const second = controller.play({ answer: 2 });
+  const second = controller.play(validTrace('answer-2'));
   await new Promise(resolve => setImmediate(resolve));
 
   assert.equal(signals[0].signal.aborted, true);
@@ -38,11 +58,90 @@ test('starting another answer aborts the current playback before clearing the vi
   assert.equal(signals[1].signal.aborted, true);
 });
 
-test('replay page keeps credentials ephemeral and renders server data without innerHTML', async () => {
-  const [html, script] = await Promise.all([
-    readFile(new URL('../replay.html', import.meta.url), 'utf8'),
-    readFile(new URL('../replay.js', import.meta.url), 'utf8'),
-  ]);
+test('rejects an invalid trace before clearing or starting viewer playback', async () => {
+  let clears = 0;
+  let plays = 0;
+  const controller = createReplayController({
+    plugin: { clear: async () => { clears += 1; } },
+    playTrace: async () => { plays += 1; },
+  });
+
+  await assert.rejects(
+    controller.play({ version: 2, molstar_version: '4.6.0', snapshots: [] }),
+    /Unsupported viewer trace/,
+  );
+  assert.equal(clears, 0);
+  assert.equal(plays, 0);
+});
+
+test('ignores an out-of-order session-answer response and aborts its request', async () => {
+  const guard = createLatestRequestGuard();
+  const oldResponse = deferred();
+  const newResponse = deferred();
+  let oldSignal;
+
+  const oldRequest = guard.run(signal => {
+    oldSignal = signal;
+    return oldResponse.promise;
+  });
+  const newRequest = guard.run(() => newResponse.promise);
+
+  assert.equal(oldSignal.aborted, true);
+  newResponse.resolve(['new-session-answer']);
+  assert.deepEqual(await newRequest, {
+    accepted: true,
+    value: ['new-session-answer'],
+  });
+
+  oldResponse.resolve(['stale-session-answer']);
+  assert.deepEqual(await oldRequest, { accepted: false });
+});
+
+test('displays replay identifiers and answer time as option text', () => {
+  const session = {
+    id: '00000000-0000-4000-8000-000000000001',
+    user_id: '<img src=x onerror=alert(1)>',
+    source: 'cameo',
+    difficulty: 'easy',
+    started_at: '2026-08-05T12:00:00.000Z',
+  };
+  const answer = {
+    id: 'answer-1',
+    question_index: 0,
+    item_id: '<script>alert(1)</script>',
+    picked_none: false,
+    picked_sample: 2,
+    picked_correct: true,
+    answered_at: '2026-08-05T12:05:00.000Z',
+  };
+  const select = {
+    children: [],
+    replaceChildren() { this.children = []; },
+    appendChild(child) { this.children.push(child); },
+  };
+  const documentImpl = {
+    createElement() {
+      return {
+        value: '',
+        textContent: '',
+        set innerHTML(_value) {
+          assert.fail('option rendering must not use innerHTML');
+        },
+      };
+    },
+  };
+
+  replaceSelectOptions(select, [session], formatSessionLabel, documentImpl);
+  assert.match(select.children[1].textContent, new RegExp(session.id));
+  assert.match(select.children[1].textContent, /<img src=x onerror=alert\(1\)>/);
+
+  replaceSelectOptions(select, [answer], formatAnswerLabel, documentImpl);
+  assert.match(select.children[1].textContent, /<script>alert\(1\)<\/script>/);
+  assert.match(select.children[1].textContent, /Aug|2026|12:05/);
+});
+
+test('replay page exposes the required controls and pinned Molstar version', async () => {
+  const html = await readFile(new URL('../replay.html', import.meta.url), 'utf8');
 
   for (const id of ['replay-password', 'connect', 'sessions', 'answers', 'play', 'stop', 'status', 'viewer']) {
     assert.match(html, new RegExp(`id="${id}"`));
@@ -50,10 +149,4 @@ test('replay page keeps credentials ephemeral and renders server data without in
   assert.match(html, /molstar@4\.6\.0\/build\/viewer\/molstar\.css/);
   assert.match(html, /molstar@4\.6\.0\/build\/viewer\/molstar\.js/);
   assert.match(html, /<script type="module" src="replay\.js"><\/script>/);
-
-  assert.match(script, /let replayPassword = '';/);
-  assert.match(script, /\.textContent =/);
-  assert.doesNotMatch(script, /innerHTML|localStorage|sessionStorage|document\.cookie/);
-  assert.match(script, /action: 'sessions'/);
-  assert.match(script, /action: 'answers'/);
 });

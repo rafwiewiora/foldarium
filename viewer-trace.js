@@ -20,6 +20,13 @@ function normalizeEntryLimit(maxEntries) {
   return Math.min(MAX_SNAPSHOTS, Math.max(0, Math.floor(numeric)));
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
 export function createViewerTraceRecorder({
   plugin,
   now = () => performance.now(),
@@ -35,16 +42,28 @@ export function createViewerTraceRecorder({
   let truncated = false;
   let cameraTimer = null;
 
+  const stopCaptureWork = () => {
+    active = false;
+    if (cameraTimer !== null) clearTimer(cameraTimer);
+    cameraTimer = null;
+  };
+
   const append = entry => {
     if (!active) return;
     if (snapshots.length >= entryLimit) {
       truncated = true;
+      stopCaptureWork();
       return;
     }
     snapshots.push({ t_ms: Math.max(0, Math.round(now() - startedAt)), ...entry });
+    if (snapshots.length === entryLimit) {
+      truncated = true;
+      stopCaptureWork();
+    }
   };
 
   const captureState = () => {
+    if (!active) return;
     try {
       const snapshot = plugin.state.getSnapshot(SNAPSHOT_PARAMS);
       delete snapshot.structureFocus;
@@ -55,6 +74,7 @@ export function createViewerTraceRecorder({
   };
 
   const captureCamera = () => {
+    if (!active) return;
     try {
       append({ kind: 'camera', camera: plugin.canvas3d.camera.getSnapshot() });
     } catch (error) {
@@ -73,10 +93,10 @@ export function createViewerTraceRecorder({
 
   return {
     start() {
-      active = true;
+      active = entryLimit > 0;
       startedAt = now();
       snapshots = [];
-      truncated = false;
+      truncated = entryLimit === 0;
       if (cameraTimer !== null) clearTimer(cameraTimer);
       cameraTimer = null;
       captureState();
@@ -89,7 +109,7 @@ export function createViewerTraceRecorder({
         captureCamera();
       }
       active = false;
-      return Object.freeze({
+      return deepFreeze({
         version: 1,
         molstar_version: '4.6.0',
         duration_ms: Math.max(0, Math.round(now() - startedAt)),

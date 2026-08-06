@@ -57,29 +57,59 @@ function isSupportedTrace(trace) {
   return true;
 }
 
+export function validateViewerTrace(trace) {
+  if (!isSupportedTrace(trace)) throw new Error('Unsupported viewer trace');
+  return trace;
+}
+
+function pinCamera(plugin) {
+  try {
+    const camera = plugin.canvas3d.camera;
+    const current = camera.getSnapshot?.();
+    if (current) camera.setState(current, 0);
+  } catch {
+    // Cancellation must still reject even when Mol* cannot expose the in-flight camera.
+  }
+}
+
 export async function playViewerTrace(plugin, trace, {
   now = () => performance.now(),
   sleep = defaultSleep,
   signal,
 } = {}) {
-  if (!isSupportedTrace(trace)) throw new Error('Unsupported viewer trace');
+  validateViewerTrace(trace);
   throwIfAborted(signal);
 
   const startedAt = now();
-  for (const entry of trace.snapshots) {
-    throwIfAborted(signal);
-    const waitMs = entry.t_ms - (now() - startedAt);
-    if (waitMs > 0) {
-      await sleep(waitMs, signal);
+  let cameraTransitionEndsAt = -Infinity;
+  try {
+    for (const entry of trace.snapshots) {
       throwIfAborted(signal);
+      const waitMs = entry.t_ms - (now() - startedAt);
+      if (waitMs > 0) {
+        await sleep(waitMs, signal);
+        throwIfAborted(signal);
+      }
+
+      if (entry.kind === 'state') {
+        await plugin.state.setSnapshot(entry.snapshot);
+        throwIfAborted(signal);
+      } else {
+        plugin.canvas3d.camera.setState(entry.camera, 250);
+        cameraTransitionEndsAt = now() + 250;
+      }
     }
 
-    if (entry.kind === 'state') {
-      await plugin.state.setSnapshot(entry.snapshot);
+    const transitionWait = cameraTransitionEndsAt - now();
+    if (transitionWait > 0) {
+      await sleep(transitionWait, signal);
       throwIfAborted(signal);
-    } else {
-      plugin.canvas3d.camera.setState(entry.camera, 250);
     }
+  } catch (error) {
+    if ((signal?.aborted || error?.name === 'AbortError') && cameraTransitionEndsAt > now()) {
+      pinCamera(plugin);
+    }
+    throw error;
   }
   throwIfAborted(signal);
 }

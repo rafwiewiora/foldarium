@@ -34,16 +34,23 @@ function fakeClock() {
 function fakePlugin() {
   let cameraCallback = null;
   let cameraReads = 0;
+  let stateReads = 0;
 
   return {
     get cameraReads() {
       return cameraReads;
     },
+    get stateReads() {
+      return stateReads;
+    },
     state: {
-      getSnapshot: (_params) => ({
-        data: { tree: 'mock' },
-        structureFocus: 'remove-me',
-      }),
+      getSnapshot: (_params) => {
+        stateReads += 1;
+        return {
+          data: { tree: { id: 'mock' } },
+          structureFocus: 'remove-me',
+        };
+      },
     },
     canvas3d: {
       camera: {
@@ -115,10 +122,16 @@ test('marks the trace truncated at 100 entries', () => {
   const plugin = fakePlugin();
   const recorder = createViewerTraceRecorder({ plugin, maxEntries: 100 });
   recorder.start();
-  for (let index = 0; index < 150; index += 1) recorder.captureState();
+  for (let index = 1; index < 100; index += 1) recorder.captureState();
   const trace = recorder.stop();
   assert.equal(trace.snapshots.length, 100);
   assert.equal(trace.truncated, true);
+  assert.equal(plugin.stateReads, 100);
+
+  recorder.captureState();
+  plugin.cameraChanged();
+  assert.equal(plugin.stateReads, 100);
+  assert.equal(plugin.cameraReads, 0);
 });
 
 test('caps snapshots at 100 even when maxEntries exceeds 100', () => {
@@ -204,6 +217,21 @@ test('camera capture failures are skipped without throwing', () => {
   }
 });
 
+test('deeply freezes the returned JSON trace', () => {
+  const recorder = createViewerTraceRecorder({ plugin: fakePlugin() });
+  recorder.start();
+  const trace = recorder.stop();
+
+  assert.equal(Object.isFrozen(trace), true);
+  assert.equal(Object.isFrozen(trace.snapshots), true);
+  assert.equal(Object.isFrozen(trace.snapshots[0]), true);
+  assert.equal(Object.isFrozen(trace.snapshots[0].snapshot), true);
+  assert.equal(Object.isFrozen(trace.snapshots[0].snapshot.data), true);
+  assert.equal(Object.isFrozen(trace.snapshots[0].snapshot.data.tree), true);
+  assert.throws(() => { trace.snapshots[0].snapshot.data.tree.id = 'mutated'; }, TypeError);
+  assert.throws(() => { trace.snapshots.push({}); }, TypeError);
+});
+
 test('recorder import failure does not block quiz application startup', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const recorderImport = html.indexOf("await import('./viewer-trace.js')");
@@ -221,7 +249,7 @@ test('quiz records only pre-reveal viewer interactions and keeps the local log l
   assert.match(app, /if \(!DEV && typeof window\.createViewerTraceRecorder === 'function'\)/);
   assert.match(app, /await viewerRebuild\.enqueue\([\s\S]*?viewerTraceRecorder\?\.start\(\);/);
   assert.match(app, /restoreCam\(\);\s*viewerTraceRecorder\?\.captureState\(\);/);
-  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\) \?\? null;\s*cur\.revealed = true/);
+  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\) \?\? null;[\s\S]*?await viewerRebuild\.enqueue\([\s\S]*?cur\.revealed = true/);
   assert.match(app, /function logAnswer\(picked, af3, viewerTrace\)/);
   assert.match(app, /log\.push\(rec\);[\s\S]*?recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);
 

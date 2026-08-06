@@ -33,6 +33,7 @@ let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
 let viewerTraceRecorder = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
+let viewerTransitionBusy = false;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -51,7 +52,19 @@ const hex = c => '#' + c.toString(16).padStart(6, '0');
 // "locked" = the green/red answer is on screen; controls are inert only then. In "my view" (revealed but
 // answer hidden) everything is interactive again, exactly as before voting.
 const locked = () => cur && cur.revealed && cur.showAnswer;
+const interactionBlocked = () => viewerTransitionBusy || revealRequested || locked();
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)' : 'AlphaFold3 (pLDDT-ranked)');
+
+function setViewerControlsBusy(busy) {
+  viewerTransitionBusy = busy;
+  document.querySelectorAll(
+    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #lock, '
+    + '#next, #prev, #myview, #showXtal, #start',
+  ).forEach(control => { control.disabled = busy; });
+  if (!busy && cur && !cur.revealed) {
+    $('#lock').disabled = revealRequested || cur.selected == null;
+  }
+}
 
 async function loadStruct(url, format) {
   const data = await plugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
@@ -193,22 +206,30 @@ async function loadQuestion(i) {
     members.forEach((m, j) => { m.color = color; m.label = label + (members.length > 1 ? '·' + (j + 1) : ''); });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
-  await viewerRebuild.enqueue(async () => {
-    idx = i;
-    cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
-    // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
-    applyUserView();
-    shownOne = 0;
-    $('#myview').style.display = 'none'; $('#start').style.display = 'none';
-    $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
-    try { await plugin.clear(); } catch (e) {}
-    proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
-    showXtal = false;
-    syncButtons();
-  });                          // coordinator rebuilds protein + poses and captures only after mutation completes
-  viewerTraceRecorder?.start();
-  try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
-  renderUI();
+  await viewerRebuild.enqueue(
+    async () => {
+      viewerTraceRecorder?.stop();
+      idx = i;
+      cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
+      // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
+      applyUserView();
+      shownOne = 0;
+      $('#myview').style.display = 'none'; $('#start').style.display = 'none';
+      $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
+      try { await plugin.clear(); } catch (e) {}
+      proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
+      showXtal = false;
+      syncButtons();
+    },
+    async () => {
+      await window.waitForCameraSettled({
+        cameraChanged: plugin.canvas3d?.camera?.changed,
+        requestReset: () => plugin.canvas3d?.requestCameraReset?.(),
+      });
+      viewerTraceRecorder?.start();
+      renderUI();
+    },
+  );
 }
 
 function renderUI() {
@@ -218,7 +239,7 @@ function renderUI() {
   const box = $('#choices'); box.innerHTML = '';
   visibleChoices().forEach((c, k) => {
     const b = document.createElement('button');
-    b.className = 'choice'; b.dataset.k = k;
+    b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
     let nm;
     if (clustered) {
       const cl = cur.clusters[k];
@@ -231,7 +252,7 @@ function renderUI() {
   });
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
-    nb.className = 'choice none'; nb.dataset.k = 'none';
+    nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
     nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
@@ -241,7 +262,7 @@ function renderUI() {
     else { const vis = visibleChoices(); const k = vis.findIndex(c => c.cluster === cur.selected.cluster); if (k >= 0) document.querySelectorAll('.choice')[k]?.classList.add('sel'); }
   }
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
-  $('#lock').disabled = cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
+  $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
   $('#next').style.display = cur.revealed ? '' : 'none';
   updateScore();
@@ -312,7 +333,7 @@ function startQuiz() {
 }
 
 async function onPick(k) {
-  if (locked()) return;
+  if (interactionBlocked()) return;
   if (k !== 'none' && displayMode === 'one') {
     const selected = cur.revealed ? null : visibleChoices()[k];
     await viewerRebuild.enqueue(() => {
@@ -351,8 +372,9 @@ async function reveal() {
 async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
   const viewerTrace = viewerTraceRecorder?.stop() ?? null;
-  cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
-  await buildLayer();
+  await viewerRebuild.enqueue(() => {
+    cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
+  });
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = !!picked.correct, af3Right = !!(af3 && af3.correct);
@@ -383,16 +405,21 @@ async function finalizeReveal() {
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
 async function toggleAnswer() {
   if (DEV) return toggleAnswerDev();
-  if (!cur.revealed) return;
-  cur.showAnswer = !cur.showAnswer;
-  if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
-  else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
-  syncButtons();
-  await buildLayer();
-  if (cur.showAnswer) {
-    renderRevealList(cur.selected, cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null);
-  } else { renderUI(); }
-  $('#myview').textContent = cur.showAnswer ? '← Back to my view (hide answer)' : 'Show answer →';
+  if (!cur.revealed || viewerTransitionBusy) return;
+  await viewerRebuild.enqueue(
+    () => {
+      cur.showAnswer = !cur.showAnswer;
+      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
+      syncButtons();
+    },
+    () => {
+      if (cur.showAnswer) {
+        renderRevealList(cur.selected, cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null);
+      } else { renderUI(); }
+      $('#myview').textContent = cur.showAnswer ? '← Back to my view (hide answer)' : 'Show answer →';
+    },
+  );
 }
 
 function renderRevealList(picked, af3) {
@@ -458,23 +485,33 @@ function syncButtons() {
 // Sets cur.revealed alongside cur.showAnswer so buildLayer()/protUrls() colour by correctness and show the
 // crystal reference, but never scores or logs (that lives in reveal(), which dev never calls).
 async function toggleAnswerDev() {
-  cur.showAnswer = !cur.showAnswer;
-  cur.revealed = cur.showAnswer;
-  if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
-  else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
-  syncButtons();
-  await buildLayer();
-  if (cur.showAnswer) {
-    const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
-    renderRevealList(null, af3);
-  } else { renderUI(); }
-  renderDevNav();
+  if (viewerTransitionBusy) return;
+  await viewerRebuild.enqueue(
+    () => {
+      cur.showAnswer = !cur.showAnswer;
+      cur.revealed = cur.showAnswer;
+      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
+      syncButtons();
+    },
+    () => {
+      if (cur.showAnswer) {
+        const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
+        renderRevealList(null, af3);
+      } else { renderUI(); }
+      renderDevNav();
+    },
+  );
 }
 // dev free navigation — wraps at the ends, works on every item with no lock required.
-function prevDev() { loadQuestion((idx - 1 + ITEMS.length) % ITEMS.length); }
-function nextDev() { loadQuestion((idx + 1) % ITEMS.length); }
+function prevDev() { if (!viewerTransitionBusy) void loadQuestion((idx - 1 + ITEMS.length) % ITEMS.length); }
+function nextDev() { if (!viewerTransitionBusy) void loadQuestion((idx + 1) % ITEMS.length); }
 
-function next() { if (DEV) return nextDev(); (idx + 1 < ITEMS.length) ? loadQuestion(idx + 1) : finish(); }
+function next() {
+  if (viewerTransitionBusy) return;
+  if (DEV) return nextDev();
+  (idx + 1 < ITEMS.length) ? void loadQuestion(idx + 1) : finish();
+}
 function finish() {
   researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
@@ -494,10 +531,7 @@ async function init() {
   plugin = viewer.plugin;
   viewerRebuild = window.createViewerRebuildCoordinator({
     rebuild: buildLayer,
-    setBusy(busy) {
-      if (busy) $('#lock').disabled = true;
-      else if (cur && !cur.revealed) $('#lock').disabled = revealRequested || cur.selected == null;
-    },
+    setBusy: setViewerControlsBusy,
   });
   revealAfterIdle = window.createRevealAfterIdle({
     coordinator: viewerRebuild,
@@ -550,7 +584,7 @@ async function init() {
     difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
   });
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
-    if (locked()) return;
+    if (interactionBlocked()) return;
     const mode = b.dataset.m;
     await viewerRebuild.enqueue(() => {
       displayMode = mode; if (displayMode === 'one') shownOne = 0;
@@ -559,7 +593,7 @@ async function init() {
     });
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
-    if (locked()) return;
+    if (interactionBlocked()) return;
     const mode = b.dataset.p;
     await viewerRebuild.enqueue(() => {
       proteinMode = mode;
@@ -568,7 +602,7 @@ async function init() {
     });
   });
   $('#uncluster').onclick = async () => {
-    if (locked()) return;
+    if (interactionBlocked()) return;
     await viewerRebuild.enqueue(() => {
       clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
       if (!cur.revealed) rememberView();
@@ -577,7 +611,7 @@ async function init() {
     });
   };
   $('#hbonds').onclick = async () => {
-    if (locked()) return;
+    if (interactionBlocked()) return;
     await viewerRebuild.enqueue(() => {
       showHbonds = !showHbonds;
       if (!cur.revealed) rememberView();       // persist across questions like the other view choices
@@ -589,13 +623,17 @@ async function init() {
   $('#prev').onclick = prevDev;
   $('#start').onclick = startQuiz;
   $('#myview').onclick = toggleAnswer;
-  $('#showXtal').onchange = async (e) => { showXtal = e.target.checked; await buildLayer(); };
+  $('#showXtal').onchange = async (e) => {
+    if (viewerTransitionBusy) return;
+    const checked = e.target.checked;
+    await viewerRebuild.enqueue(() => { showXtal = checked; });
+  };
   document.addEventListener('keydown', async e => {
     if (DEV && cur) {                                   // dev: Up/Down = prev/next item, any mode, no lock needed
       if (e.key === 'ArrowUp') { e.preventDefault(); prevDev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); nextDev(); return; }
     }
-    if (!cur || locked() || displayMode !== 'one') return;
+    if (!cur || interactionBlocked() || displayMode !== 'one') return;
     if (e.key === 'ArrowRight') {
       await viewerRebuild.enqueue(() => {
         shownOne = (shownOne + 1) % visibleChoices().length;

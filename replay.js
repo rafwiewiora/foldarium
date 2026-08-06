@@ -1,4 +1,4 @@
-import { playViewerTrace } from './replay-player.js';
+import { playViewerTrace, validateViewerTrace } from './replay-player.js';
 
 const VIEWER_OPTIONS = {
   layoutIsExpanded: false, layoutShowControls: false, layoutShowRemoteState: false,
@@ -21,12 +21,84 @@ async function settlePlayback(playback) {
   }
 }
 
-export function createReplayController({ plugin, playTrace = playViewerTrace }) {
+export function createLatestRequestGuard() {
+  let generation = 0;
+  let activeController = null;
+
+  return {
+    async run(request) {
+      const requestGeneration = ++generation;
+      activeController?.abort();
+      const controller = new AbortController();
+      activeController = controller;
+      try {
+        const value = await request(controller.signal);
+        if (requestGeneration !== generation) return { accepted: false };
+        return { accepted: true, value };
+      } catch (error) {
+        if (requestGeneration !== generation || isAbortError(error)) return { accepted: false };
+        throw error;
+      } finally {
+        if (activeController === controller) activeController = null;
+      }
+    },
+    cancel() {
+      generation += 1;
+      activeController?.abort();
+      activeController = null;
+    },
+  };
+}
+
+function formatDate(value, fallback) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
+}
+
+export function formatSessionLabel(session) {
+  const source = String(session.source || 'unknown');
+  const difficulty = String(session.difficulty || 'unknown');
+  const id = String(session.id || 'unknown session');
+  const userId = String(session.user_id || 'unknown user');
+  return `${formatDate(session.started_at, 'unknown date')} · ${source} · ${difficulty}`
+    + ` · session ${id} · user ${userId}`;
+}
+
+export function formatAnswerLabel(answer) {
+  const question = Number(answer.question_index) + 1;
+  const item = String(answer.item_id || 'unknown item');
+  const pick = answer.picked_none ? 'none' : `sample ${answer.picked_sample ?? 'unknown'}`;
+  const result = answer.picked_correct ? 'correct' : 'wrong';
+  return `Question ${question} · ${item} · ${pick} · ${result}`
+    + ` · answered ${formatDate(answer.answered_at, 'unknown time')}`;
+}
+
+export function replaceSelectOptions(select, rows, labelFor, documentImpl = document) {
+  select.replaceChildren();
+  const placeholder = documentImpl.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = rows.length ? 'Select…' : 'None available';
+  select.appendChild(placeholder);
+  for (const row of rows) {
+    const option = documentImpl.createElement('option');
+    option.value = String(row.id);
+    option.textContent = labelFor(row);
+    select.appendChild(option);
+  }
+  select.disabled = rows.length === 0;
+}
+
+export function createReplayController({
+  plugin,
+  playTrace = playViewerTrace,
+  validateTrace = validateViewerTrace,
+}) {
   let generation = 0;
   let active = null;
 
   return {
     async play(trace) {
+      validateTrace(trace);
       const requestedGeneration = ++generation;
       const previous = active;
       if (previous) {
@@ -76,32 +148,19 @@ async function initReplayPage() {
   const stopButton = document.getElementById('stop');
   const status = document.getElementById('status');
   const answersById = new Map();
+  const answerRequests = createLatestRequestGuard();
 
   function setStatus(message, isError = false) {
     status.textContent = message;
     status.dataset.error = isError ? 'true' : 'false';
   }
 
-  function replaceOptions(select, rows, labelFor) {
-    select.replaceChildren();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = rows.length ? 'Select…' : 'None available';
-    select.appendChild(placeholder);
-    for (const row of rows) {
-      const option = document.createElement('option');
-      option.value = String(row.id);
-      option.textContent = labelFor(row);
-      select.appendChild(option);
-    }
-    select.disabled = rows.length === 0;
-  }
-
-  async function requestReplay(payload) {
+  async function requestReplay(payload, signal) {
     const response = await fetch('/api/replay', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: replayPassword, ...payload }),
+      signal,
     });
     let data;
     try {
@@ -114,22 +173,6 @@ async function initReplayPage() {
     return data;
   }
 
-  function sessionLabel(session) {
-    const source = String(session.source || 'unknown');
-    const difficulty = String(session.difficulty || 'unknown');
-    const date = new Date(session.started_at);
-    const started = Number.isNaN(date.getTime()) ? 'unknown date' : date.toLocaleString();
-    return `${started} · ${source} · ${difficulty}`;
-  }
-
-  function answerLabel(answer) {
-    const question = Number(answer.question_index) + 1;
-    const item = String(answer.item_id || 'unknown item');
-    const pick = answer.picked_none ? 'none' : `sample ${answer.picked_sample ?? 'unknown'}`;
-    const result = answer.picked_correct ? 'correct' : 'wrong';
-    return `Question ${question} · ${item} · ${pick} · ${result}`;
-  }
-
   let viewer;
   try {
     viewer = await molstar.Viewer.create('viewer', VIEWER_OPTIONS);
@@ -140,32 +183,36 @@ async function initReplayPage() {
   const replayController = createReplayController({ plugin: viewer.plugin });
 
   async function loadAnswers() {
-    await replayController.stop();
+    const sessionId = sessionSelect.value;
     answersById.clear();
     playButton.disabled = true;
     stopButton.disabled = true;
-    if (!sessionSelect.value) {
-      replaceOptions(answerSelect, [], answerLabel);
-      setStatus('Select a session.');
-      return;
-    }
-
-    setStatus('Loading traced answers…');
+    replaceSelectOptions(answerSelect, [], formatAnswerLabel);
+    setStatus(sessionId ? 'Loading traced answers…' : 'Select a session.');
     try {
-      const answers = await requestReplay({
-        action: 'answers',
-        session_id: sessionSelect.value,
+      const result = await answerRequests.run(async signal => {
+        await replayController.stop();
+        if (!sessionId) return [];
+        return requestReplay({
+          action: 'answers',
+          session_id: sessionId,
+        }, signal);
       });
+      if (!result.accepted) return;
+      const answers = result.value;
       for (const answer of answers) answersById.set(String(answer.id), answer);
-      replaceOptions(answerSelect, answers, answerLabel);
-      setStatus(answers.length ? 'Select an answer to replay.' : 'This session has no traced answers.');
+      replaceSelectOptions(answerSelect, answers, formatAnswerLabel);
+      setStatus(sessionId
+        ? (answers.length ? 'Select an answer to replay.' : 'This session has no traced answers.')
+        : 'Select a session.');
     } catch (error) {
-      replaceOptions(answerSelect, [], answerLabel);
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(error.message, true);
     }
   }
 
   async function connect() {
+    answerRequests.cancel();
     replayPassword = passwordInput.value;
     passwordInput.value = '';
     if (!replayPassword) {
@@ -177,12 +224,12 @@ async function initReplayPage() {
     setStatus('Loading recent sessions…');
     try {
       const sessions = await requestReplay({ action: 'sessions' });
-      replaceOptions(sessionSelect, sessions, sessionLabel);
-      replaceOptions(answerSelect, [], answerLabel);
+      replaceSelectOptions(sessionSelect, sessions, formatSessionLabel);
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
     } catch (error) {
-      replaceOptions(sessionSelect, [], sessionLabel);
-      replaceOptions(answerSelect, [], answerLabel);
+      replaceSelectOptions(sessionSelect, [], formatSessionLabel);
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(error.message, true);
     } finally {
       connectButton.disabled = false;

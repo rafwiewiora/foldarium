@@ -6,9 +6,9 @@ export function createViewerRebuildCoordinator({
   let running = false;
   let idleWaiters = [];
 
-  function enqueue(mutate = () => {}) {
+  function enqueue(mutate = () => {}, finalize = () => {}) {
     const result = new Promise((resolve, reject) => {
-      queue.push({ mutate, resolve, reject });
+      queue.push({ mutate, finalize, resolve, reject });
     });
     if (!running) {
       running = true;
@@ -24,6 +24,7 @@ export function createViewerRebuildCoordinator({
       try {
         await job.mutate();
         await rebuild();
+        await job.finalize();
         job.resolve();
       } catch (error) {
         job.reject(error);
@@ -51,6 +52,50 @@ export function createViewerRebuildCoordinator({
       return running || queue.length > 0;
     },
   };
+}
+
+export function waitForCameraSettled({
+  cameraChanged,
+  requestReset,
+  settleMs = 300,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+}) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    let subscription = null;
+    let finished = false;
+
+    const cleanup = () => {
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      subscription?.unsubscribe();
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve();
+    };
+    const schedule = () => {
+      if (finished) return;
+      if (timer !== null) clearTimer(timer);
+      timer = setTimer(() => {
+        timer = null;
+        finish();
+      }, settleMs);
+    };
+
+    try {
+      subscription = cameraChanged?.subscribe(schedule) ?? null;
+      requestReset();
+      schedule();
+    } catch (error) {
+      finished = true;
+      cleanup();
+      reject(error);
+    }
+  });
 }
 
 export function createRevealAfterIdle({ coordinator, reveal }) {

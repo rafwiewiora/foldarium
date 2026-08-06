@@ -208,6 +208,7 @@
       const rebuildModule = await import('./viewer-rebuild-coordinator.js');
       window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
       window.createRevealAfterIdle = rebuildModule.createRevealAfterIdle;
+      window.waitForCameraSettled = rebuildModule.waitForCameraSettled;
       try {
         const module = await import('./viewer-trace.js');
         window.createViewerTraceRecorder = module.createViewerTraceRecorder;

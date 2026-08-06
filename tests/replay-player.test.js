@@ -12,8 +12,11 @@ function fakeReplayPlugin(calls, onState) {
     },
     canvas3d: {
       camera: {
-        setState() {
-          calls.push('camera');
+        getSnapshot() {
+          return { position: 'current' };
+        },
+        setState(_camera, duration) {
+          calls.push(duration === 0 ? 'camera:pin' : 'camera');
         },
       },
     },
@@ -59,7 +62,7 @@ test('applies state and camera entries in timestamp order', async () => {
   await playViewerTrace(plugin, trace, clock.options);
 
   assert.deepEqual(calls, ['state', 'camera']);
-  assert.deepEqual(clock.waits, [100]);
+  assert.deepEqual(clock.waits, [100, 250]);
 });
 
 test('subtracts time spent restoring state from later waits', async () => {
@@ -69,7 +72,27 @@ test('subtracts time spent restoring state from later waits', async () => {
 
   await playViewerTrace(plugin, trace, clock.options);
 
-  assert.deepEqual(clock.waits, [60]);
+  assert.deepEqual(clock.waits, [60, 250]);
+});
+
+test('does not delay later entries while keeping the final camera transition active', async () => {
+  const calls = [];
+  const clock = fakeAsyncClock();
+  const plugin = fakeReplayPlugin(calls);
+  const overlappingTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [
+      { t_ms: 0, kind: 'state', snapshot: { data: {} } },
+      { t_ms: 100, kind: 'camera', camera: { zoom: 2 } },
+      { t_ms: 150, kind: 'state', snapshot: { data: { later: true } } },
+    ],
+  };
+
+  await playViewerTrace(plugin, overlappingTrace, clock.options);
+
+  assert.deepEqual(calls, ['state', 'camera', 'state']);
+  assert.deepEqual(clock.waits, [100, 50, 200]);
 });
 
 test('rejects unsupported traces before mutating the viewer', async () => {
@@ -132,4 +155,34 @@ test('stops playback when aborted during the final state restore', async () => {
     playback,
     error => error.name === 'AbortError' && /aborted/i.test(error.message),
   );
+});
+
+test('keeps camera-only playback active and pins the camera when aborted mid-transition', async () => {
+  const controller = new AbortController();
+  const calls = [];
+  let transitionStarted = false;
+  const plugin = fakeReplayPlugin(calls);
+  const cameraTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{ t_ms: 0, kind: 'camera', camera: { position: 'target' } }],
+  };
+  const playback = playViewerTrace(plugin, cameraTrace, {
+    signal: controller.signal,
+    now: () => 0,
+    sleep: (_ms, signal) => new Promise((_resolve, reject) => {
+      transitionStarted = true;
+      signal.addEventListener('abort', () => {
+        reject(new DOMException('Viewer replay aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(transitionStarted, true);
+  assert.deepEqual(calls, ['camera']);
+  controller.abort();
+
+  await assert.rejects(playback, error => error.name === 'AbortError');
+  assert.deepEqual(calls, ['camera', 'camera:pin']);
 });

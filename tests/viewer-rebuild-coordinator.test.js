@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   createRevealAfterIdle,
   createViewerRebuildCoordinator,
+  waitForCameraSettled,
 } from '../viewer-rebuild-coordinator.js';
 
 function deferred() {
@@ -106,6 +107,84 @@ test('the original reveal click drains work queued while it waits', async () => 
     'trace:stop',
     'answer:reveal',
   ]);
+});
+
+test('serializes question rebuild and finalization before starting the next question', async () => {
+  const releases = [deferred(), deferred()];
+  const starts = [deferred(), deferred()];
+  const events = [];
+  let currentQuestion = null;
+  let rebuildIndex = 0;
+  const coordinator = createViewerRebuildCoordinator({
+    async rebuild() {
+      const index = rebuildIndex++;
+      events.push(`question-${currentQuestion}:rebuild`);
+      starts[index].resolve();
+      await releases[index].promise;
+    },
+  });
+
+  const first = coordinator.enqueue(
+    () => { currentQuestion = 1; },
+    () => { events.push(`question-${currentQuestion}:recorder-start`); },
+  );
+  const second = coordinator.enqueue(
+    () => { currentQuestion = 2; },
+    () => { events.push(`question-${currentQuestion}:recorder-start`); },
+  );
+
+  await starts[0].promise;
+  releases[0].resolve();
+  await starts[1].promise;
+  assert.deepEqual(events, [
+    'question-1:rebuild',
+    'question-1:recorder-start',
+    'question-2:rebuild',
+  ]);
+
+  releases[1].resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, [
+    'question-1:rebuild',
+    'question-1:recorder-start',
+    'question-2:rebuild',
+    'question-2:recorder-start',
+  ]);
+});
+
+test('waits for a quiet camera after reset before resolving', async () => {
+  let cameraChanged;
+  let nextTimer = 0;
+  const timers = new Map();
+  const events = [];
+  const settled = waitForCameraSettled({
+    cameraChanged: {
+      subscribe(callback) {
+        cameraChanged = callback;
+        return { unsubscribe: () => events.push('unsubscribe') };
+      },
+    },
+    requestReset() {
+      events.push('reset');
+      cameraChanged();
+    },
+    settleMs: 300,
+    setTimer(callback) {
+      const id = ++nextTimer;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimer(id) {
+      timers.delete(id);
+    },
+  }).then(() => events.push('settled'));
+
+  assert.deepEqual(events, ['reset']);
+  cameraChanged();
+  assert.equal(timers.size, 1);
+  [...timers.values()][0]();
+  await settled;
+  assert.deepEqual(events, ['reset', 'unsubscribe', 'settled']);
 });
 
 test('quiz routes every pre-answer viewer mutation through the coordinator', async () => {
