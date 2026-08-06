@@ -34,6 +34,9 @@ and [scheduled functions](https://modal.com/docs/guide/cron) before production d
 
 OpenFold3 uses the official 0.4-pixi / OpenFold3 0.4.4 OCI index pinned by
 immutable digest.
+The initial function requests an A100-40GB, matching upstream's commonly tested
+baseline; route genuinely larger targets to a separately costed A100-80GB policy
+instead of silently changing the standard campaign runtime.
 
 Boltz is built with exactly `boltz[cuda]==2.2.1`. Model files persist in
 method-specific Modal Volumes to reduce cold starts. Those volumes are caches

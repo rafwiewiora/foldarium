@@ -243,7 +243,7 @@ if modal is not None:
 
     @app.function(
         image=openfold3_image,
-        gpu="A100-80GB",
+        gpu="A100-40GB",
         timeout=FUNCTION_TIMEOUT_SECONDS,
         volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
         secrets=[control_plane_secret],
