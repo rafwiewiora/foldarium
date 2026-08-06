@@ -786,7 +786,7 @@ function finish() {
     `<b>You: ${pct(score.you, score.n)}%</b> · ${oppLabel()}: ${pct(score.af3, score.n)}% · random: ${pct(score.randExp, score.n)}%`
     + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`
     + `<div style="margin-top:12px;display:flex;gap:6px"><input id="uname" aria-label="Leaderboard username"`
-    + ` placeholder="username for leaderboard" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]+"`
+    + ` placeholder="username for leaderboard" minlength="3" maxlength="24" pattern="[A-Za-z0-9_\\-]+"`
     + ` style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:8px;font-size:13px"/>`
     + `<button class="primary" id="submit" style="padding:8px 12px">Save</button></div>`
     + `<div id="lbmsg" role="status" aria-live="polite" style="margin-top:10px"></div>`;
@@ -807,29 +807,41 @@ async function submitSession() {
 
   button.disabled = true;
   message.textContent = 'Saving completed session…';
+  let stage = 'persistence';
   try {
     const backend = researchBackend();
-    if (!backend) throw new Error('Leaderboard persistence is unavailable.');
+    if (!backend) throw new Error('Quiz persistence is unavailable.');
     researchBackend()?.completeSession(remoteSessionId);
-    await backend.flush();
+    await backend.flush({ strict: true });
+    stage = 'username';
     const claimedUsername = await backend.claimUsername(username);
+    stage = 'leaderboard';
     const rows = await backend.getLeaderboard();
     showLeaderboard(claimedUsername, rows);
   } catch (error) {
     button.disabled = false;
-    if (error.code === '23505' || /already taken|unique/i.test(error.message || '')) {
+    if (stage === 'username'
+      && (error.code === '23505' || /already taken|unique/i.test(error.message || ''))) {
       message.textContent = 'That username is already taken. Choose another.';
       input.focus();
       input.select();
       return;
     }
-    if (error.code === '22023') {
+    if (stage === 'username' && error.code === '22023') {
       message.textContent = error.message;
       input.focus();
       return;
     }
-    console.warn('Shared leaderboard unavailable:', error.message);
-    message.textContent = 'Shared leaderboard is unavailable. Your results remain queued; try again.';
+    if (stage === 'persistence') {
+      console.warn('Quiz completion persistence failed:', error.message);
+      message.textContent = 'Quiz results could not be saved, so rankings were not loaded. Check your connection and try again.';
+    } else if (stage === 'username') {
+      console.warn('Leaderboard username claim failed:', error.message);
+      message.textContent = 'Your quiz was saved, but the username could not be claimed. Try again.';
+    } else {
+      console.warn('Shared leaderboard read failed:', error.message);
+      message.textContent = 'Your quiz and username were saved, but the leaderboard could not be loaded. Try again.';
+    }
   }
 }
 

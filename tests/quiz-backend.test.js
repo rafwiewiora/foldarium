@@ -148,6 +148,10 @@ test('empty configuration disables remote persistence without loading Supabase',
   assert.equal(backend.startSession({ source: 'cameo', difficulty: 'easy' }), null);
   await backend.flush();
   await assert.rejects(
+    backend.flush({ strict: true }),
+    /persistence is unavailable/i,
+  );
+  await assert.rejects(
     backend.claimUsername('player_one'),
     /leaderboard persistence is unavailable/i,
   );
@@ -203,6 +207,115 @@ test('leaderboard RPC errors reject without creating a local fallback', async ()
   assert.deepEqual(storage.keys(), []);
 });
 
+test('strict flush rejects while retryable operations remain queued', async () => {
+  const warnings = await captureWarnings(async () => {
+    const { client, setFailing } = fakeSupabase();
+    const storage = memoryStorage();
+    setFailing(true);
+    const backend = createQuizBackend({
+      client,
+      storage,
+      uuid: sequenceUuid('session-id'),
+    });
+
+    backend.startSession({ source: 'cameo', difficulty: 'easy' });
+    await assert.rejects(
+      backend.flush({ strict: true }),
+      error => error.code === 'QUIZ_PERSISTENCE_INCOMPLETE'
+        && /remain queued/i.test(error.message),
+    );
+    assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncOpV2:')).length, 1);
+  });
+  assert.deepEqual(warnings, [['Quiz results remain queued:', 'write failed']]);
+});
+
+test('strict flush rejects when an operation is dead-lettered', async () => {
+  const { client, setErrors } = fakeSupabase();
+  const storage = memoryStorage();
+  setErrors({ message: 'row-level security rejected completion', status: 403, code: '42501' });
+  const backend = createQuizBackend({
+    client,
+    storage,
+    uuid: sequenceUuid('session-id'),
+  });
+
+  backend.startSession({ source: 'cameo', difficulty: 'easy' });
+  await backend.flush();
+  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncDeadV2:')).length, 1);
+  await assert.rejects(
+    backend.flush({ strict: true }),
+    error => error.code === 'QUIZ_PERSISTENCE_INCOMPLETE'
+      && /dead-lettered/i.test(error.message),
+  );
+  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncOpV2:')).length, 0);
+});
+
+test('deferred strict and leaderboard calls wait for attach after queued lifecycle replay', async () => {
+  assert.equal(
+    typeof quizBackendModule.createDeferredBackend,
+    'function',
+    'expected a testable deferred backend factory',
+  );
+  const events = [];
+  const deferred = quizBackendModule.createDeferredBackend({
+    uuid: () => 'session-id',
+  });
+  deferred.completeSession('session-id');
+
+  let strictSettled = false;
+  const strict = deferred.flush({ strict: true }).finally(() => { strictSettled = true; });
+  const claim = deferred.claimUsername('player_one');
+  const leaderboard = deferred.getLeaderboard();
+  await Promise.resolve();
+  assert.equal(strictSettled, false);
+  assert.deepEqual(events, []);
+
+  deferred.attach({
+    completeSession(sessionId) {
+      events.push(`complete:${sessionId}`);
+    },
+    async flush(options) {
+      events.push(`flush:${options.strict}`);
+    },
+    async claimUsername(username) {
+      events.push(`claim:${username}`);
+      return username;
+    },
+    async getLeaderboard() {
+      events.push('leaderboard');
+      return [];
+    },
+  });
+
+  assert.deepEqual(await Promise.all([strict, claim, leaderboard]), [
+    undefined,
+    'player_one',
+    [],
+  ]);
+  assert.equal(events[0], 'complete:session-id');
+  assert.ok(events.indexOf('complete:session-id') < events.indexOf('flush:true'));
+  assert.ok(events.indexOf('complete:session-id') < events.indexOf('claim:player_one'));
+  assert.ok(events.indexOf('complete:session-id') < events.indexOf('leaderboard'));
+});
+
+test('deferred strict and leaderboard calls reject after initialization failure', async () => {
+  assert.equal(
+    typeof quizBackendModule.createDeferredBackend,
+    'function',
+    'expected a testable deferred backend factory',
+  );
+  const deferred = quizBackendModule.createDeferredBackend();
+  const strict = deferred.flush({ strict: true });
+  const claim = deferred.claimUsername('player_one');
+  const leaderboard = deferred.getLeaderboard();
+
+  deferred.fail(new Error('Supabase config failed to load'));
+
+  await assert.rejects(strict, /persistence initialization failed.*Supabase config/i);
+  await assert.rejects(claim, /persistence initialization failed.*Supabase config/i);
+  await assert.rejects(leaderboard, /persistence initialization failed.*Supabase config/i);
+});
+
 test('configured initialization returns immediately and acquires the remote client only for queued work', async () => {
   const { client } = fakeSupabase();
   let acquisitions = 0;
@@ -255,6 +368,7 @@ test('quiz application loading does not await persistence startup', async () => 
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(html, /window\.foldariumBackend = createDeferredBackend\(\);/);
   assert.match(html, /window\.foldariumBackend\.attach\(initQuizBackend/);
+  assert.match(html, /window\.foldariumBackend\.fail\(e\);/);
   assert.match(html, /void initPersistence\(\);\s*await loadScript\('app\.js'\);/);
   assert.doesNotMatch(html, /await initQuizBackend/);
 });
@@ -264,6 +378,20 @@ test('dev mode disables every remote research lifecycle call', async () => {
   assert.match(app, /const researchBackend = \(\) => DEV \? null : window\.foldariumBackend;/);
   assert.equal((app.match(/researchBackend\(\)\?\./g) || []).length, 3);
   assert.doesNotMatch(app, /window\.foldariumBackend\?\./);
+});
+
+test('completion strictly persists before loading rankings and distinguishes failure stages', async () => {
+  const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+  const strictFlush = app.indexOf('await backend.flush({ strict: true });');
+  const usernameClaim = app.indexOf('await backend.claimUsername(username);');
+  const leaderboardRead = app.indexOf('await backend.getLeaderboard();');
+  assert.ok(strictFlush >= 0, 'expected strict completion persistence');
+  assert.ok(strictFlush < usernameClaim);
+  assert.ok(usernameClaim < leaderboardRead);
+  assert.ok(app.includes('pattern="[A-Za-z0-9_\\\\-]+"'));
+  assert.match(app, /Quiz results could not be saved/);
+  assert.match(app, /username could not be claimed/);
+  assert.match(app, /leaderboard could not be loaded/);
 });
 
 test('configured initialization uses the publishable key', async () => {

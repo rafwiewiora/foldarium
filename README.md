@@ -21,11 +21,16 @@ To enable remote quiz-result persistence:
 1. Create a Supabase project.
 2. Enable anonymous sign-ins under Auth providers.
 3. Apply `supabase/migrations/20260805180000_create_quiz_results.sql`.
-4. Put the project URL and browser-safe publishable key in `supabase-config.js`; do not use credentials intended for privileged server-side access.
-5. Before production, run live RLS checks with two anonymous accounts: verify own writes succeed, cross-user session updates and answer inserts fail, and answer updates/deletes fail. This is a required pre-production check.
-6. Deploy through the existing Vercel Git integration.
+4. Apply `supabase/migrations/20260806040000_add_shared_leaderboard.sql`.
+5. Put the project URL and browser-safe publishable key in `supabase-config.js`; do not use credentials intended for privileged server-side access.
+6. Before production, run live RLS checks with two anonymous accounts: verify own writes succeed, cross-user session updates and answer inserts fail, and answer updates/deletes fail. This is a required pre-production check.
+7. Deploy through the existing Vercel Git integration.
 
 Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.
+
+### Leaderboard score integrity
+
+The shared leaderboard is a privacy-safe aggregate, not a tamper-resistant scoring system. Existing RLS intentionally lets each authenticated anonymous client submit its own answer rows, including `picked_correct` and `af3_correct`; this task has no canonical server-side answer catalog from which to recompute those fields. The leaderboard hides raw answers and identifiers, but its scores should be treated as client-reported results for trusted research participants, not verified competitive rankings.
 
 ## Uploading structure files
 

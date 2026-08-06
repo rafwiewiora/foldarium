@@ -160,7 +160,9 @@
     <div id="gridview"><div id="gridcells"></div></div>
   </div>
 </div>
-<script>
+<script type="module">
+import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
+
 (function () {
   const PASS = 'deployquickly123';
   const KEY = 'poseQuizUnlocked';
@@ -171,44 +173,6 @@
   const err = document.getElementById('gate-err');
   let loading = false;
 
-  function createDeferredBackend() {
-    let target = null;
-    const pending = [];
-    const call = (method, args) => {
-      try {
-        if (target) return target[method](...args);
-        pending.push([method, args]);
-      } catch (e) {
-        console.warn('Quiz persistence event ignored:', e.message);
-      }
-    };
-    return {
-      startSession(values) {
-        try {
-          const id = crypto.randomUUID();
-          call('startSession', [{ ...values, id }]);
-          return id;
-        } catch {
-          return null;
-        }
-      },
-      recordAnswer: (...args) => { call('recordAnswer', args); },
-      completeSession: (...args) => { call('completeSession', args); },
-      flush: () => target?.flush() || Promise.resolve(),
-      async claimUsername(...args) {
-        if (!target) throw new Error('Leaderboard persistence is unavailable.');
-        return target.claimUsername(...args);
-      },
-      async getLeaderboard() {
-        if (!target) throw new Error('Leaderboard persistence is unavailable.');
-        return target.getLeaderboard();
-      },
-      attach(backend) {
-        target = backend;
-        for (const [method, args] of pending.splice(0)) call(method, args);
-      },
-    };
-  }
   window.foldariumBackend = createDeferredBackend();
 
   function loadScript(src) {
@@ -223,12 +187,10 @@
 
   async function initPersistence() {
     try {
-      const [, { initQuizBackend }] = await Promise.all([
-        loadScript('supabase-config.js'),
-        import('./quiz-backend.js'),
-      ]);
+      await loadScript('supabase-config.js');
       window.foldariumBackend.attach(initQuizBackend(window.FOLDARIUM_SUPABASE || {}));
     } catch (e) {
+      window.foldariumBackend.fail(e);
       console.warn('Remote quiz persistence disabled:', e.message);
     }
   }
