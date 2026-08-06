@@ -530,6 +530,17 @@ function showIntro() {
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
+function hardSessionQuotas(size, mix) {
+  const entries = Object.entries(mix).map(([bucket, fraction], index) => {
+    const exact = size * fraction;
+    return { bucket, count: Math.floor(exact), remainder: exact % 1, index };
+  });
+  const quotas = Object.fromEntries(entries.map(entry => [entry.bucket, entry.count]));
+  const remaining = size - entries.reduce((total, entry) => total + entry.count, 0);
+  entries.sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+  for (const entry of entries.slice(0, remaining)) quotas[entry.bucket] += 1;
+  return quotas;
+}
 function drawSession() {
   const pool = filteredPool();
   if (DEV) return shuffle(pool.slice());
@@ -537,8 +548,9 @@ function drawSession() {
   const by = { 'game-able': [], 'all-wrong': [], 'all-correct': [] };
   for (const it of shuffle(pool.slice())) if (by[it.bucket]) by[it.bucket].push(it);
   const picked = [], used = new Set();
-  for (const bucket in HARD_MIX)
-    for (const item of by[bucket].slice(0, Math.round(SESSION_SIZE * HARD_MIX[bucket]))) { picked.push(item); used.add(item); }
+  const quotas = hardSessionQuotas(SESSION_SIZE, HARD_MIX);
+  for (const bucket in quotas)
+    for (const item of by[bucket].slice(0, quotas[bucket])) { picked.push(item); used.add(item); }
   if (picked.length < SESSION_SIZE)
     for (const item of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(item)) { picked.push(item); used.add(item); } }
   return shuffle(picked).slice(0, SESSION_SIZE);
