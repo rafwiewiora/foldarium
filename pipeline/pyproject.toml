@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "foldarium-pipeline"
+version = "0.1.0"
+description = "Portable, method-neutral prediction pipeline for Foldarium"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+foldarium-pipeline = "foldarium_pipeline.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/foldarium_pipeline"]
