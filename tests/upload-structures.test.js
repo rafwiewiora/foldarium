@@ -76,6 +76,40 @@ test('creates a missing public structures bucket', async () => {
   });
 });
 
+test('redacts credentials from bucket setup errors', async () => {
+  const key = 'bucket-secret';
+
+  await assert.rejects(
+    ensurePublicBucket({
+      fetchImpl: async () => response(500, `lookup failed: ${key}`),
+      url: 'https://project.test',
+      key,
+    }),
+    (error) => {
+      assert.match(error.message, /\[redacted\]/);
+      assert.doesNotMatch(error.message, /bucket-secret/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    ensurePublicBucket({
+      fetchImpl: async (url, options = {}) => (
+        options.method === 'GET'
+          ? response(404)
+          : response(500, `creation failed: ${key}`)
+      ),
+      url: 'https://project.test',
+      key,
+    }),
+    (error) => {
+      assert.match(error.message, /\[redacted\]/);
+      assert.doesNotMatch(error.message, /bucket-secret/);
+      return true;
+    },
+  );
+});
+
 test('counts successful and existing uploads without failing', async () => {
   await withTempDirectory(async (rootDir) => {
     const uploadedPath = path.join(rootDir, 'pose-1.pdb');
@@ -88,9 +122,8 @@ test('counts successful and existing uploads without failing', async () => {
       return url.endsWith('pose-1.pdb')
         ? response(200)
         : response(409, JSON.stringify({
-          statusCode: '409',
-          error: 'Duplicate',
-          message: 'The resource already exists',
+          code: 'KeyAlreadyExists',
+          message: 'Object already exists',
         }));
     };
 
@@ -110,11 +143,49 @@ test('counts successful and existing uploads without failing', async () => {
       uploaded: 1,
       skipped: 1,
       failed: [],
-      failedDetails: [],
     });
     assert.equal(requests[0].headers['Content-Type'], 'chemical/x-pdb');
     assert.equal(requests[0].headers['cache-control'], 'max-age=31536000');
     assert.equal(requests[0].headers['x-upsert'], 'false');
+  });
+});
+
+test('retains legacy Supabase duplicate response compatibility', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const existingPath = path.join(rootDir, 'pose-2.pdb');
+    await writeFile(existingPath, 'ATOM 2\n');
+
+    const summary = await uploadStructures({
+      files: [{ absolutePath: existingPath, objectKey: 'data/A/pose-2.pdb' }],
+      fetchImpl: async () => response(409, JSON.stringify({
+        statusCode: '409',
+        error: 'Duplicate',
+        message: 'The resource already exists',
+      })),
+      url: 'https://project.test',
+      key: 'secret',
+    });
+
+    assert.deepEqual(summary, { uploaded: 0, skipped: 1, failed: [] });
+  });
+});
+
+test('skips a current Supabase ResourceAlreadyExists response', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const existingPath = path.join(rootDir, 'pose-3.pdb');
+    await writeFile(existingPath, 'ATOM 3\n');
+
+    const summary = await uploadStructures({
+      files: [{ absolutePath: existingPath, objectKey: 'data/A/pose-3.pdb' }],
+      fetchImpl: async () => response(409, JSON.stringify({
+        code: 'ResourceAlreadyExists',
+        message: 'Object already exists',
+      })),
+      url: 'https://project.test',
+      key: 'secret',
+    });
+
+    assert.deepEqual(summary, { uploaded: 0, skipped: 1, failed: [] });
   });
 });
 
@@ -123,15 +194,17 @@ test('does not classify a misleading server error as an existing object', async 
     const brokenPath = path.join(rootDir, 'broken.pdb');
     await writeFile(brokenPath, 'ATOM 1\n');
 
+    const diagnostics = [];
     const summary = await uploadStructures({
       files: [{ absolutePath: brokenPath, objectKey: 'data/A/broken.pdb' }],
       fetchImpl: async () => response(500, 'The resource already exists'),
       url: 'https://project.test',
       key: 'secret',
+      onFailure: (detail) => diagnostics.push(detail),
     });
 
     assert.deepEqual(summary.failed, ['data/A/broken.pdb']);
-    assert.deepEqual(summary.failedDetails, [{
+    assert.deepEqual(diagnostics, [{
       objectKey: 'data/A/broken.pdb',
       status: 500,
       message: 'The resource already exists',
@@ -150,6 +223,7 @@ test('reports failed object keys without stopping remaining uploads', async () =
       url.endsWith('broken.pdb') ? response(500, 'storage unavailable') : response(200)
     );
 
+    const diagnostics = [];
     const summary = await uploadStructures({
       files: [
         { absolutePath: goodPath, objectKey: 'data/A/good.pdb' },
@@ -160,18 +234,19 @@ test('reports failed object keys without stopping remaining uploads', async () =
       key: 'secret',
       overwrite: false,
       concurrency: 2,
+      onFailure: (detail) => diagnostics.push(detail),
     });
 
     assert.deepEqual(summary, {
       uploaded: 1,
       skipped: 0,
       failed: ['data/A/broken.pdb'],
-      failedDetails: [{
-        objectKey: 'data/A/broken.pdb',
-        status: 500,
-        message: 'storage unavailable',
-      }],
     });
+    assert.deepEqual(diagnostics, [{
+      objectKey: 'data/A/broken.pdb',
+      status: 500,
+      message: 'storage unavailable',
+    }]);
   });
 });
 
@@ -196,7 +271,6 @@ test('encodes object path components and honors overwrite', async () => {
       uploaded: 1,
       skipped: 0,
       failed: [],
-      failedDetails: [],
     });
     assert.equal(
       requests[0].url,
@@ -220,14 +294,45 @@ test('returns a nonzero CLI outcome with failed upload diagnostics', async () =>
       rootDir,
       fetchImpl: async (url, options = {}) => {
         if (options.method === 'GET') return response(200);
-        return response(500, 'storage unavailable');
+        return response(500, 'storage unavailable credential-that-must-not-log');
       },
       log: (message) => messages.push(message),
       error: (message) => messages.push(message),
     });
 
     assert.equal(exitCode, 1);
-    assert.match(messages.join('\n'), /data\/A\/broken\.pdb \(500\): storage unavailable/);
+    assert.match(messages.join('\n'), /data\/A\/broken\.pdb \(500\): storage unavailable \[redacted\]/);
     assert.doesNotMatch(messages.join('\n'), /credential-that-must-not-log/);
+  });
+});
+
+test('limits concurrent uploads to the requested bound', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const files = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const absolutePath = path.join(rootDir, `pose-${index}.pdb`);
+        await writeFile(absolutePath, 'ATOM\n');
+        return { absolutePath, objectKey: `data/A/pose-${index}.pdb` };
+      }),
+    );
+    let active = 0;
+    let maximumActive = 0;
+
+    const summary = await uploadStructures({
+      files,
+      fetchImpl: async () => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return response(200);
+      },
+      url: 'https://project.test',
+      key: 'secret',
+      concurrency: 2,
+    });
+
+    assert.deepEqual(summary, { uploaded: 5, skipped: 0, failed: [] });
+    assert.equal(maximumActive, 2);
   });
 });

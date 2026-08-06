@@ -51,9 +51,13 @@ export async function discoverPdbFiles(rootDir) {
   ));
 }
 
-async function responseError(response) {
+function redactCredential(message, key) {
+  return String(message).split(key).join('[redacted]');
+}
+
+async function responseError(response, key) {
   const message = (await response.text()).trim();
-  return `Storage request failed (${response.status})${message ? `: ${message}` : ''}`;
+  return `Storage request failed (${response.status})${message ? `: ${redactCredential(message, key)}` : ''}`;
 }
 
 export async function ensurePublicBucket({ fetchImpl, url, key }) {
@@ -61,22 +65,18 @@ export async function ensurePublicBucket({ fetchImpl, url, key }) {
   const bucketUrl = storageUrl(url, `/storage/v1/bucket/${BUCKET}`);
   const lookup = await fetchImpl(bucketUrl, { method: 'GET', headers });
   if (lookup.ok) return;
-  if (lookup.status !== 404) throw new Error(await responseError(lookup));
+  if (lookup.status !== 404) throw new Error(await responseError(lookup, key));
 
   const created = await fetchImpl(storageUrl(url, '/storage/v1/bucket'), {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: BUCKET, name: BUCKET, public: true }),
   });
-  if (!created.ok) throw new Error(await responseError(created));
+  if (!created.ok) throw new Error(await responseError(created, key));
 }
 
 function encodedObjectPath(objectKey) {
   return objectKey.split('/').map(encodeURIComponent).join('/');
-}
-
-function redactCredential(message, key) {
-  return String(message).split(key).join('[redacted]');
 }
 
 function parseStorageError(message) {
@@ -88,8 +88,9 @@ function parseStorageError(message) {
 }
 
 function isExistingObjectResponse(response, error) {
-  return response.status === 409
-    && error?.statusCode === '409'
+  if (response.status !== 409) return false;
+  if (['KeyAlreadyExists', 'ResourceAlreadyExists'].includes(error?.code)) return true;
+  return error?.statusCode === '409'
     && error.error === 'Duplicate'
     && typeof error.message === 'string'
     && /resource already exists/i.test(error.message);
@@ -133,8 +134,9 @@ export async function uploadStructures({
   key,
   overwrite = false,
   concurrency = DEFAULT_CONCURRENCY,
+  onFailure = () => {},
 }) {
-  const summary = { uploaded: 0, skipped: 0, failed: [], failedDetails: [] };
+  const summary = { uploaded: 0, skipped: 0, failed: [] };
   const limit = Math.max(1, Math.min(DEFAULT_CONCURRENCY, Number(concurrency) || DEFAULT_CONCURRENCY));
   let nextIndex = 0;
 
@@ -147,11 +149,11 @@ export async function uploadStructures({
         else if (result.outcome === 'skipped') summary.skipped += 1;
         else {
           summary.failed.push(file.objectKey);
-          summary.failedDetails.push({ objectKey: file.objectKey, ...result.detail });
+          onFailure({ objectKey: file.objectKey, ...result.detail });
         }
       } catch (error) {
         summary.failed.push(file.objectKey);
-        summary.failedDetails.push({
+        onFailure({
           objectKey: file.objectKey,
           status: null,
           message: redactCredential(error.message, key),
@@ -180,16 +182,18 @@ export async function runCli({
 
   const files = await discoverPdbFiles(rootDir);
   await ensurePublicBucket({ fetchImpl, url, key });
+  const failures = [];
   const summary = await uploadStructures({
     files,
     fetchImpl,
     url,
     key,
     overwrite: args.includes('--overwrite'),
+    onFailure: (failure) => failures.push(failure),
   });
   log(`Local: ${files.length}; uploaded: ${summary.uploaded}; skipped: ${summary.skipped}; failed: ${summary.failed.length}`);
   if (summary.failed.length) {
-    for (const failure of summary.failedDetails) {
+    for (const failure of failures) {
       error(`Failed: ${failure.objectKey} (${failure.status ?? 'request'}): ${failure.message}`);
     }
     return 1;

@@ -200,7 +200,7 @@ Upload each file with:
 ```text
 POST /storage/v1/object/structures/<encoded object path>
 Content-Type: chemical/x-pdb
-cache-control: 31536000
+cache-control: max-age=31536000
 x-upsert: true|false
 ```
 
