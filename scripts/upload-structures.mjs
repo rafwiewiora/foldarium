@@ -54,9 +54,13 @@ function redactCredential(message, key) {
   return String(message).split(key).join('[redacted]');
 }
 
+function responseErrorMessage(response, message, key) {
+  return `Storage request failed (${response.status})${message ? `: ${redactCredential(message, key)}` : ''}`;
+}
+
 async function responseError(response, key) {
   const message = (await response.text()).trim();
-  return `Storage request failed (${response.status})${message ? `: ${redactCredential(message, key)}` : ''}`;
+  return responseErrorMessage(response, message, key);
 }
 
 export async function ensurePublicBucket({ fetchImpl, url, key }) {
@@ -64,7 +68,13 @@ export async function ensurePublicBucket({ fetchImpl, url, key }) {
   const bucketUrl = storageUrl(url, `/storage/v1/bucket/${BUCKET}`);
   const lookup = await fetchImpl(bucketUrl, { method: 'GET', headers });
   if (lookup.ok) return;
-  if (lookup.status !== 404) throw new Error(await responseError(lookup, key));
+  if (lookup.status !== 404) {
+    const message = (await lookup.text()).trim();
+    const error = parseStorageError(message);
+    const missing = lookup.status === 400
+      && (error?.code === 'NoSuchBucket' || String(error?.statusCode) === '404');
+    if (!missing) throw new Error(responseErrorMessage(lookup, message, key));
+  }
 
   const created = await fetchImpl(storageUrl(url, '/storage/v1/bucket'), {
     method: 'POST',

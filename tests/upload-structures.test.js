@@ -76,6 +76,30 @@ test('creates a missing public structures bucket', async () => {
   });
 });
 
+test('creates the bucket for Supabase NoSuchBucket responses', async () => {
+  const requests = [];
+  await ensurePublicBucket({
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, ...options });
+      if (options.method === 'GET') {
+        return response(400, JSON.stringify({
+          statusCode: '404',
+          error: 'Bucket not found',
+          message: 'Bucket not found',
+          code: 'NoSuchBucket',
+        }));
+      }
+      return response(200);
+    },
+    url: 'https://project.test',
+    key: 'sb_secret_test',
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].url, 'https://project.test/storage/v1/bucket');
+  assert.equal(requests[1].method, 'POST');
+});
+
 test('uses a bearer header for legacy JWT service-role keys', async () => {
   let request;
   await ensurePublicBucket({
