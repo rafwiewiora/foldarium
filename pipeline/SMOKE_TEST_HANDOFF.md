@@ -412,7 +412,13 @@ openfold3  run_f04f63693b4a28984e0631f1
 
 The task payloads and staging script are generated build products; keep them out of the repository. The
 `modal-recipe://` image identity is smoke-only and must be replaced by an Artifact Registry OCI digest
-before GCP/production use. Bump the `core=` revision if the adapters change.
+before GCP/production use.
+
+Set `core=` to the revision actually being deployed: `_add_core` copies the whole `foldarium_pipeline`
+package into the image, so the deployed revision is part of the image's content identity even when the
+method adapters themselves did not change. Because `container_image` feeds the task hash, changing it
+changes both run IDs — regenerate the tasks and the staging script together, and stage them before
+deploying. The IDs above correspond to `core=7d34423`.
 
 ## Safe execution order
 
