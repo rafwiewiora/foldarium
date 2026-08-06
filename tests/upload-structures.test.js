@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-  discoverPdbFiles,
+  discoverStructureFiles,
   ensurePublicBucket,
   runCli,
   uploadStructures,
@@ -29,7 +29,7 @@ async function withTempDirectory(fn) {
   }
 }
 
-test('discovers only PDB files and preserves repository-relative keys', async () => {
+test('discovers only supported structure files and preserves repository-relative keys', async () => {
   await withTempDirectory(async (rootDir) => {
     await mkdir(path.join(rootDir, 'data/A'), { recursive: true });
     await mkdir(path.join(rootDir, 'data_rnp/B'), { recursive: true });
@@ -37,7 +37,7 @@ test('discovers only PDB files and preserves repository-relative keys', async ()
     await writeFile(path.join(rootDir, 'data/A/readme.txt'), 'not a structure\n');
     await writeFile(path.join(rootDir, 'data_rnp/B/protein.pdb'), 'ATOM\n');
 
-    const files = await discoverPdbFiles(rootDir);
+    const files = await discoverStructureFiles(rootDir);
 
     assert.deepEqual(files.map((file) => file.objectKey), [
       'data/A/pose-1.pdb',
@@ -47,6 +47,44 @@ test('discovers only PDB files and preserves repository-relative keys', async ()
       path.join(rootDir, 'data/A/pose-1.pdb'),
       path.join(rootDir, 'data_rnp/B/protein.pdb'),
     ]);
+  });
+});
+
+test('discovers benchmark PDB and CIF files with benchmark object keys and content types', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const benchmarkDir = path.join(rootDir, 'external-benchmark', 'demo');
+    await mkdir(path.join(benchmarkDir, 'systems/1ABC'), { recursive: true });
+    await mkdir(path.join(benchmarkDir, 'systems_rnp/2DEF'), { recursive: true });
+    await writeFile(path.join(benchmarkDir, 'systems/1ABC/pose.pdb'), 'ATOM\n');
+    await writeFile(path.join(benchmarkDir, 'systems_rnp/2DEF/xtal.cif'), 'data_test\n');
+    await writeFile(path.join(benchmarkDir, 'systems/1ABC/readme.txt'), 'ignored\n');
+
+    const files = await discoverStructureFiles(rootDir, benchmarkDir);
+
+    assert.deepEqual(
+      files.map(({ objectKey }) => objectKey),
+      [
+        'benchmark/demo/systems/1ABC/pose.pdb',
+        'benchmark/demo/systems_rnp/2DEF/xtal.cif',
+      ],
+    );
+
+    const requests = [];
+    const summary = await uploadStructures({
+      files,
+      fetchImpl: async (url, options) => {
+        requests.push({ url, ...options });
+        return response(200);
+      },
+      url: 'https://project.test',
+      key: 'secret',
+    });
+
+    assert.deepEqual(summary, { uploaded: 2, skipped: 0, failed: [] });
+    assert.deepEqual(
+      requests.map((request) => request.headers['Content-Type']).sort(),
+      ['chemical/x-cif', 'chemical/x-pdb'],
+    );
   });
 });
 
