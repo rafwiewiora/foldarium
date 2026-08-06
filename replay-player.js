@@ -76,8 +76,10 @@ export async function playViewerTrace(plugin, trace, {
 
     if (entry.kind === 'state') {
       await plugin.state.setSnapshot(entry.snapshot);
+      throwIfAborted(signal);
     } else {
       plugin.canvas3d.camera.setState(entry.camera, 250);
     }
   }
+  throwIfAborted(signal);
 }

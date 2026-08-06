@@ -36,6 +36,12 @@ function fakeAsyncClock() {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 const trace = {
   version: 1,
   molstar_version: '4.6.0',
@@ -94,6 +100,36 @@ test('stops playback when aborted', async () => {
 
   await assert.rejects(
     playViewerTrace(fakeReplayPlugin([]), trace, { signal: controller.signal }),
+    error => error.name === 'AbortError' && /aborted/i.test(error.message),
+  );
+});
+
+test('stops playback when aborted during the final state restore', async () => {
+  const stateRestore = deferred();
+  const stateStarted = deferred();
+  const controller = new AbortController();
+  const plugin = {
+    state: {
+      setSnapshot() {
+        stateStarted.resolve();
+        return stateRestore.promise;
+      },
+    },
+    canvas3d: { camera: { setState() {} } },
+  };
+  const finalStateTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{ t_ms: 0, kind: 'state', snapshot: { data: {} } }],
+  };
+
+  const playback = playViewerTrace(plugin, finalStateTrace, { signal: controller.signal });
+  await stateStarted.promise;
+  controller.abort();
+  stateRestore.resolve();
+
+  await assert.rejects(
+    playback,
     error => error.name === 'AbortError' && /aborted/i.test(error.message),
   );
 });

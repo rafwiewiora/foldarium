@@ -205,6 +205,8 @@
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
       await import('./structure-assets.js');
+      const rebuildModule = await import('./one-pose-rebuild.js');
+      window.createExclusiveViewerRebuild = rebuildModule.createExclusiveViewerRebuild;
       try {
         const module = await import('./viewer-trace.js');
         window.createViewerTraceRecorder = module.createViewerTraceRecorder;

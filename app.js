@@ -32,6 +32,7 @@ let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
 let viewerTraceRecorder = null;
+let onePoseRebuild = null;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -312,9 +313,15 @@ function startQuiz() {
   loadQuestion(0);
 }
 
-function onPick(k) {
-  if (locked()) return;
-  if (cur.revealed) { if (k !== 'none' && displayMode === 'one') { shownOne = k; buildLayer(); } return; }  // my-view: navigate, don't re-vote
+async function onPick(k) {
+  if (locked() || onePoseRebuild?.pending) return;
+  if (cur.revealed) {
+    if (k !== 'none' && displayMode === 'one') {
+      shownOne = k;
+      await onePoseRebuild.run();
+    }
+    return;
+  }  // my-view: navigate, don't re-vote
   if (k === 'none') {
     cur.selected = { none: true, correct: !cur.item.has_correct, label: 'None of these' };
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
@@ -323,11 +330,17 @@ function onPick(k) {
   }
   cur.selected = visibleChoices()[k];
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
-  $('#lock').disabled = false;
-  if (displayMode === 'one') { shownOne = k; buildLayer(); }
+  if (displayMode === 'one') {
+    shownOne = k;
+    $('#lock').disabled = true;
+    await onePoseRebuild.run();
+  } else {
+    $('#lock').disabled = false;
+  }
 }
 
 async function reveal() {
+  if (onePoseRebuild?.pending) return;
   if (cur.selected == null || cur.revealed) return;
   const viewerTrace = viewerTraceRecorder?.stop() ?? null;
   cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
@@ -471,6 +484,13 @@ function finish() {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
+  onePoseRebuild = window.createExclusiveViewerRebuild({
+    rebuild: buildLayer,
+    setBusy(busy) {
+      if (busy) $('#lock').disabled = true;
+      else if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
+    },
+  });
   if (!DEV && typeof window.createViewerTraceRecorder === 'function') {
     try {
       viewerTraceRecorder = window.createViewerTraceRecorder({ plugin });
@@ -518,26 +538,28 @@ async function init() {
     difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
   });
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
-    if (locked()) return;
+    if (locked() || onePoseRebuild?.pending) return;
     displayMode = b.dataset.m; if (displayMode === 'one') shownOne = 0;
     if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
-    syncButtons(); await buildLayer();
+    syncButtons(); await onePoseRebuild.run();
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
+    if (locked() || onePoseRebuild?.pending) return;
     proteinMode = b.dataset.p;
     if (!cur.revealed) rememberView();
-    syncButtons(); await buildLayer();
+    syncButtons(); await onePoseRebuild.run();
   });
   $('#uncluster').onclick = async () => {
-    if (locked()) return;
+    if (locked() || onePoseRebuild?.pending) return;
     clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
     if (!cur.revealed) rememberView();
-    syncButtons(); await buildLayer(); renderUI();
+    syncButtons(); await onePoseRebuild.run(); renderUI();
   };
   $('#hbonds').onclick = async () => {
+    if (locked() || onePoseRebuild?.pending) return;
     showHbonds = !showHbonds;
     if (!cur.revealed) rememberView();       // persist across questions like the other view choices
-    syncButtons(); await buildLayer();
+    syncButtons(); await onePoseRebuild.run();
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;
@@ -550,10 +572,10 @@ async function init() {
       if (e.key === 'ArrowUp') { e.preventDefault(); prevDev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); nextDev(); return; }
     }
-    if (!cur || locked() || displayMode !== 'one') return;
+    if (!cur || locked() || onePoseRebuild?.pending || displayMode !== 'one') return;
     const n = visibleChoices().length;
-    if (e.key === 'ArrowRight') { shownOne = (shownOne + 1) % n; await buildLayer(); }
-    if (e.key === 'ArrowLeft') { shownOne = (shownOne - 1 + n) % n; await buildLayer(); }
+    if (e.key === 'ArrowRight') { shownOne = (shownOne + 1) % n; await onePoseRebuild.run(); }
+    if (e.key === 'ArrowLeft') { shownOne = (shownOne - 1 + n) % n; await onePoseRebuild.run(); }
   });
   if (!POOLS.cameo.length && !POOLS.rnp.length) { $('#ligand').textContent = 'no quiz items'; return; }
   showIntro();
