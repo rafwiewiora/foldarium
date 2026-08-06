@@ -4,8 +4,9 @@
 // Reuses the viewer's Mol* setup + its proven delete-and-rebuild pattern. Pose carbons are coloured by a
 // NON-semantic per-cluster palette (random each question) only for identification — never correctness.
 
-const PALETTE = [0x5B8FF9, 0xF6BD16, 0x9270CA, 0x5AD8A6, 0xE8964A, 0x6DC8EC];
-const LABELS = ['A', 'B', 'C', 'D', 'E', 'F'];
+const PALETTE = [0x5B8FF9, 0xF6BD16, 0x9270CA, 0x5AD8A6, 0xE8964A, 0x6DC8EC,
+  0xFF99C3, 0x8C6D31, 0xB5BD61, 0x17BECF, 0xBC80BD, 0xFDB462, 0x80B1D3, 0xFCCDE5, 0xB3DE69];
+const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 // Co-folding method display names — shown ONLY on the answer reveal (methods are anonymised during play).
 const METHOD_NAMES = { af3: 'AF3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
@@ -17,6 +18,7 @@ const HEAVY_MIN = 15;   // drop tiny-fragment ligands (< 15 heavy atoms) — kee
 // all-correct ensembles are a Hard positive-control (catch over-"none"), NOT the main event — cap them so
 // they stay a sprinkle instead of flooding Hard with easy wins. Tunable: max fraction of the rest of the pool.
 const ALLCORRECT_MAX_FRAC = 0.2;
+const HARD_MIX = { 'game-able': 0.40, 'all-wrong': 0.45, 'all-correct': 0.15 };
 
 const OPTS = {
   layoutIsExpanded: false, layoutShowControls: false, layoutShowRemoteState: false,
@@ -36,6 +38,8 @@ let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
+let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
+let stopGridCameraSync = null, stopGridLayout = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
@@ -59,18 +63,18 @@ function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
     '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #lock, '
-    + '#next, #prev, #myview, #showXtal, #start',
+    + '#next, #prev, #myview, #showXtal, #start, #gridpages button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
     $('#lock').disabled = revealRequested || cur.selected == null;
   }
 }
 
-async function loadStruct(url, format) {
-  const data = await plugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
-  const traj = await plugin.builders.structure.parseTrajectory(data, format);
-  const model = await plugin.builders.structure.createModel(traj);
-  const struct = await plugin.builders.structure.createStructure(model);
+async function loadStruct(url, format, targetPlugin = plugin) {
+  const data = await targetPlugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
+  const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
+  const model = await targetPlugin.builders.structure.createModel(traj);
+  const struct = await targetPlugin.builders.structure.createStructure(model);
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
@@ -79,26 +83,26 @@ async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose in
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
 const atomRecords = t => t.split('\n').filter(l => /^(ATOM|HETATM|TER)/.test(l)).join('\n');
-async function addRep(struct, selector, type, color, alpha = 1) {
-  const comp = await plugin.builders.structure.tryCreateComponentStatic(struct, selector);
+async function addRep(struct, selector, type, color, alpha = 1, targetPlugin = plugin) {
+  const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, selector);
   if (!comp) return null;
-  return plugin.builders.structure.representation.addRepresentation(comp, {
+  return targetPlugin.builders.structure.representation.addRepresentation(comp, {
     type, typeParams: { alpha }, color: 'uniform', colorParams: { value: color },
   });
 }
-async function addPose(struct, carbon) {
-  let comp = await plugin.builders.structure.tryCreateComponentStatic(struct, 'ligand');
-  if (!comp) comp = await plugin.builders.structure.tryCreateComponentStatic(struct, 'all');
+async function addPose(struct, carbon, targetPlugin = plugin) {
+  let comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'ligand');
+  if (!comp) comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return null;
-  return plugin.builders.structure.representation.addRepresentation(comp, {
+  return targetPlugin.builders.structure.representation.addRepresentation(comp, {
     type: 'ball-and-stick', typeParams: { sizeFactor: 0.24 },
     color: 'element-symbol', colorParams: { carbonColor: { name: 'uniform', params: { value: carbon } } },
   });
 }
-async function addSticks(struct, sizeFactor, alpha) {        // pocket residues — default element colours
-  const comp = await plugin.builders.structure.tryCreateComponentStatic(struct, 'all');
+async function addSticks(struct, sizeFactor, alpha, targetPlugin = plugin) {
+  const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return null;
-  return plugin.builders.structure.representation.addRepresentation(comp, {
+  return targetPlugin.builders.structure.representation.addRepresentation(comp, {
     type: 'ball-and-stick', typeParams: { sizeFactor, alpha }, color: 'element-symbol',
   });
 }
@@ -107,6 +111,189 @@ function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.fl
 // ---- visible-choice logic --------------------------------------------------------------------
 function visibleChoices() {
   return clustered ? cur.clusters.map(c => c.rep) : cur.clusters.flatMap(c => c.members);
+}
+
+function configurePlugin(targetPlugin) {
+  try {
+    targetPlugin.canvas3d?.setProps({
+      camera: { manualReset: true }, cameraResetDurationMs: 0,
+      renderer: { backgroundColor: 0xffffff },
+    });
+  } catch (e) {}
+}
+const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
+function focusLigandSpheres(targetPlugin, spheres) {
+  const valid = spheres.filter(Boolean);
+  if (!valid.length || !targetPlugin?.canvas3d) return false;
+  targetPlugin.managers.camera.focusSpheres(valid, sphere => sphere,
+    { minRadius: 8, extraRadius: 4, durationMs: 0 });
+  return true;
+}
+function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function gridPageMethod() {
+  const methods = cur?.gridMethods || [];
+  if (!methods.length) return null;
+  gridMethodIndex = Math.min(gridMethodIndex, methods.length - 1);
+  return methods[gridMethodIndex];
+}
+function gridEntriesFor(method) {
+  const vis = visibleChoices();
+  if (!method) return vis.map((choice, choiceIndex) => {
+    const cluster = cur.clusters.find(c => c.members.includes(choice));
+    return { choice, choiceIndex, cluster, memberCount: clustered ? cluster.members.length : 1 };
+  });
+  if (!clustered) return vis.map((choice, choiceIndex) => ({ choice, choiceIndex,
+    cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }))
+    .filter(x => x.choice._method === method);
+  return cur.clusters.map((cluster, choiceIndex) => {
+    const members = cluster.members.filter(c => c._method === method);
+    const choice = members.find(c => c.is_rep) || members[0];
+    return choice ? { choice, choiceIndex, cluster, memberCount: members.length } : null;
+  }).filter(Boolean);
+}
+function gridEntries() { return gridEntriesFor(gridPageMethod()); }
+function allGridEntries() {
+  const methods = cur?.gridMethods || [];
+  return methods.length ? methods.flatMap(gridEntriesFor) : gridEntriesFor(null);
+}
+function gridChoiceSelected(choice) {
+  if (!cur?.selected || cur.selected.none) return false;
+  return cur.selectionExact ? sameChoice(choice, cur.selected) : choice.cluster === cur.selected.cluster;
+}
+function syncGridSelection() {
+  for (const cell of gridViewers) cell.card?.classList.toggle('selected', gridChoiceSelected(cell.entry.choice));
+}
+function renderGridPages() {
+  const nav = $('#gridpages'), methods = cur?.gridMethods || [];
+  if (!cur || displayMode !== 'grid' || methods.length < 2) { nav.style.display = 'none'; nav.innerHTML = ''; return; }
+  nav.style.display = ''; nav.innerHTML = '';
+  methods.forEach((method, i) => {
+    const b = document.createElement('button');
+    b.classList.toggle('on', i === gridMethodIndex);
+    b.textContent = cur.showAnswer ? methodName(method) : `Set ${i + 1}`;
+    b.onclick = async () => {
+      if (i === gridMethodIndex || interactionBlocked()) return;
+      gridMethodIndex = i; renderGridPages(); renderUI();
+      await viewerRebuild.enqueue(() => {}, () => buildGrid());
+    };
+    nav.appendChild(b);
+  });
+}
+function gridProteinUrls(choice, spec) {
+  const item = spec.item;
+  if (spec.proteinMode === 'af3' && item.afprotein_ref) {
+    return { prot: choice.afprotein_file || item.afprotein_ref,
+      pocket: choice.afpocket_file || item.afpocket_union, color: AF3PROT };
+  }
+  return { prot: item.protein_file, pocket: item.pocket_file, color: PROT };
+}
+function gridHeader(entry) {
+  const c = entry.choice, answer = cur.revealed && cur.showAnswer;
+  const bits = [];
+  if (clustered && entry.memberCount > 1) bits.push(`${entry.memberCount} poses`);
+  if (answer) {
+    bits.push(`${c.rmsd.toFixed(2)} Å`);
+    if (cur.item.source === 'rnp' && c._method) bits.push(methodName(c._method));
+    if (gridChoiceSelected(c)) bits.push('YOU');
+    if (c.af3_sample === cur.item.plddt_pick_sample) bits.push('AI');
+  }
+  const color = answer ? (c.correct ? GOOD : BAD) : c.color;
+  return `<span class="grid-dot" style="background:${hex(color)}"></span><span>Pose ${c.label}</span>`
+    + (bits.length ? `<span class="grid-meta">· ${bits.join(' · ')}</span>` : '');
+}
+function disposeGridViewers() {
+  if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
+  if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
+  for (const cell of gridViewers) { cell.disposed = true; try { cell.viewer?.dispose(); } catch (e) {} }
+  gridViewers = []; $('#gridcells').replaceChildren();
+}
+function layoutGrid() {
+  const view = $('#gridview'), box = $('#gridcells'), n = gridViewers.length;
+  if (!n || !view.classList.contains('on')) return;
+  const width = view.clientWidth - 20, height = view.clientHeight - 20, gap = 10, aspect = 4 / 3;
+  let best = null;
+  for (let columns = 1; columns <= n; columns++) {
+    const rows = Math.ceil(n / columns);
+    const tileWidth = Math.min((width - gap * (columns - 1)) / columns, (height - gap * (rows - 1)) / rows * aspect);
+    if (!best || tileWidth > best.tileWidth) best = { tileWidth, tileHeight: tileWidth / aspect };
+  }
+  if (!best || best.tileWidth <= 0) return;
+  box.style.setProperty('--grid-card-w', `${Math.floor(best.tileWidth * 10) / 10}px`);
+  box.style.setProperty('--grid-card-h', `${Math.floor(best.tileHeight * 10) / 10}px`);
+  for (const cell of gridViewers) cell.viewer?.handleResize?.();
+}
+function startGridLayout() {
+  const observer = new ResizeObserver(layoutGrid);
+  observer.observe($('#gridview')); layoutGrid();
+  stopGridLayout = () => observer.disconnect();
+}
+function hideGrid() {
+  gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid'); renderGridPages();
+}
+function syncGridCameras(cells) {
+  let enabled = true, raf = 0, last = cells.map(cell => JSON.stringify(cell.plugin.canvas3d.camera.getSnapshot()));
+  const tick = () => {
+    if (!enabled) return;
+    const snapshots = cells.map(cell => cell.plugin.canvas3d?.camera.getSnapshot());
+    const source = snapshots.findIndex((snapshot, i) => snapshot && JSON.stringify(snapshot) !== last[i]);
+    if (source >= 0) {
+      const snapshot = snapshots[source];
+      for (let i = 0; i < cells.length; i++) if (i !== source && cells[i].plugin.canvas3d) cells[i].plugin.canvas3d.camera.setState(snapshot, 0);
+      try { plugin.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+      last = cells.map(cell => JSON.stringify(cell.plugin.canvas3d.camera.getSnapshot()));
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+  return () => { enabled = false; cancelAnimationFrame(raf); };
+}
+async function buildGridCell(cell, revision) {
+  try {
+    const gridViewer = await molstar.Viewer.create(cell.host, { ...OPTS, extensions: [] });
+    cell.viewer = gridViewer; cell.plugin = gridViewer.plugin;
+    if (revision !== gridBuildRevision || cell.disposed) return gridViewer.dispose();
+    configurePlugin(cell.plugin);
+    const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
+    const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
+    await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+    if (urls.pocket) { const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin); await addSticks(ps.struct, 0.16, 0.95, cell.plugin); }
+    const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
+    await addPose(pose.struct, cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color, cell.plugin);
+    cell.poseSphere = structureSphere(pose.struct);
+    if (revision === gridBuildRevision && !cell.disposed) { cell.viewer.handleResize?.(); cell.plugin.canvas3d.requestCameraReset(); }
+  } catch (e) {
+    try { cell.viewer?.dispose(); } catch (_) {}
+    cell.viewer = null; cell.plugin = null;
+    if (!cell.disposed && revision === gridBuildRevision) cell.host.innerHTML = `<div class="grid-error">Could not load this pose viewer.<br>${e.message}</div>`;
+  }
+}
+async function buildGrid(preserveCamera = true) {
+  const previousCamera = preserveCamera ? gridViewers.find(cell => cell.plugin?.canvas3d)?.plugin.canvas3d.camera.getSnapshot() : null;
+  const revision = ++gridBuildRevision;
+  disposeGridViewers();
+  const view = $('#gridview'), cellsBox = $('#gridcells');
+  view.classList.add('on', 'loading-grid'); renderGridPages();
+  const cells = gridEntries().map(entry => {
+    const card = document.createElement('div');
+    card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (entry.choice.correct ? ' correct' : ' wrong') : '');
+    const head = document.createElement('button');
+    head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry); head.disabled = locked();
+    head.onclick = () => { if (!locked()) onPick(entry.choiceIndex, entry.choice); };
+    const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
+    return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
+      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer } };
+  });
+  gridViewers = cells; startGridLayout(); syncGridSelection();
+  await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
+  if (revision !== gridBuildRevision) return;
+  const active = cells.filter(cell => cell.plugin?.canvas3d);
+  if (active.length) {
+    const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
+    for (const cell of active) cell.plugin.canvas3d.camera.setState(snapshot, 0);
+    try { plugin.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+    stopGridCameraSync = syncGridCameras(active);
+  }
+  view.classList.remove('loading-grid'); syncGridSelection();
 }
 
 // ---- camera persistence (viewer pattern): keep the view while scrolling poses --------------------
@@ -171,7 +358,7 @@ async function buildHbonds(poseUrls) {
   if (!comp) return;
   await plugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
 }
-async function buildLayer() {           // only the moving ligand poses (+ crystal truth on reveal)
+async function buildSingleLayer() {
   saveCam();
   await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
@@ -195,9 +382,20 @@ async function buildLayer() {           // only the moving ligand poses (+ cryst
   restoreCam();
   viewerTraceRecorder?.captureState();
 }
+async function buildLayer() {
+  if (displayMode === 'grid') return buildGrid();
+  if ($('#gridview').classList.contains('on')) {
+    gridBuildRevision++;
+    try { return await buildSingleLayer(); }
+    finally { hideGrid(); }
+  }
+  hideGrid();
+  return buildSingleLayer();
+}
 
 async function loadQuestion(i) {
   const item = ITEMS[i];
+  $('#stage').classList.add('loading-system');
   // build cluster objects in shuffled order, colour per cluster
   const byCluster = {};
   item.choices.forEach(c => (byCluster[c.cluster] ??= []).push({ ...c }));
@@ -210,7 +408,10 @@ async function loadQuestion(i) {
     async () => {
       viewerTraceRecorder?.stop();
       idx = i;
-      cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
+      const gridMethods = item.source === 'rnp'
+        ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : [];
+      cur = { item, clusters, gridMethods, selected: null, selectionExact: false, answerChoices: [], revealed: false, showAnswer: false };
+      gridMethodIndex = 0;
       // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
       applyUserView();
       shownOne = 0;
@@ -228,6 +429,7 @@ async function loadQuestion(i) {
       });
       viewerTraceRecorder?.start();
       renderUI();
+      requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
     },
   );
 }
@@ -237,17 +439,24 @@ function renderUI() {
                                    : `question ${idx + 1} / ${ITEMS.length}`;
   $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${cur.clusters.length} distinct pose clusters</small>`;
   const box = $('#choices'); box.innerHTML = '';
-  visibleChoices().forEach((c, k) => {
+  const uiEntries = displayMode === 'grid'
+    ? gridEntries()
+    : visibleChoices().map((choice, choiceIndex) => ({ choice, choiceIndex,
+      cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }));
+  uiEntries.forEach(entry => {
+    const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');
     b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
     let nm;
     if (clustered) {
-      const cl = cur.clusters[k];
-      nm = `Pose ${cl.label}` + (cl.members.length > 1
-        ? ` <span style="color:var(--faint)">(${cl.members.length} poses)</span>` : '');
+      const cl = entry.cluster;
+      const label = displayMode === 'grid' ? c.label : cl.label;
+      const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
+      nm = `Pose ${label}` + (count > 1
+        ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
     } else nm = `Pose ${c.label}`;
     b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
-    b.onclick = () => onPick(k);
+    b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
     box.appendChild(b);
   });
   if (difficulty === 'hard') {                          // the detect-game option
@@ -259,7 +468,11 @@ function renderUI() {
   }
   if (cur.selected) {                                   // keep the player's pick highlighted
     if (cur.selected.none) box.querySelector('.choice.none')?.classList.add('sel');
-    else { const vis = visibleChoices(); const k = vis.findIndex(c => c.cluster === cur.selected.cluster); if (k >= 0) document.querySelectorAll('.choice')[k]?.classList.add('sel'); }
+    else {
+      const k = uiEntries.findIndex(entry => cur.selectionExact
+        ? sameChoice(entry.choice, cur.selected) : entry.choice.cluster === cur.selected.cluster);
+      if (k >= 0) box.querySelectorAll('.choice')[k]?.classList.add('sel');
+    }
   }
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
@@ -284,7 +497,7 @@ function renderDevNav() {
 // Hard = everything: game-able + all-wrong + all-correct (all-correct excluded from Easy — a pick with
 // no wrong answer is no puzzle; it belongs in Hard as the positive control for the "none of these" call).
 function filteredPool() {
-  return POOLS[quizSource].filter(it => difficulty === 'hard' ? true : it.bucket === 'game-able');
+  return POOLS[quizSource].filter(it => difficulty === 'hard' ? true : it.bucket === 'game-able' && it.easyPlayable);
 }
 
 function showIntro() {
@@ -317,13 +530,25 @@ function showIntro() {
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
+function drawSession() {
+  const pool = filteredPool();
+  if (DEV) return shuffle(pool.slice());
+  if (difficulty !== 'hard') return shuffle(pool.slice()).slice(0, SESSION_SIZE);
+  const by = { 'game-able': [], 'all-wrong': [], 'all-correct': [] };
+  for (const it of shuffle(pool.slice())) if (by[it.bucket]) by[it.bucket].push(it);
+  const picked = [], used = new Set();
+  for (const bucket in HARD_MIX)
+    for (const item of by[bucket].slice(0, Math.round(SESSION_SIZE * HARD_MIX[bucket]))) { picked.push(item); used.add(item); }
+  if (picked.length < SESSION_SIZE)
+    for (const item of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(item)) { picked.push(item); used.add(item); } }
+  return shuffle(picked).slice(0, SESSION_SIZE);
+}
 function startQuiz() {
   remoteSessionId = researchBackend()?.startSession({
     source: quizSource,
     difficulty,
   }) ?? null;
-  ITEMS = DEV ? shuffle(filteredPool().slice())              // dev: browse the WHOLE filtered pool, no 30 cap
-              : shuffle(filteredPool().slice()).slice(0, SESSION_SIZE);
+  ITEMS = drawSession();
   if (quizSource === 'rnp') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';
@@ -332,8 +557,9 @@ function startQuiz() {
   loadQuestion(0);
 }
 
-async function onPick(k) {
+async function onPick(k, exactChoice = null) {
   if (interactionBlocked()) return;
+  const answerChoices = displayMode === 'grid' ? allGridEntries().map(entry => entry.choice) : visibleChoices();
   if (k !== 'none' && displayMode === 'one') {
     const selected = cur.revealed ? null : visibleChoices()[k];
     await viewerRebuild.enqueue(() => {
@@ -347,13 +573,18 @@ async function onPick(k) {
   }
   if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
   if (k === 'none') {
-    cur.selected = { none: true, correct: !cur.item.has_correct, label: 'None of these' };
+    cur.selected = { none: true, correct: !answerChoices.some(c => c.correct), label: 'None of these' };
+    cur.selectionExact = displayMode === 'grid' || !clustered;
+    cur.answerChoices = answerChoices;
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
     $('#lock').disabled = false;
     return;
   }
-  cur.selected = visibleChoices()[k];
+  cur.selected = exactChoice || visibleChoices()[k];
+  cur.selectionExact = !!exactChoice || !clustered;
+  cur.answerChoices = answerChoices;
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+  syncGridSelection();
   $('#lock').disabled = false;
 }
 
@@ -373,15 +604,19 @@ async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
   const viewerTrace = viewerTraceRecorder?.stop() ?? null;
   await viewerRebuild.enqueue(() => {
-    cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
+    const keepGrid = displayMode === 'grid';
+    cur.revealed = true; cur.showAnswer = true;
+    if (!keepGrid) { displayMode = 'all'; clustered = false; }
+    syncButtons();
   });
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = !!picked.correct, af3Right = !!(af3 && af3.correct);
   score.n++; score.you += youRight; score.af3 += af3Right;
-  const nClu = cur.clusters.length, nCorrectClu = cur.clusters.filter(c => c.rep.correct).length;
-  const opts = nClu + (difficulty === 'hard' ? 1 : 0);                 // include the "none" option
-  score.randExp += (cur.item.has_correct ? nCorrectClu : (difficulty === 'hard' ? 1 : 0)) / opts;
+  const answerChoices = cur.answerChoices.length ? cur.answerChoices : cur.clusters.map(c => c.rep);
+  const nCorrect = answerChoices.filter(c => c.correct).length;
+  const opts = answerChoices.length + (difficulty === 'hard' ? 1 : 0);
+  score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealList(picked, af3);
   $('#lock').style.display = 'none';
   const youMsg = picked.none
@@ -409,7 +644,10 @@ async function toggleAnswer() {
   await viewerRebuild.enqueue(
     () => {
       cur.showAnswer = !cur.showAnswer;
-      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      if (cur.showAnswer) {
+        if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
+        else { clustered = false; displayMode = 'all'; }
+      }
       else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
       syncButtons();
     },
@@ -449,8 +687,11 @@ function updateScore() {
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#sc-you').textContent = `${score.you} / ${score.n}  (${pct(score.you, score.n)}%)`;
   $('#sc-af3').textContent = `${score.af3} / ${score.n}  (${pct(score.af3, score.n)}%)`;
+  const initialOptions = cur
+    ? (displayMode === 'grid' ? allGridEntries().length : visibleChoices().length) + (difficulty === 'hard' ? 1 : 0)
+    : 3;
   $('#sc-rand').textContent = score.n ? `${pct(score.randExp, score.n)}%`
-    : `${Math.round(100 / (cur?.clusters.length || 3))}%`;
+    : `${Math.round(100 / initialOptions)}%`;
 }
 function logAnswer(picked, af3, viewerTrace) {
   const rec = { item_id: cur.item.id, source: cur.item.source, ligand: cur.item.ligand,
@@ -465,6 +706,7 @@ function logAnswer(picked, af3, viewerTrace) {
 
 function syncButtons() {
   document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === displayMode));
+  renderGridPages();
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
   const inPlay = !!cur;
@@ -478,6 +720,10 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
+  $('#modehint').textContent = displayMode === 'grid'
+    ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
+                 : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
+    : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.';
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
 }
 
@@ -490,7 +736,10 @@ async function toggleAnswerDev() {
     () => {
       cur.showAnswer = !cur.showAnswer;
       cur.revealed = cur.showAnswer;
-      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      if (cur.showAnswer) {
+        if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
+        else { clustered = false; displayMode = 'all'; }
+      }
       else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
       syncButtons();
     },
@@ -513,6 +762,7 @@ function next() {
   (idx + 1 < ITEMS.length) ? void loadQuestion(idx + 1) : finish();
 }
 function finish() {
+  hideGrid();
   researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
@@ -529,6 +779,7 @@ function finish() {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
+  configurePlugin(plugin);
   viewerRebuild = window.createViewerRebuildCoordinator({
     rebuild: buildLayer,
     setBusy: setViewerControlsBusy,
@@ -563,7 +814,21 @@ async function init() {
     const bucket = (hasC && hasW) ? 'game-able'
       : (ch.every(c => c.rmsd > WRONG_THRESH) ? 'all-wrong'
       : (ch.every(c => c.rmsd < CORRECT_THRESH) ? 'all-correct' : 'limbo'));
-    return { ...it, source, choices: ch, has_correct: hasC, bucket };
+    const byCluster = {};
+    for (const choice of ch) (byCluster[choice.cluster] ??= []).push(choice);
+    const clusters = Object.values(byCluster);
+    const globalReps = clusters.map(members => members.find(choice => choice.is_rep) || members[0]);
+    const candidateSets = [globalReps];
+    if (source === 'rnp') {
+      const methods = [...new Set(ch.map(choice => choice._method).filter(Boolean))];
+      candidateSets.push(methods.flatMap(method => clusters.map(members => {
+        const fromMethod = members.filter(choice => choice._method === method);
+        return fromMethod.find(choice => choice.is_rep) || fromMethod[0];
+      }).filter(Boolean)));
+    }
+    const isPickPuzzle = choices => choices.some(choice => choice.correct) && choices.some(choice => choice.rmsd > WRONG_THRESH);
+    const easyPlayable = candidateSets.every(isPickPuzzle);
+    return { ...it, source, choices: ch, has_correct: hasC, bucket, easyPlayable };
   };
   // CAMEO: game-able + all-wrong + all-correct(positive control).  RnP: single file already carries all three buckets.
   const [cg, ca, cx, rn] = await Promise.all([fetchItems('quiz_items.json'), fetchItems('quiz_items_allwrong.json'),
@@ -586,8 +851,12 @@ async function init() {
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
     if (interactionBlocked()) return;
     const mode = b.dataset.m;
+    const wasGrid = displayMode === 'grid';
     await viewerRebuild.enqueue(() => {
       displayMode = mode; if (displayMode === 'one') shownOne = 0;
+      if (!cur.revealed && wasGrid !== (displayMode === 'grid')) {
+        cur.selected = null; cur.selectionExact = false; cur.answerChoices = [];
+      }
       if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
       syncButtons();
     });
