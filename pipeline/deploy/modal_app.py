@@ -42,7 +42,14 @@ BOLTZ2_VERSION = "2.2.1"
 BOLTZ2_PACKAGE = f"boltz[cuda]=={BOLTZ2_VERSION}"
 
 WORK_ROOT = "/tmp/foldarium"
-FUNCTION_TIMEOUT_SECONDS = 6 * 60 * 60
+
+# Outer container budget for GPU work. The method subprocess is already capped by
+# the task's ``resources.timeout_seconds``, but a container can also stall outside
+# that subprocess: image pull, checkpoint reload, cache commit, or publication. On
+# a credit-limited account those phases must not be able to hold a GPU for hours,
+# so this ceiling is deliberately tight. Raising it should be an explicit,
+# reviewed change alongside a revised cost estimate.
+GPU_FUNCTION_TIMEOUT_SECONDS = 20 * 60
 LEASE_GRACE_SECONDS = 15 * 60
 OPENFOLD_CACHE_ROOT = "/cache/openfold"
 BOLTZ_CACHE_ROOT = "/cache/boltz"
@@ -116,7 +123,7 @@ def _execute(task_json: str | Mapping[str, Any]) -> dict[str, Any]:
         ) from exc
 
     requested_timeout = task["resources"].get(
-        "timeout_seconds", FUNCTION_TIMEOUT_SECONDS
+        "timeout_seconds", GPU_FUNCTION_TIMEOUT_SECONDS
     )
     if (
         isinstance(requested_timeout, bool)
@@ -124,8 +131,11 @@ def _execute(task_json: str | Mapping[str, Any]) -> dict[str, Any]:
         or requested_timeout < 1
     ):
         raise ValueError("resources.timeout_seconds must be a positive integer")
+    # The lease must outlive the container so a killed worker cannot be reclaimed
+    # while it is still writing, but it must still expire so a crash is
+    # recoverable without manual intervention.
     lease_seconds = (
-        min(requested_timeout, FUNCTION_TIMEOUT_SECONDS) + LEASE_GRACE_SECONDS
+        min(requested_timeout, GPU_FUNCTION_TIMEOUT_SECONDS) + LEASE_GRACE_SECONDS
     )
     if not publisher.claim_run(task["task_id"], worker_id, lease_seconds):
         raise RuntimeError(
@@ -250,7 +260,7 @@ if modal is not None:
         cpu=8.0,
         memory=32768,
         gpu="A100-40GB",
-        timeout=FUNCTION_TIMEOUT_SECONDS,
+        timeout=GPU_FUNCTION_TIMEOUT_SECONDS,
         max_containers=1,
         volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
         secrets=[control_plane_secret],
@@ -266,7 +276,7 @@ if modal is not None:
         cpu=4.0,
         memory=16384,
         gpu="L40S",
-        timeout=FUNCTION_TIMEOUT_SECONDS,
+        timeout=GPU_FUNCTION_TIMEOUT_SECONDS,
         max_containers=1,
         volumes={BOLTZ_CACHE_ROOT: boltz_cache},
         secrets=[control_plane_secret],
@@ -331,6 +341,24 @@ if modal is not None:
 
         canonical_json = _normalise_task_json(task_json)
         print(_spawn_task(canonical_json))
+
+    @app.local_entrypoint()
+    def run_task(task_path: str) -> None:
+        """Run exactly one planned task synchronously and print its result.
+
+        Unlike ``submit``, this blocks until the run reaches a terminal state, so
+        an operator spending metered credits sees the outcome instead of a call
+        ID. It reads the task from a file to keep large payloads out of shell
+        history, and runs a single task by design: batching belongs to
+        ``submit_tasks`` once cost behavior is known.
+        """
+
+        payload = json.loads(Path(task_path).read_text(encoding="utf-8"))
+        canonical_json = _normalise_task_json(payload)
+        method = _method_name(canonical_json)
+        function = run_openfold3 if method == "openfold3" else run_boltz2
+        result = function.remote(canonical_json)
+        print(json.dumps(result, indent=2, sort_keys=True))
 
 else:
     # Gives tooling a predictable symbol while keeping Modal out of core/test
