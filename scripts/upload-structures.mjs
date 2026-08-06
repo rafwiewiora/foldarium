@@ -5,10 +5,9 @@ const BUCKET = 'structures';
 const DEFAULT_CONCURRENCY = 6;
 
 function authHeaders(key) {
-  return {
-    apikey: key,
-    Authorization: `Bearer ${key}`,
-  };
+  const headers = { apikey: key };
+  if (!key.startsWith('sb_secret_')) headers.Authorization = `Bearer ${key}`;
+  return headers;
 }
 
 function storageUrl(url, pathname) {

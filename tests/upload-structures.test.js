@@ -60,13 +60,13 @@ test('creates a missing public structures bucket', async () => {
   await ensurePublicBucket({
     fetchImpl,
     url: 'https://project.test',
-    key: 'secret',
+    key: 'sb_secret_test',
   });
 
   const [lookupRequest, createRequest] = requests;
   assert.equal(lookupRequest.url, 'https://project.test/storage/v1/bucket/structures');
-  assert.equal(lookupRequest.headers.apikey, 'secret');
-  assert.equal(lookupRequest.headers.Authorization, 'Bearer secret');
+  assert.equal(lookupRequest.headers.apikey, 'sb_secret_test');
+  assert.equal(lookupRequest.headers.Authorization, undefined);
   assert.equal(createRequest.url, 'https://project.test/storage/v1/bucket');
   assert.equal(createRequest.method, 'POST');
   assert.deepEqual(JSON.parse(createRequest.body), {
@@ -74,6 +74,21 @@ test('creates a missing public structures bucket', async () => {
     name: 'structures',
     public: true,
   });
+});
+
+test('uses a bearer header for legacy JWT service-role keys', async () => {
+  let request;
+  await ensurePublicBucket({
+    fetchImpl: async (url, options = {}) => {
+      request = { url, ...options };
+      return response(200);
+    },
+    url: 'https://project.test',
+    key: 'eyJlegacy-service-role',
+  });
+
+  assert.equal(request.headers.apikey, 'eyJlegacy-service-role');
+  assert.equal(request.headers.Authorization, 'Bearer eyJlegacy-service-role');
 });
 
 test('redacts credentials from bucket setup errors', async () => {
