@@ -50,6 +50,21 @@ export function createLatestRequestGuard() {
   };
 }
 
+export function createSessionListLoader({ requestSessions, applySessions }) {
+  const requests = createLatestRequestGuard();
+  return {
+    async load() {
+      const result = await requests.run(requestSessions);
+      if (!result.accepted) return false;
+      applySessions(result.value);
+      return true;
+    },
+    cancel() {
+      requests.cancel();
+    },
+  };
+}
+
 function formatDate(value, fallback) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString();
@@ -181,6 +196,14 @@ async function initReplayPage() {
     return;
   }
   const replayController = createReplayController({ plugin: viewer.plugin });
+  const sessionLoader = createSessionListLoader({
+    requestSessions: signal => requestReplay({ action: 'sessions' }, signal),
+    applySessions(sessions) {
+      replaceSelectOptions(sessionSelect, sessions, formatSessionLabel);
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
+      setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
+    },
+  });
 
   async function loadAnswers() {
     const sessionId = sessionSelect.value;
@@ -212,27 +235,30 @@ async function initReplayPage() {
   }
 
   async function connect() {
+    sessionLoader.cancel();
     answerRequests.cancel();
     replayPassword = passwordInput.value;
     passwordInput.value = '';
     if (!replayPassword) {
       setStatus('Enter the replay password.', true);
+      connectButton.disabled = false;
       return;
     }
 
     connectButton.disabled = true;
     setStatus('Loading recent sessions…');
+    let completedCurrentRequest = false;
     try {
-      const sessions = await requestReplay({ action: 'sessions' });
-      replaceSelectOptions(sessionSelect, sessions, formatSessionLabel);
-      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
-      setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
+      const applied = await sessionLoader.load();
+      if (!applied) return;
+      completedCurrentRequest = true;
     } catch (error) {
+      completedCurrentRequest = true;
       replaceSelectOptions(sessionSelect, [], formatSessionLabel);
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(error.message, true);
     } finally {
-      connectButton.disabled = false;
+      if (completedCurrentRequest) connectButton.disabled = false;
     }
   }
 

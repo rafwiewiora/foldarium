@@ -72,6 +72,14 @@ function pinCamera(plugin) {
   }
 }
 
+function stateCameraTransitionDuration(snapshot) {
+  const camera = snapshot.camera;
+  if (!isObject(camera)) return null;
+  if (camera.transitionStyle !== 'animate') return 0;
+  const duration = camera.transitionDurationInMs;
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
 export async function playViewerTrace(plugin, trace, {
   now = () => performance.now(),
   sleep = defaultSleep,
@@ -94,6 +102,12 @@ export async function playViewerTrace(plugin, trace, {
       if (entry.kind === 'state') {
         await plugin.state.setSnapshot(entry.snapshot);
         throwIfAborted(signal);
+        const transitionDuration = stateCameraTransitionDuration(entry.snapshot);
+        if (transitionDuration !== null) {
+          cameraTransitionEndsAt = transitionDuration > 0
+            ? now() + transitionDuration
+            : -Infinity;
+        }
       } else {
         plugin.canvas3d.camera.setState(entry.camera, 250);
         cameraTransitionEndsAt = now() + 250;

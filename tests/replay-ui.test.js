@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   createLatestRequestGuard,
   createReplayController,
+  createSessionListLoader,
   formatAnswerLabel,
   formatSessionLabel,
   replaceSelectOptions,
@@ -95,6 +96,37 @@ test('ignores an out-of-order session-answer response and aborts its request', a
 
   oldResponse.resolve(['stale-session-answer']);
   assert.deepEqual(await oldRequest, { accepted: false });
+});
+
+test('concurrent Connect submissions apply only the latest session list', async () => {
+  const oldResponse = deferred();
+  const newResponse = deferred();
+  const applied = [];
+  let oldSignal;
+  let requestIndex = 0;
+  const loader = createSessionListLoader({
+    requestSessions(signal) {
+      requestIndex += 1;
+      if (requestIndex === 1) {
+        oldSignal = signal;
+        return oldResponse.promise;
+      }
+      return newResponse.promise;
+    },
+    applySessions(sessions) {
+      applied.push(sessions);
+    },
+  });
+
+  const oldConnect = loader.load();
+  const newConnect = loader.load();
+  assert.equal(oldSignal.aborted, true);
+
+  newResponse.resolve(['new-session']);
+  assert.equal(await newConnect, true);
+  oldResponse.resolve(['stale-session']);
+  assert.equal(await oldConnect, false);
+  assert.deepEqual(applied, [['new-session']]);
 });
 
 test('displays replay identifiers and answer time as option text', () => {

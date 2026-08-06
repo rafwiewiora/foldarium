@@ -75,6 +75,71 @@ test('subtracts time spent restoring state from later waits', async () => {
   assert.deepEqual(clock.waits, [60, 250]);
 });
 
+test('keeps playback active through an animated camera embedded in a state snapshot', async () => {
+  const calls = [];
+  const clock = fakeAsyncClock();
+  const plugin = fakeReplayPlugin(calls);
+  const stateCameraTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{
+      t_ms: 0,
+      kind: 'state',
+      snapshot: {
+        data: {},
+        camera: {
+          transitionStyle: 'animate',
+          transitionDurationInMs: 400,
+        },
+      },
+    }],
+  };
+
+  await playViewerTrace(plugin, stateCameraTrace, clock.options);
+
+  assert.deepEqual(calls, ['state']);
+  assert.deepEqual(clock.waits, [400]);
+});
+
+test('pins an animated state-snapshot camera when aborted after restoration', async () => {
+  const controller = new AbortController();
+  const calls = [];
+  let transitionStarted = false;
+  const plugin = fakeReplayPlugin(calls);
+  const stateCameraTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{
+      t_ms: 0,
+      kind: 'state',
+      snapshot: {
+        data: {},
+        camera: {
+          transitionStyle: 'animate',
+          transitionDurationInMs: 400,
+        },
+      },
+    }],
+  };
+  const playback = playViewerTrace(plugin, stateCameraTrace, {
+    signal: controller.signal,
+    now: () => 0,
+    sleep: (_ms, signal) => new Promise((_resolve, reject) => {
+      transitionStarted = true;
+      signal.addEventListener('abort', () => {
+        reject(new DOMException('Viewer replay aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  });
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(transitionStarted, true);
+  controller.abort();
+
+  await assert.rejects(playback, error => error.name === 'AbortError');
+  assert.deepEqual(calls, ['state', 'camera:pin']);
+});
+
 test('does not delay later entries while keeping the final camera transition active', async () => {
   const calls = [];
   const clock = fakeAsyncClock();
