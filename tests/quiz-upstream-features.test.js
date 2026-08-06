@@ -181,8 +181,25 @@ test('leaving Grid keeps rebuilding the single view before disposing Grid viewer
   assert.equal(sandbox.gridBuildRevision, 1);
 });
 
-test('recording starts in the finalize step, after the rebuilt question and settled camera', async () => {
+test('question finalization preserves Grid framing but resets other modes before recording', async () => {
   const app = await readApp();
+  const resets = [];
+  const sandbox = {
+    displayMode: 'grid',
+    plugin: { canvas3d: { requestCameraReset: () => resets.push('reset') } },
+  };
+  const requestQuestionCameraReset = evaluateDeclaration(
+    app,
+    'function requestQuestionCameraReset()',
+    sandbox,
+  );
+
+  requestQuestionCameraReset();
+  assert.deepEqual(resets, [], 'Grid must retain the framing mirrored from its active tile');
+  sandbox.displayMode = 'all';
+  requestQuestionCameraReset();
+  assert.deepEqual(resets, ['reset'], 'single-view modes must keep the existing reset behavior');
+
   const { start, end } = block(app, 'async function loadQuestion(i)');
   const loadQuestion = app.slice(start, end);
   const stop = loadQuestion.indexOf('viewerTraceRecorder?.stop();');
@@ -191,6 +208,7 @@ test('recording starts in the finalize step, after the rebuilt question and sett
 
   assert.ok(stop >= 0, 'expected the recorder to stop in the queued mutation');
   assert.ok(stop < settled && settled < started, 'expected recording to start after the rebuild settles');
+  assert.match(loadQuestion, /requestReset: requestQuestionCameraReset/);
 });
 
 test('switching display mode renders choices after the queued mutation', async () => {

@@ -421,6 +421,10 @@ async function buildLayer() {
   return buildSingleLayer();
 }
 
+function requestQuestionCameraReset() {
+  if (displayMode !== 'grid') plugin.canvas3d?.requestCameraReset?.();
+}
+
 async function loadQuestion(i) {
   const item = ITEMS[i];
   $('#stage').classList.add('loading-system');
@@ -453,7 +457,7 @@ async function loadQuestion(i) {
     async () => {
       await window.waitForCameraSettled({
         cameraChanged: plugin.canvas3d?.camera?.changed,
-        requestReset: () => plugin.canvas3d?.requestCameraReset?.(),
+        requestReset: requestQuestionCameraReset,
       });
       viewerTraceRecorder?.start();
       renderUI();

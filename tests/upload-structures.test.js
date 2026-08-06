@@ -455,12 +455,16 @@ test('the default structures mode still uploads the repository data trees', asyn
     await mkdir(path.join(rootDir, 'data_rnp/B'), { recursive: true });
     await writeFile(path.join(rootDir, 'data/A/pose-1.pdb'), 'ATOM\n');
     await writeFile(path.join(rootDir, 'data_rnp/B/protein.pdb'), 'ATOM\n');
+    const benchmarkDir = path.join(rootDir, 'external-benchmark', 'demo');
+    await mkdir(path.join(benchmarkDir, 'systems/1ABC'), { recursive: true });
+    await writeFile(path.join(benchmarkDir, 'systems/1ABC/benchmark.pdb'), 'ATOM\n');
     const uploaded = [];
 
     const exitCode = await runCli({
       env: {
         SUPABASE_URL: 'https://project.test',
         SUPABASE_SERVICE_ROLE_KEY: 'secret',
+        BENCHMARK_DEMO_DIR: benchmarkDir,
       },
       args: [],
       rootDir,

@@ -218,7 +218,10 @@ export async function runCli({
     return 1;
   }
 
-  const discovered = await discoverStructureFiles(rootDir, env.BENCHMARK_DEMO_DIR);
+  const discovered = await discoverStructureFiles(
+    rootDir,
+    benchmarkMode ? env.BENCHMARK_DEMO_DIR : undefined,
+  );
   const files = benchmarkMode
     ? discovered.filter(file => file.objectKey.startsWith('benchmark/demo/'))
     : discovered;
