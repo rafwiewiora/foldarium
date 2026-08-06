@@ -101,13 +101,13 @@ export async function playViewerTrace(plugin, trace, {
 
       if (entry.kind === 'state') {
         await plugin.state.setSnapshot(entry.snapshot);
-        throwIfAborted(signal);
         const transitionDuration = stateCameraTransitionDuration(entry.snapshot);
         if (transitionDuration !== null) {
           cameraTransitionEndsAt = transitionDuration > 0
             ? now() + transitionDuration
             : -Infinity;
         }
+        throwIfAborted(signal);
       } else {
         plugin.canvas3d.camera.setState(entry.camera, 250);
         cameraTransitionEndsAt = now() + 250;

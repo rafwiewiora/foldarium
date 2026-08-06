@@ -222,6 +222,65 @@ test('stops playback when aborted during the final state restore', async () => {
   );
 });
 
+test('pins an animated state camera when aborted before pending restoration resolves', async () => {
+  const stateRestore = deferred();
+  const stateStarted = deferred();
+  const controller = new AbortController();
+  const calls = [];
+  let cameraMoving = false;
+  const plugin = {
+    state: {
+      setSnapshot() {
+        calls.push('state');
+        stateStarted.resolve();
+        return stateRestore.promise.then(() => {
+          cameraMoving = true;
+        });
+      },
+    },
+    canvas3d: {
+      camera: {
+        getSnapshot() {
+          return { position: 'mid-transition' };
+        },
+        setState(_camera, duration) {
+          if (duration === 0) {
+            calls.push('camera:pin');
+            cameraMoving = false;
+          }
+        },
+      },
+    },
+  };
+  const animatedStateTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [{
+      t_ms: 0,
+      kind: 'state',
+      snapshot: {
+        data: {},
+        camera: {
+          transitionStyle: 'animate',
+          transitionDurationInMs: 400,
+        },
+      },
+    }],
+  };
+
+  const playback = playViewerTrace(plugin, animatedStateTrace, {
+    signal: controller.signal,
+    now: () => 0,
+  });
+  await stateStarted.promise;
+  controller.abort();
+  stateRestore.resolve();
+
+  await assert.rejects(playback, error => error.name === 'AbortError');
+  assert.deepEqual(calls, ['state', 'camera:pin']);
+  assert.equal(cameraMoving, false);
+});
+
 test('keeps camera-only playback active and pins the camera when aborted mid-transition', async () => {
   const controller = new AbortController();
   const calls = [];
