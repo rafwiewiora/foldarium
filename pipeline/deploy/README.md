@@ -59,10 +59,11 @@ and one diffusion sample after the core dry run passes. It downloads into the
 mounted Boltz cache and still follows the normal durable publication path. Do
 not use an unpublished throwaway run merely to warm the cache.
 
-The default Saturday 06:00 UTC cron is a deployment-owned seam. It is a no-op
-until `FOLDARIUM_WEEKLY_HOOK=module:function` is supplied in the Modal secret.
-The hook returns planned task JSON values; it must use deterministic task IDs so
-retries and duplicate scheduler events remain idempotent. Change
+The weekly schedule is completely absent unless `FOLDARIUM_ENABLE_WEEKLY_CRON=1`
+is set when the app is deployed. Once enabled, the default is Saturday 06:00 UTC
+and the function remains a no-op until `FOLDARIUM_WEEKLY_HOOK=module:function`
+is supplied. The hook returns planned task JSON values; it must use deterministic
+task IDs so retries and duplicate scheduler events remain idempotent. Change
 `FOLDARIUM_WEEKLY_CRON` in the environment used by `modal deploy` to move the
 schedule without changing core code.
 

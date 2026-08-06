@@ -51,6 +51,7 @@ BOLTZ_CACHE_ROOT = "/cache/boltz"
 # cron belongs to this adapter, not to the provider-neutral pipeline core.
 WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "0 6 * * 6")
 WEEKLY_HOOK_ENV = "FOLDARIUM_WEEKLY_HOOK"
+WEEKLY_CRON_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEEKLY_CRON") == "1"
 
 _PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 _CORE_SOURCE = _PIPELINE_ROOT / "src" / "foldarium_pipeline"
@@ -301,7 +302,7 @@ if modal is not None:
         image=control_image,
         cpu=0.5,
         memory=512,
-        schedule=modal.Cron(WEEKLY_CRON_UTC),
+        schedule=modal.Cron(WEEKLY_CRON_UTC) if WEEKLY_CRON_ENABLED else None,
         secrets=[control_plane_secret],
         timeout=30 * 60,
         max_containers=1,
