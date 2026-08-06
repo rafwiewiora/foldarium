@@ -5,7 +5,7 @@ import { createReplayHandler } from '../api/replay.js';
 const configuredEnv = {
   REPLAY_PASSWORD: 'correct horse',
   SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SERVICE_ROLE_KEY: 'service-key',
+  SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_test',
 };
 
 function invoke(handler, body, method = 'POST') {
@@ -73,8 +73,26 @@ test('lists recent sessions with the server credential', async () => {
 
   assert.equal(response.statusCode, 200);
   assert.match(fetchImpl.url, /quiz_sessions/);
-  assert.equal(fetchImpl.headers.apikey, 'service-key');
-  assert.doesNotMatch(response.body, /service-key|correct horse/);
+  assert.equal(fetchImpl.headers.apikey, 'sb_secret_test');
+  assert.equal(fetchImpl.headers.Authorization, undefined);
+  assert.doesNotMatch(response.body, /sb_secret_test|correct horse/);
+});
+
+test('uses a bearer header with legacy JWT service-role keys', async () => {
+  const fetchImpl = recordingFetch([]);
+  await invoke(handler({
+    fetchImpl,
+    env: {
+      ...configuredEnv,
+      SUPABASE_SERVICE_ROLE_KEY: 'eyJlegacy-service-role',
+    },
+  }), {
+    password: 'correct horse',
+    action: 'sessions',
+  });
+
+  assert.equal(fetchImpl.headers.apikey, 'eyJlegacy-service-role');
+  assert.equal(fetchImpl.headers.Authorization, 'Bearer eyJlegacy-service-role');
 });
 
 test('validates the session UUID before requesting answers', async () => {

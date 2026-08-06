@@ -36,10 +36,7 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
 
     try {
       const upstream = await fetchImpl(`${SUPABASE_URL}${path}`, {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
+        headers: serviceHeaders(SUPABASE_SERVICE_ROLE_KEY),
       });
       if (!upstream.ok) return send(response, 502, { error: 'Replay data unavailable' });
       return send(response, 200, await upstream.json());
@@ -47,6 +44,12 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
       return send(response, 502, { error: 'Replay data unavailable' });
     }
   };
+}
+
+function serviceHeaders(key) {
+  const headers = { apikey: key };
+  if (!key.startsWith('sb_secret_')) headers.Authorization = `Bearer ${key}`;
+  return headers;
 }
 
 function secureEqual(left, right) {
