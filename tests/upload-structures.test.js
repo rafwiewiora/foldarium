@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   discoverPdbFiles,
   ensurePublicBucket,
+  runCli,
   uploadStructures,
 } from '../scripts/upload-structures.mjs';
 
@@ -86,7 +87,11 @@ test('counts successful and existing uploads without failing', async () => {
       requests.push({ url, ...options });
       return url.endsWith('pose-1.pdb')
         ? response(200)
-        : response(409, 'The resource already exists');
+        : response(409, JSON.stringify({
+          statusCode: '409',
+          error: 'Duplicate',
+          message: 'The resource already exists',
+        }));
     };
 
     const summary = await uploadStructures({
@@ -101,10 +106,37 @@ test('counts successful and existing uploads without failing', async () => {
       concurrency: 2,
     });
 
-    assert.deepEqual(summary, { uploaded: 1, skipped: 1, failed: [] });
+    assert.deepEqual(summary, {
+      uploaded: 1,
+      skipped: 1,
+      failed: [],
+      failedDetails: [],
+    });
     assert.equal(requests[0].headers['Content-Type'], 'chemical/x-pdb');
-    assert.equal(requests[0].headers['cache-control'], '31536000');
+    assert.equal(requests[0].headers['cache-control'], 'max-age=31536000');
     assert.equal(requests[0].headers['x-upsert'], 'false');
+  });
+});
+
+test('does not classify a misleading server error as an existing object', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const brokenPath = path.join(rootDir, 'broken.pdb');
+    await writeFile(brokenPath, 'ATOM 1\n');
+
+    const summary = await uploadStructures({
+      files: [{ absolutePath: brokenPath, objectKey: 'data/A/broken.pdb' }],
+      fetchImpl: async () => response(500, 'The resource already exists'),
+      url: 'https://project.test',
+      key: 'secret',
+    });
+
+    assert.deepEqual(summary.failed, ['data/A/broken.pdb']);
+    assert.deepEqual(summary.failedDetails, [{
+      objectKey: 'data/A/broken.pdb',
+      status: 500,
+      message: 'The resource already exists',
+    }]);
+    assert.equal(summary.skipped, 0);
   });
 });
 
@@ -134,6 +166,68 @@ test('reports failed object keys without stopping remaining uploads', async () =
       uploaded: 1,
       skipped: 0,
       failed: ['data/A/broken.pdb'],
+      failedDetails: [{
+        objectKey: 'data/A/broken.pdb',
+        status: 500,
+        message: 'storage unavailable',
+      }],
     });
+  });
+});
+
+test('encodes object path components and honors overwrite', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const filePath = path.join(rootDir, 'special.pdb');
+    await writeFile(filePath, 'ATOM 1\n');
+    const requests = [];
+
+    const summary = await uploadStructures({
+      files: [{ absolutePath: filePath, objectKey: 'data/A/pose #1?.pdb' }],
+      fetchImpl: async (url, options) => {
+        requests.push({ url, ...options });
+        return response(200);
+      },
+      url: 'https://project.test',
+      key: 'secret',
+      overwrite: true,
+    });
+
+    assert.deepEqual(summary, {
+      uploaded: 1,
+      skipped: 0,
+      failed: [],
+      failedDetails: [],
+    });
+    assert.equal(
+      requests[0].url,
+      'https://project.test/storage/v1/object/structures/data/A/pose%20%231%3F.pdb',
+    );
+    assert.equal(requests[0].headers['x-upsert'], 'true');
+  });
+});
+
+test('returns a nonzero CLI outcome with failed upload diagnostics', async () => {
+  await withTempDirectory(async (rootDir) => {
+    await mkdir(path.join(rootDir, 'data/A'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data/A/broken.pdb'), 'ATOM 1\n');
+    const messages = [];
+
+    const exitCode = await runCli({
+      env: {
+        SUPABASE_URL: 'https://project.test',
+        SUPABASE_SERVICE_ROLE_KEY: 'credential-that-must-not-log',
+      },
+      rootDir,
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === 'GET') return response(200);
+        return response(500, 'storage unavailable');
+      },
+      log: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+    });
+
+    assert.equal(exitCode, 1);
+    assert.match(messages.join('\n'), /data\/A\/broken\.pdb \(500\): storage unavailable/);
+    assert.doesNotMatch(messages.join('\n'), /credential-that-must-not-log/);
   });
 });

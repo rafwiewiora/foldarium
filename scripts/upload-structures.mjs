@@ -75,6 +75,26 @@ function encodedObjectPath(objectKey) {
   return objectKey.split('/').map(encodeURIComponent).join('/');
 }
 
+function redactCredential(message, key) {
+  return String(message).split(key).join('[redacted]');
+}
+
+function parseStorageError(message) {
+  try {
+    return JSON.parse(message);
+  } catch {
+    return null;
+  }
+}
+
+function isExistingObjectResponse(response, error) {
+  return response.status === 409
+    && error?.statusCode === '409'
+    && error.error === 'Duplicate'
+    && typeof error.message === 'string'
+    && /resource already exists/i.test(error.message);
+}
+
 async function uploadOne({ file, fetchImpl, url, key, overwrite }) {
   const body = await readFile(file.absolutePath);
   const response = await fetchImpl(
@@ -84,19 +104,26 @@ async function uploadOne({ file, fetchImpl, url, key, overwrite }) {
       headers: {
         ...authHeaders(key),
         'Content-Type': 'chemical/x-pdb',
-        'cache-control': '31536000',
+        'cache-control': 'max-age=31536000',
         'x-upsert': String(overwrite),
       },
       body,
     },
   );
 
-  if (response.ok) return 'uploaded';
+  if (response.ok) return { outcome: 'uploaded' };
   const message = await response.text();
-  if (!overwrite && (response.status === 409 || /already exists|duplicate/i.test(message))) {
-    return 'skipped';
+  const error = parseStorageError(message);
+  if (!overwrite && isExistingObjectResponse(response, error)) {
+    return { outcome: 'skipped' };
   }
-  return 'failed';
+  return {
+    outcome: 'failed',
+    detail: {
+      status: response.status,
+      message: redactCredential(error?.message || message, key),
+    },
+  };
 }
 
 export async function uploadStructures({
@@ -107,7 +134,7 @@ export async function uploadStructures({
   overwrite = false,
   concurrency = DEFAULT_CONCURRENCY,
 }) {
-  const summary = { uploaded: 0, skipped: 0, failed: [] };
+  const summary = { uploaded: 0, skipped: 0, failed: [], failedDetails: [] };
   const limit = Math.max(1, Math.min(DEFAULT_CONCURRENCY, Number(concurrency) || DEFAULT_CONCURRENCY));
   let nextIndex = 0;
 
@@ -116,11 +143,19 @@ export async function uploadStructures({
       const file = files[nextIndex++];
       try {
         const result = await uploadOne({ file, fetchImpl, url, key, overwrite });
-        if (result === 'uploaded') summary.uploaded += 1;
-        else if (result === 'skipped') summary.skipped += 1;
-        else summary.failed.push(file.objectKey);
-      } catch {
+        if (result.outcome === 'uploaded') summary.uploaded += 1;
+        else if (result.outcome === 'skipped') summary.skipped += 1;
+        else {
+          summary.failed.push(file.objectKey);
+          summary.failedDetails.push({ objectKey: file.objectKey, ...result.detail });
+        }
+      } catch (error) {
         summary.failed.push(file.objectKey);
+        summary.failedDetails.push({
+          objectKey: file.objectKey,
+          status: null,
+          message: redactCredential(error.message, key),
+        });
       }
     }
   }
@@ -132,6 +167,8 @@ export async function uploadStructures({
 export async function runCli({
   env = process.env,
   args = process.argv.slice(2),
+  fetchImpl = fetch,
+  rootDir = process.cwd(),
   log = console.log,
   error = console.error,
 } = {}) {
@@ -141,18 +178,20 @@ export async function runCli({
     return 1;
   }
 
-  const files = await discoverPdbFiles(process.cwd());
-  await ensurePublicBucket({ fetchImpl: fetch, url, key });
+  const files = await discoverPdbFiles(rootDir);
+  await ensurePublicBucket({ fetchImpl, url, key });
   const summary = await uploadStructures({
     files,
-    fetchImpl: fetch,
+    fetchImpl,
     url,
     key,
     overwrite: args.includes('--overwrite'),
   });
   log(`Local: ${files.length}; uploaded: ${summary.uploaded}; skipped: ${summary.skipped}; failed: ${summary.failed.length}`);
   if (summary.failed.length) {
-    error(`Failed: ${summary.failed.join(', ')}`);
+    for (const failure of summary.failedDetails) {
+      error(`Failed: ${failure.objectKey} (${failure.status ?? 'request'}): ${failure.message}`);
+    }
     return 1;
   }
   return 0;
