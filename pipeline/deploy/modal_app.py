@@ -41,6 +41,18 @@ OPENFOLD3_IMAGE_REF = (
 BOLTZ2_VERSION = "2.2.1"
 BOLTZ2_PACKAGE = f"boltz[cuda]=={BOLTZ2_VERSION}"
 
+# The OpenFold3 image keeps its interpreter and CLI in a pixi environment that is
+# activated by the image entrypoint. Modal inspects the image for a Python
+# interpreter without going through that entrypoint, so the environment's bin
+# directory is also published on PATH here. Both mechanisms are required: this
+# makes the interpreter discoverable, while the preserved entrypoint still exports
+# the CUDA, Triton, and libtorch variables that activation sets up.
+OPENFOLD3_ENV_ROOT = "/opt/pixi-project/.pixi/envs/openfold3-cuda12"
+OPENFOLD3_IMAGE_PATH = (
+    f"{OPENFOLD3_ENV_ROOT}/bin:/root/.pixi/bin:/usr/local/sbin:/usr/local/bin:"
+    "/usr/sbin:/usr/bin:/sbin:/bin"
+)
+
 WORK_ROOT = "/tmp/foldarium"
 
 # Outer container budget for GPU work. The method subprocess is already capped by
@@ -213,7 +225,10 @@ if modal is not None:
     # preserved: it is what places Modal's own command inside the environment.
     openfold3_image = _add_core(
         modal.Image.from_registry(OPENFOLD3_IMAGE_REF).env(
-            {"OPENFOLD_CACHE": OPENFOLD_CACHE_ROOT}
+            {
+                "OPENFOLD_CACHE": OPENFOLD_CACHE_ROOT,
+                "PATH": OPENFOLD3_IMAGE_PATH,
+            }
         ),
         clear_entrypoint=False,
     )
