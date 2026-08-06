@@ -35,6 +35,8 @@ To enable remote quiz-result persistence:
 
 Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.
 
+The standalone shared leaderboard is available at [`leaderboard.html`](leaderboard.html).
+
 ### Leaderboard score integrity
 
 The shared leaderboard is a privacy-safe aggregate, not a tamper-resistant scoring system. Existing RLS intentionally lets each authenticated anonymous client submit its own answer rows, including `picked_correct` and `af3_correct`; this task has no canonical server-side answer catalog from which to recompute those fields. The leaderboard hides raw answers and identifiers, but its scores should be treated as client-reported results for trusted research participants, not verified competitive rankings.
@@ -55,8 +57,9 @@ Production loads structures from the public Supabase Storage URL configured in `
 
 ## Uploading benchmark demo assets
 
-Materialize the benchmark demo's `systems*` files outside this repository, then
-upload them to the public `structures` bucket:
+The benchmark demo structures are not committed, so they must be uploaded before
+the demo is functional. Materialize the demo's `systems*` files outside this
+repository, then upload them to the public `structures` bucket:
 
 ```bash
 BENCHMARK_DEMO_DIR=/path/to/benchmark/demo \

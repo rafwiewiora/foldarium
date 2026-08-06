@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -381,6 +381,107 @@ test('returns a nonzero CLI outcome with failed upload diagnostics', async () =>
     assert.match(messages.join('\n'), /data\/A\/broken\.pdb \(500\): storage unavailable \[redacted\]/);
     assert.doesNotMatch(messages.join('\n'), /credential-that-must-not-log/);
   });
+});
+
+test('benchmark mode rejects a missing or empty benchmark demo directory', async () => {
+  await withTempDirectory(async (rootDir) => {
+    const messages = [];
+    const common = {
+      args: ['--benchmark'],
+      rootDir,
+      fetchImpl: async () => { throw new Error('must not contact Storage'); },
+      log: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+    };
+    const credentials = {
+      SUPABASE_URL: 'https://project.test',
+      SUPABASE_SERVICE_ROLE_KEY: 'secret',
+    };
+
+    assert.equal(await runCli({ ...common, env: credentials }), 1);
+    assert.match(messages.pop(), /BENCHMARK_DEMO_DIR is required/i);
+
+    const benchmarkDir = path.join(rootDir, 'empty-benchmark');
+    await mkdir(benchmarkDir);
+    assert.equal(await runCli({
+      ...common,
+      env: { ...credentials, BENCHMARK_DEMO_DIR: benchmarkDir },
+    }), 1);
+    assert.match(messages.pop(), /no benchmark PDB\/CIF files found/i);
+  });
+});
+
+test('benchmark mode uploads only benchmark demo objects', async () => {
+  await withTempDirectory(async (rootDir) => {
+    await mkdir(path.join(rootDir, 'data/A'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data/A/pose-1.pdb'), 'ATOM\n');
+    const benchmarkDir = path.join(rootDir, 'external-benchmark', 'demo');
+    await mkdir(path.join(benchmarkDir, 'systems/1ABC'), { recursive: true });
+    await writeFile(path.join(benchmarkDir, 'systems/1ABC/pose.pdb'), 'ATOM\n');
+    await writeFile(path.join(benchmarkDir, 'systems/1ABC/xtal.cif'), 'data_test\n');
+    const uploaded = [];
+    const messages = [];
+
+    const exitCode = await runCli({
+      env: {
+        SUPABASE_URL: 'https://project.test',
+        SUPABASE_SERVICE_ROLE_KEY: 'secret',
+        BENCHMARK_DEMO_DIR: benchmarkDir,
+      },
+      args: ['--benchmark'],
+      rootDir,
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === 'POST' && url.includes('/object/')) {
+          uploaded.push(url.split('/object/structures/')[1]);
+        }
+        return response(200);
+      },
+      log: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+    });
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(uploaded.sort(), [
+      'benchmark/demo/systems/1ABC/pose.pdb',
+      'benchmark/demo/systems/1ABC/xtal.cif',
+    ]);
+    assert.match(messages.join('\n'), /Local: 2; uploaded: 2; skipped: 0; failed: 0/);
+  });
+});
+
+test('the default structures mode still uploads the repository data trees', async () => {
+  await withTempDirectory(async (rootDir) => {
+    await mkdir(path.join(rootDir, 'data/A'), { recursive: true });
+    await mkdir(path.join(rootDir, 'data_rnp/B'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data/A/pose-1.pdb'), 'ATOM\n');
+    await writeFile(path.join(rootDir, 'data_rnp/B/protein.pdb'), 'ATOM\n');
+    const uploaded = [];
+
+    const exitCode = await runCli({
+      env: {
+        SUPABASE_URL: 'https://project.test',
+        SUPABASE_SERVICE_ROLE_KEY: 'secret',
+      },
+      args: [],
+      rootDir,
+      fetchImpl: async (url, options = {}) => {
+        if (options.method === 'POST' && url.includes('/object/')) {
+          uploaded.push(url.split('/object/structures/')[1]);
+        }
+        return response(200);
+      },
+      log: () => {},
+      error: () => {},
+    });
+
+    assert.equal(exitCode, 0);
+    assert.deepEqual(uploaded.sort(), ['data/A/pose-1.pdb', 'data_rnp/B/protein.pdb']);
+  });
+});
+
+test('upload:benchmark selects explicit benchmark mode', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.match(pkg.scripts['upload:benchmark'], /--benchmark/);
 });
 
 test('limits concurrent uploads to the requested bound', async () => {

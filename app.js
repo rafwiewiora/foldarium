@@ -161,7 +161,9 @@ function gridChoiceSelected(choice) {
   return cur.selectionExact ? sameChoice(choice, cur.selected) : choice.cluster === cur.selected.cluster;
 }
 function syncGridSelection() {
-  for (const cell of gridViewers) cell.card?.classList.toggle('selected', gridChoiceSelected(cell.entry.choice));
+  for (const cell of gridViewers) {
+    cell.card?.classList.toggle('selected', !cell.failed && gridChoiceSelected(cell.entry.choice));
+  }
 }
 function renderGridPages() {
   const nav = $('#gridpages'), methods = cur?.gridMethods || [];
@@ -173,8 +175,10 @@ function renderGridPages() {
     b.textContent = cur.showAnswer ? methodName(method) : `Set ${i + 1}`;
     b.onclick = async () => {
       if (i === gridMethodIndex || interactionBlocked()) return;
-      gridMethodIndex = i; renderGridPages(); renderUI();
-      await viewerRebuild.enqueue(() => {}, () => buildGrid());
+      await viewerRebuild.enqueue(
+        () => { gridMethodIndex = i; },
+        () => { renderGridPages(); renderUI(); },
+      );
     };
     nav.appendChild(b);
   });
@@ -231,16 +235,20 @@ function hideGrid() {
   gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid'); renderGridPages();
 }
 function syncGridCameras(cells) {
-  let enabled = true, raf = 0, last = cells.map(cell => JSON.stringify(cell.plugin.canvas3d.camera.getSnapshot()));
+  const cameraSnapshot = cell => cell.plugin?.canvas3d?.camera?.getSnapshot?.();
+  let enabled = true, raf = 0, last = cells.map(cell => JSON.stringify(cameraSnapshot(cell)));
   const tick = () => {
     if (!enabled) return;
-    const snapshots = cells.map(cell => cell.plugin.canvas3d?.camera.getSnapshot());
+    const snapshots = cells.map(cameraSnapshot);
     const source = snapshots.findIndex((snapshot, i) => snapshot && JSON.stringify(snapshot) !== last[i]);
     if (source >= 0) {
       const snapshot = snapshots[source];
-      for (let i = 0; i < cells.length; i++) if (i !== source && cells[i].plugin.canvas3d) cells[i].plugin.canvas3d.camera.setState(snapshot, 0);
-      try { plugin.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
-      last = cells.map(cell => JSON.stringify(cell.plugin.canvas3d.camera.getSnapshot()));
+      for (let i = 0; i < cells.length; i++) {
+        if (i !== source) cells[i].plugin?.canvas3d?.camera?.setState(snapshot, 0);
+      }
+      // mirror into the hidden canonical viewer so the trace recorder still sees Grid camera movement
+      try { plugin?.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+      last = cells.map(cell => JSON.stringify(cameraSnapshot(cell)));
     }
     raf = requestAnimationFrame(tick);
   };
@@ -264,7 +272,16 @@ async function buildGridCell(cell, revision) {
   } catch (e) {
     try { cell.viewer?.dispose(); } catch (_) {}
     cell.viewer = null; cell.plugin = null;
-    if (!cell.disposed && revision === gridBuildRevision) cell.host.innerHTML = `<div class="grid-error">Could not load this pose viewer.<br>${e.message}</div>`;
+    if (!cell.disposed && revision === gridBuildRevision) {
+      cell.failed = true;
+      cell.head.disabled = true;
+      cell.head.onclick = null;
+      cell.card.classList.add('failed');
+      const message = document.createElement('div');
+      message.className = 'grid-error';
+      message.textContent = `Could not load this pose viewer. ${e.message}`;
+      cell.host.replaceChildren(message);
+    }
   }
 }
 async function buildGrid(preserveCamera = true) {
@@ -358,13 +375,11 @@ async function buildHbonds(poseUrls) {
   if (!comp) return;
   await plugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
 }
-async function buildSingleLayer() {
+async function buildCanonicalLayer(shown) {
   saveCam();
   await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
-  const vis = visibleChoices();
-  const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
   for (const c of shown) {
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
@@ -382,8 +397,21 @@ async function buildSingleLayer() {
   restoreCam();
   viewerTraceRecorder?.captureState();
 }
+async function buildSingleLayer() {
+  const answer = cur.revealed && cur.showAnswer;
+  const vis = visibleChoices();
+  const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
+  return buildCanonicalLayer(shown);
+}
 async function buildLayer() {
-  if (displayMode === 'grid') return buildGrid();
+  if (displayMode === 'grid') {
+    try {
+      await buildCanonicalLayer(gridEntries().map(entry => entry.choice));
+    } catch (error) {
+      console.warn('Canonical Grid scene could not be built:', error.message);
+    }
+    return buildGrid();
+  }
   if ($('#gridview').classList.contains('on')) {
     gridBuildRevision++;
     try { return await buildSingleLayer(); }
@@ -498,6 +526,27 @@ function renderDevNav() {
 // no wrong answer is no puzzle; it belongs in Hard as the positive control for the "none of these" call).
 function filteredPool() {
   return POOLS[quizSource].filter(it => difficulty === 'hard' ? true : it.bucket === 'game-able' && it.easyPlayable);
+}
+
+// Easy needs a real pick puzzle in the choices a clustered view can reach: a pose under the correct
+// threshold and a clearly wrong one. Lifted out of norm() unchanged so the ported eligibility rule (global
+// cluster representatives, plus the pooled Runs-n-Poses per-method representatives) keeps the same pool.
+function easyPlayable(choices, source) {
+  const byCluster = {};
+  for (const choice of choices) (byCluster[choice.cluster] ??= []).push(choice);
+  const clusters = Object.values(byCluster);
+  const globalReps = clusters.map(members => members.find(choice => choice.is_rep) || members[0]);
+  const candidateSets = [globalReps];
+  if (source === 'rnp') {
+    const methods = [...new Set(choices.map(choice => choice._method).filter(Boolean))];
+    candidateSets.push(methods.flatMap(method => clusters.map(members => {
+      const fromMethod = members.filter(choice => choice._method === method);
+      return fromMethod.find(choice => choice.is_rep) || fromMethod[0];
+    }).filter(Boolean)));
+  }
+  const isPickPuzzle = candidates => candidates.some(choice => choice.rmsd < CORRECT_THRESH)
+    && candidates.some(choice => choice.rmsd > WRONG_THRESH);
+  return candidateSets.every(isPickPuzzle);
 }
 
 function showIntro() {
@@ -775,6 +824,7 @@ function next() {
 }
 function finish() {
   hideGrid();
+  researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
@@ -898,21 +948,8 @@ async function init() {
     const bucket = (hasC && hasW) ? 'game-able'
       : (ch.every(c => c.rmsd > WRONG_THRESH) ? 'all-wrong'
       : (ch.every(c => c.rmsd < CORRECT_THRESH) ? 'all-correct' : 'limbo'));
-    const byCluster = {};
-    for (const choice of ch) (byCluster[choice.cluster] ??= []).push(choice);
-    const clusters = Object.values(byCluster);
-    const globalReps = clusters.map(members => members.find(choice => choice.is_rep) || members[0]);
-    const candidateSets = [globalReps];
-    if (source === 'rnp') {
-      const methods = [...new Set(ch.map(choice => choice._method).filter(Boolean))];
-      candidateSets.push(methods.flatMap(method => clusters.map(members => {
-        const fromMethod = members.filter(choice => choice._method === method);
-        return fromMethod.find(choice => choice.is_rep) || fromMethod[0];
-      }).filter(Boolean)));
-    }
-    const isPickPuzzle = choices => choices.some(choice => choice.correct) && choices.some(choice => choice.rmsd > WRONG_THRESH);
-    const easyPlayable = candidateSets.every(isPickPuzzle);
-    return { ...it, source, choices: ch, has_correct: hasC, bucket, easyPlayable };
+    return { ...it, source, choices: ch, has_correct: hasC, bucket,
+      easyPlayable: easyPlayable(ch, source) };
   };
   // CAMEO: game-able + all-wrong + all-correct(positive control).  RnP: single file already carries all three buckets.
   const [cg, ca, cx, rn] = await Promise.all([fetchItems('quiz_items.json'), fetchItems('quiz_items_allwrong.json'),
@@ -943,7 +980,7 @@ async function init() {
       }
       if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
       syncButtons();
-    });
+    }, renderUI);
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
     if (interactionBlocked()) return;

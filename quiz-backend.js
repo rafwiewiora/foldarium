@@ -238,10 +238,7 @@ export function createQuizBackend({
           + ` (${firstFailure.message}). Free browser storage space and try saving again.`,
         );
       }
-      const deadLettered = Math.max(
-        currentOutcome.deadLettered,
-        countStoredKeys(storage, DEAD_LETTER_PREFIX),
-      );
+      const deadLettered = currentOutcome.deadLettered;
       if (deadLettered) {
         throw persistenceIncompleteError(
           `${deadLettered} quiz operation(s) were dead-lettered.`,
@@ -406,17 +403,5 @@ function readOperations(storage) {
     return entries.sort((left, right) => left.key.localeCompare(right.key));
   } catch {
     return [];
-  }
-}
-
-function countStoredKeys(storage, prefix) {
-  try {
-    let count = 0;
-    for (let index = 0; index < storage.length; index++) {
-      if (storage.key(index)?.startsWith(prefix)) count++;
-    }
-    return count;
-  } catch {
-    return 0;
   }
 }

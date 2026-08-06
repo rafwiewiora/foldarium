@@ -240,13 +240,31 @@ test('strict flush rejects when an operation is dead-lettered', async () => {
   });
 
   backend.startSession({ source: 'cameo', difficulty: 'easy' });
-  await backend.flush();
-  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncDeadV2:')).length, 1);
   await assert.rejects(
     backend.flush({ strict: true }),
     error => error.code === 'QUIZ_PERSISTENCE_INCOMPLETE'
       && /dead-lettered/i.test(error.message),
   );
+  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncDeadV2:')).length, 1);
+  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncOpV2:')).length, 0);
+});
+
+test('strict flush ignores historical dead letters after the current drain succeeds', async () => {
+  const { client, setErrors } = fakeSupabase();
+  const storage = memoryStorage();
+  setErrors({ message: 'historical permanent failure', status: 403, code: '42501' });
+  const backend = createQuizBackend({
+    client,
+    storage,
+    uuid: sequenceUuid('failed-session', 'later-session'),
+  });
+
+  backend.startSession({ source: 'cameo', difficulty: 'easy' });
+  await backend.flush();
+  assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncDeadV2:')).length, 1);
+
+  backend.startSession({ source: 'rnp', difficulty: 'hard' });
+  await backend.flush({ strict: true });
   assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncOpV2:')).length, 0);
 });
 
@@ -419,7 +437,7 @@ test('quiz application loading does not await persistence startup', async () => 
 test('dev mode disables every remote research lifecycle call', async () => {
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
   assert.match(app, /const researchBackend = \(\) => DEV \? null : window\.foldariumBackend;/);
-  assert.equal((app.match(/researchBackend\(\)\?\./g) || []).length, 3);
+  assert.equal((app.match(/researchBackend\(\)\?\./g) || []).length, 4);
   assert.doesNotMatch(app, /window\.foldariumBackend\?\./);
 });
 

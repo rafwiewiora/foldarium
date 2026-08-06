@@ -208,12 +208,24 @@ export async function runCli({
   error = console.error,
 } = {}) {
   const { SUPABASE_URL: url, SUPABASE_SERVICE_ROLE_KEY: key } = env;
+  const benchmarkMode = args.includes('--benchmark');
+  if (benchmarkMode && !env.BENCHMARK_DEMO_DIR) {
+    error('BENCHMARK_DEMO_DIR is required in benchmark mode.');
+    return 1;
+  }
   if (!url || !key) {
     error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
     return 1;
   }
 
-  const files = await discoverStructureFiles(rootDir, env.BENCHMARK_DEMO_DIR);
+  const discovered = await discoverStructureFiles(rootDir, env.BENCHMARK_DEMO_DIR);
+  const files = benchmarkMode
+    ? discovered.filter(file => file.objectKey.startsWith('benchmark/demo/'))
+    : discovered;
+  if (benchmarkMode && !files.length) {
+    error(`No benchmark PDB/CIF files found in BENCHMARK_DEMO_DIR: ${env.BENCHMARK_DEMO_DIR}`);
+    return 1;
+  }
   await ensurePublicBucket({ fetchImpl, url, key });
   const failures = [];
   const summary = await uploadStructures({

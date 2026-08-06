@@ -5,6 +5,6 @@
   "scripts": {
     "test": "node --test",
     "upload:structures": "node scripts/upload-structures.mjs",
-    "upload:benchmark": "node scripts/upload-structures.mjs"
+    "upload:benchmark": "node scripts/upload-structures.mjs --benchmark"
   }
 }
