@@ -346,6 +346,96 @@ test('reconnecting during playback prevents the old operation from changing new 
   }, newSessionUi);
 });
 
+test('a stale old-session answers response cannot overwrite newly connected session UI', async () => {
+  assert.equal(
+    typeof replayModule.createConnectionGeneration,
+    'function',
+    'expected connection generation export',
+  );
+  assert.equal(
+    typeof replayModule.createSessionAnswerLoader,
+    'function',
+    'expected session answer loader export',
+  );
+  const newSessions = deferred();
+  const staleAnswers = deferred();
+  const connectionGeneration = replayModule.createConnectionGeneration();
+  const answerRequests = createLatestRequestGuard();
+  let renderedConnectionGeneration = connectionGeneration.capture();
+  let rememberedPassword = '';
+  let sessionUi = {
+    disabled: false,
+    rows: ['old-session'],
+  };
+  let answerRows = ['old-answer'];
+  let status = 'Old session selected.';
+  const setStatus = message => {
+    status = message;
+  };
+  const sessionLoader = createSessionListLoader({
+    requestSessions: () => newSessions.promise,
+    applySessions(rows) {
+      renderedConnectionGeneration = connectionGeneration.capture();
+      sessionUi = { disabled: false, rows };
+      status = 'Select a session.';
+    },
+  });
+  const connect = replayModule.createReplayConnectHandler({
+    connectionGeneration,
+    sessionLoader,
+    answerRequests,
+    playbackUi: { stop: async () => {} },
+    readPassword: () => 'new-password',
+    rememberPassword(value) {
+      rememberedPassword = value;
+    },
+    clearPasswordInput: () => {},
+    clearAnswerState() {
+      answerRows = [];
+    },
+    clearSessionState() {
+      sessionUi = { disabled: true, rows: [] };
+    },
+    setConnectDisabled: () => {},
+    setStatus,
+  });
+  const loadAnswers = replayModule.createSessionAnswerLoader({
+    answerRequests,
+    connectionGeneration,
+    playbackUi: { stop: async () => {} },
+    requestAnswers(sessionId) {
+      assert.equal(sessionId, 'old-session');
+      return staleAnswers.promise;
+    },
+    clearAnswers() {
+      answerRows = [];
+    },
+    applyAnswers(rows) {
+      answerRows = rows;
+      status = 'Select an answer to replay.';
+    },
+    setStatus,
+  });
+
+  const reconnecting = connect();
+  assert.deepEqual(sessionUi, { disabled: true, rows: [] });
+  assert.deepEqual(answerRows, []);
+
+  const staleAnswerLoad = loadAnswers('old-session', renderedConnectionGeneration);
+  await new Promise(resolve => setImmediate(resolve));
+  newSessions.resolve(['new-session']);
+  assert.equal(await reconnecting, true);
+  assert.equal(rememberedPassword, 'new-password');
+  assert.deepEqual(sessionUi, { disabled: false, rows: ['new-session'] });
+  assert.equal(status, 'Select a session.');
+
+  staleAnswers.resolve(['stale-answer']);
+  assert.equal(await staleAnswerLoad, false);
+  assert.deepEqual(answerRows, []);
+  assert.deepEqual(sessionUi, { disabled: false, rows: ['new-session'] });
+  assert.equal(status, 'Select a session.');
+});
+
 test('displays replay identifiers and answer time as option text', () => {
   const session = {
     id: '00000000-0000-4000-8000-000000000001',

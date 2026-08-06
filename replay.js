@@ -50,12 +50,28 @@ export function createLatestRequestGuard() {
   };
 }
 
+export function createConnectionGeneration() {
+  let generation = 0;
+  return {
+    advance() {
+      generation += 1;
+      return generation;
+    },
+    capture() {
+      return generation;
+    },
+    owns(value) {
+      return value === generation;
+    },
+  };
+}
+
 export function createSessionListLoader({ requestSessions, applySessions }) {
   const requests = createLatestRequestGuard();
   return {
-    async load() {
+    async load(isCurrent = () => true) {
       const result = await requests.run(requestSessions);
-      if (!result.accepted) return false;
+      if (!result.accepted || !isCurrent()) return false;
       applySessions(result.value);
       return true;
     },
@@ -226,7 +242,41 @@ export function createReplayPlaybackUi({
   };
 }
 
+export function createSessionAnswerLoader({
+  answerRequests,
+  connectionGeneration,
+  playbackUi,
+  requestAnswers,
+  clearAnswers,
+  applyAnswers,
+  setStatus,
+}) {
+  return async function loadAnswers(
+    sessionId,
+    sessionGeneration = connectionGeneration.capture(),
+  ) {
+    clearAnswers();
+    setStatus(sessionId ? 'Loading traced answers…' : 'Select a session.');
+    try {
+      const result = await answerRequests.run(async signal => {
+        await playbackUi.stop({ announce: false });
+        if (!sessionId) return [];
+        return requestAnswers(sessionId, signal);
+      });
+      if (!result.accepted || !connectionGeneration.owns(sessionGeneration)) return false;
+      applyAnswers(result.value, sessionId);
+      return true;
+    } catch (error) {
+      if (!connectionGeneration.owns(sessionGeneration)) return false;
+      clearAnswers();
+      setStatus(error.message, true);
+      return false;
+    }
+  };
+}
+
 export function createReplayConnectHandler({
+  connectionGeneration = createConnectionGeneration(),
   sessionLoader,
   answerRequests,
   playbackUi,
@@ -238,16 +288,15 @@ export function createReplayConnectHandler({
   setConnectDisabled,
   setStatus,
 }) {
-  let generation = 0;
-
   return async function connect() {
-    const connectGeneration = ++generation;
+    const connectGeneration = connectionGeneration.advance();
     sessionLoader.cancel();
     answerRequests.cancel();
     const password = readPassword();
     rememberPassword(password);
     clearPasswordInput();
     const stopping = playbackUi.stop({ announce: false });
+    clearSessionState();
     clearAnswerState();
 
     if (!password) {
@@ -259,18 +308,20 @@ export function createReplayConnectHandler({
     setConnectDisabled(true);
     setStatus('Loading recent sessions…');
     await stopping;
-    if (connectGeneration !== generation) return false;
+    if (connectGeneration !== connectionGeneration.capture()) return false;
 
     try {
-      const applied = await sessionLoader.load();
-      return connectGeneration === generation && applied;
+      const applied = await sessionLoader.load(
+        () => connectionGeneration.owns(connectGeneration),
+      );
+      return connectionGeneration.owns(connectGeneration) && applied;
     } catch (error) {
-      if (connectGeneration !== generation) return false;
+      if (!connectionGeneration.owns(connectGeneration)) return false;
       clearSessionState();
       setStatus(error.message, true);
       return false;
     } finally {
-      if (connectGeneration === generation) setConnectDisabled(false);
+      if (connectionGeneration.owns(connectGeneration)) setConnectDisabled(false);
     }
   };
 }
@@ -285,6 +336,8 @@ async function initReplayPage() {
   const status = document.getElementById('status');
   const answersById = new Map();
   const answerRequests = createLatestRequestGuard();
+  const connectionGeneration = createConnectionGeneration();
+  let renderedConnectionGeneration = connectionGeneration.capture();
 
   function setStatus(message, isError = false) {
     status.textContent = message;
@@ -329,12 +382,14 @@ async function initReplayPage() {
   const sessionLoader = createSessionListLoader({
     requestSessions: signal => requestReplay({ action: 'sessions' }, signal),
     applySessions(sessions) {
+      renderedConnectionGeneration = connectionGeneration.capture();
       replaceSelectOptions(sessionSelect, sessions, formatSessionLabel);
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
     },
   });
   const connect = createReplayConnectHandler({
+    connectionGeneration,
     sessionLoader,
     answerRequests,
     playbackUi,
@@ -351,41 +406,38 @@ async function initReplayPage() {
     },
     clearSessionState() {
       replaceSelectOptions(sessionSelect, [], formatSessionLabel);
-      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
     },
     setConnectDisabled(value) {
       connectButton.disabled = value;
     },
     setStatus,
   });
-
-  async function loadAnswers() {
-    const sessionId = sessionSelect.value;
-    answersById.clear();
-    playButton.disabled = true;
-    stopButton.disabled = true;
-    replaceSelectOptions(answerSelect, [], formatAnswerLabel);
-    setStatus(sessionId ? 'Loading traced answers…' : 'Select a session.');
-    try {
-      const result = await answerRequests.run(async signal => {
-        await playbackUi.stop({ announce: false });
-        if (!sessionId) return [];
-        return requestReplay({
-          action: 'answers',
-          session_id: sessionId,
-        }, signal);
-      });
-      if (!result.accepted) return;
-      const answers = result.value;
+  const loadSessionAnswers = createSessionAnswerLoader({
+    answerRequests,
+    connectionGeneration,
+    playbackUi,
+    requestAnswers: (sessionId, signal) => requestReplay({
+      action: 'answers',
+      session_id: sessionId,
+    }, signal),
+    clearAnswers() {
+      answersById.clear();
+      playButton.disabled = true;
+      stopButton.disabled = true;
+      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
+    },
+    applyAnswers(answers, sessionId) {
       for (const answer of answers) answersById.set(String(answer.id), answer);
       replaceSelectOptions(answerSelect, answers, formatAnswerLabel);
       setStatus(sessionId
         ? (answers.length ? 'Select an answer to replay.' : 'This session has no traced answers.')
         : 'Select a session.');
-    } catch (error) {
-      replaceSelectOptions(answerSelect, [], formatAnswerLabel);
-      setStatus(error.message, true);
-    }
+    },
+    setStatus,
+  });
+
+  function loadAnswers() {
+    return loadSessionAnswers(sessionSelect.value, renderedConnectionGeneration);
   }
 
   connectButton.addEventListener('click', () => { void connect(); });
