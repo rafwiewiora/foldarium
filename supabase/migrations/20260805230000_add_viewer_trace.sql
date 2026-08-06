@@ -7,7 +7,7 @@ alter table public.quiz_answers
     viewer_trace is null
     or (
       jsonb_typeof(viewer_trace) = 'object'
-      and viewer_trace ->> 'version' = '1'
+      and viewer_trace -> 'version' = '1'::jsonb
       and jsonb_typeof(viewer_trace -> 'snapshots') = 'array'
     ) is true
   );

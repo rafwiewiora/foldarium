@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import * as quizBackendModule from '../quiz-backend.js';
 import { createQuizBackend, initQuizBackend } from '../quiz-backend.js';
 
 function memoryStorage() {
@@ -686,6 +687,67 @@ test('retains a JSON-safe viewer trace snapshot after caller mutation before flu
   });
   assert.deepEqual(warnings, [['Quiz results remain queued:', 'write failed']]);
 });
+
+test('normalizes only JSON-safe version-1 trace objects', () => {
+  assert.equal(
+    typeof quizBackendModule.normalizeViewerTrace,
+    'function',
+    'expected a pure viewer trace normalizer export',
+  );
+  const valid = {
+    version: 1,
+    molstar_version: '4.6.0',
+    snapshots: [],
+  };
+  const normalized = quizBackendModule.normalizeViewerTrace(valid);
+  assert.deepEqual(normalized, valid);
+  assert.notEqual(normalized, valid);
+
+  assert.equal(quizBackendModule.normalizeViewerTrace({
+    version: () => 1,
+    snapshots: [],
+  }), null);
+  assert.equal(quizBackendModule.normalizeViewerTrace({
+    version: 1,
+    snapshots: Symbol('snapshots'),
+  }), null);
+  assert.equal(quizBackendModule.normalizeViewerTrace({
+    version: '1',
+    snapshots: [],
+  }), null);
+});
+
+for (const [label, viewerTrace] of [
+  ['function-valued version', { version: () => 1, snapshots: [] }],
+  ['symbol-valued snapshots', { version: 1, snapshots: Symbol('snapshots') }],
+]) {
+  test(`stores the answer without a trace or dead letter for a nested ${label}`, async () => {
+    const warnings = await captureWarnings(async () => {
+      const { client, writes } = fakeSupabase();
+      const storage = memoryStorage();
+      const backend = createQuizBackend({
+        client,
+        storage,
+        uuid: sequenceUuid('answer-id'),
+        now: () => new Date('2026-08-05T18:00:00.000Z'),
+      });
+
+      backend.recordAnswer('session-id', 0, answerRecord({ viewer_trace: viewerTrace }));
+      await backend.flush();
+
+      const persisted = answerWrite(writes);
+      assert.ok(persisted, 'scientific answer should be persisted');
+      assert.equal(persisted.value.id, 'answer-id');
+      assert.equal(persisted.value.item_id, 'item-7');
+      assert.equal(persisted.value.viewer_trace, null);
+      assert.equal(
+        storage.keys().filter(key => key.startsWith('foldariumSyncDeadV2:')).length,
+        0,
+      );
+    });
+    assert.deepEqual(warnings, [['Viewer trace omitted:', 'invalid version-1 shape']]);
+  });
+}
 
 test('stores the answer without a cyclic viewer trace', async () => {
   const warnings = await captureWarnings(async () => {

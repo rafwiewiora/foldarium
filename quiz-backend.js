@@ -4,6 +4,36 @@ const KIND_ORDER = { session: 0, answer: 1, complete: 2 };
 const MAX_VIEWER_TRACE_BYTES = 512 * 1024;
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
+function normalizeViewerTraceResult(viewerTrace) {
+  if (viewerTrace === null || viewerTrace === undefined) {
+    return { value: null, warning: null };
+  }
+  try {
+    const serialized = JSON.stringify(viewerTrace);
+    if (serialized === undefined) {
+      return { value: null, warning: 'not JSON-serializable' };
+    }
+    if (new TextEncoder().encode(serialized).byteLength > MAX_VIEWER_TRACE_BYTES) {
+      return { value: null, warning: `exceeds ${MAX_VIEWER_TRACE_BYTES}-byte limit` };
+    }
+    const normalized = JSON.parse(serialized);
+    if (normalized === null
+      || typeof normalized !== 'object'
+      || Array.isArray(normalized)
+      || normalized.version !== 1
+      || !Array.isArray(normalized.snapshots)) {
+      return { value: null, warning: 'invalid version-1 shape' };
+    }
+    return { value: normalized, warning: null };
+  } catch (error) {
+    return { value: null, warning: error.message };
+  }
+}
+
+export function normalizeViewerTrace(viewerTrace) {
+  return normalizeViewerTraceResult(viewerTrace).value;
+}
+
 const disabledBackend = {
   startSession: () => null,
   recordAnswer: () => {},
@@ -117,24 +147,9 @@ export function createQuizBackend({
     },
     recordAnswer(sessionId, questionIndex, record) {
       if (!sessionId) return;
-      let viewerTrace = record.viewer_trace ?? null;
-      try {
-        if (viewerTrace !== null) {
-          const serialized = JSON.stringify(viewerTrace);
-          if (serialized === undefined) {
-            console.warn('Viewer trace omitted:', 'not JSON-serializable');
-            viewerTrace = null;
-          } else if (new TextEncoder().encode(serialized).byteLength > MAX_VIEWER_TRACE_BYTES) {
-            console.warn('Viewer trace omitted:', `exceeds ${MAX_VIEWER_TRACE_BYTES}-byte limit`);
-            viewerTrace = null;
-          } else {
-            viewerTrace = JSON.parse(serialized);
-          }
-        }
-      } catch (error) {
-        console.warn('Viewer trace omitted:', error.message);
-        viewerTrace = null;
-      }
+      const normalizedTrace = normalizeViewerTraceResult(record.viewer_trace);
+      const viewerTrace = normalizedTrace.value;
+      if (normalizedTrace.warning) console.warn('Viewer trace omitted:', normalizedTrace.warning);
       const answer = {
         id: uuid(),
         session_id: sessionId,

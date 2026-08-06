@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-test('viewer trace constraint rejects non-null rows when a required shape check is NULL', async () => {
+test('viewer trace constraint requires a numeric version and rejects NULL shape checks', async () => {
   const sql = await readFile(
     new URL('../supabase/migrations/20260805230000_add_viewer_trace.sql', import.meta.url),
     'utf8',
@@ -11,6 +11,7 @@ test('viewer trace constraint rejects non-null rows when a required shape check 
 
   assert.match(
     normalized,
-    /viewer_trace is null or \( jsonb_typeof\(viewer_trace\) = 'object' and viewer_trace ->> 'version' = '1' and jsonb_typeof\(viewer_trace -> 'snapshots'\) = 'array' \) is true/,
+    /viewer_trace is null or \( jsonb_typeof\(viewer_trace\) = 'object' and viewer_trace -> 'version' = '1'::jsonb and jsonb_typeof\(viewer_trace -> 'snapshots'\) = 'array' \) is true/,
   );
+  assert.doesNotMatch(normalized, /viewer_trace ->> 'version'/);
 });
