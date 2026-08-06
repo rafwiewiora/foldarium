@@ -834,7 +834,7 @@ async function submitSession() {
     }
     if (stage === 'persistence') {
       console.warn('Quiz completion persistence failed:', error.message);
-      message.textContent = 'Quiz results could not be saved, so rankings were not loaded. Check your connection and try again.';
+      message.textContent = 'Quiz results could not be saved, so rankings were not loaded. Check browser storage and your connection, then try again.';
     } else if (stage === 'username') {
       console.warn('Leaderboard username claim failed:', error.message);
       message.textContent = 'Your quiz was saved, but the username could not be claimed. Try again.';

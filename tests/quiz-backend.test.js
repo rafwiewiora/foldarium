@@ -250,6 +250,49 @@ test('strict flush rejects when an operation is dead-lettered', async () => {
   assert.equal(storage.keys().filter(key => key.startsWith('foldariumSyncOpV2:')).length, 0);
 });
 
+test('strict flush rejects and blocks leaderboard RPCs when completion cannot be queued', async () => {
+  const warnings = await captureWarnings(async () => {
+    const { client, rpcs } = fakeSupabase();
+    const storage = memoryStorage();
+    const originalSetItem = storage.setItem;
+    let rejectCompletion = false;
+    storage.setItem = (key, value) => {
+      const entry = JSON.parse(value);
+      if (rejectCompletion && entry.kind === 'complete') {
+        throw new Error('browser storage quota exceeded');
+      }
+      originalSetItem(key, value);
+    };
+    const backend = createQuizBackend({
+      client,
+      storage,
+      uuid: sequenceUuid('session-id'),
+    });
+
+    const sessionId = backend.startSession({ source: 'cameo', difficulty: 'easy' });
+    await backend.flush();
+    rejectCompletion = true;
+
+    let rankingsLoaded = false;
+    try {
+      backend.completeSession(sessionId);
+      await backend.flush({ strict: true });
+      await backend.claimUsername('player_one');
+      await backend.getLeaderboard();
+      rankingsLoaded = true;
+    } catch (error) {
+      assert.equal(error.code, 'QUIZ_PERSISTENCE_INCOMPLETE');
+      assert.match(error.message, /could not be queued.*browser storage.*try saving again/i);
+    }
+
+    assert.equal(rankingsLoaded, false);
+    assert.deepEqual(rpcs, []);
+  });
+  assert.deepEqual(warnings, [
+    ['Quiz result queue could not be saved:', 'browser storage quota exceeded'],
+  ]);
+});
+
 test('deferred strict and leaderboard calls wait for attach after queued lifecycle replay', async () => {
   assert.equal(
     typeof quizBackendModule.createDeferredBackend,
@@ -390,6 +433,7 @@ test('completion strictly persists before loading rankings and distinguishes fai
   assert.ok(usernameClaim < leaderboardRead);
   assert.ok(app.includes('pattern="[A-Za-z0-9_\\\\-]+"'));
   assert.match(app, /Quiz results could not be saved/);
+  assert.match(app, /Check browser storage and your connection/);
   assert.match(app, /username could not be claimed/);
   assert.match(app, /leaderboard could not be loaded/);
 });

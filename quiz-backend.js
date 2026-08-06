@@ -127,13 +127,17 @@ export function createQuizBackend({
   let flushing = null;
   let flushOutcome = null;
   let flushAgain = false;
+  const enqueueFailures = new Map();
 
   const enqueue = (kind, value, { warnOnFailure = true } = {}) => {
     const entry = { kind, value };
+    const key = operationKey(entry);
     try {
-      storage.setItem(operationKey(entry), JSON.stringify(entry));
+      storage.setItem(key, JSON.stringify(entry));
+      enqueueFailures.delete(key);
       if (flushing) flushAgain = true;
     } catch (error) {
+      enqueueFailures.set(key, error);
       if (warnOnFailure) console.warn('Quiz result queue could not be saved:', error.message);
       return false;
     }
@@ -227,6 +231,13 @@ export function createQuizBackend({
     const currentOutcome = flushOutcome;
     if (!strict) return currentFlush;
     return currentFlush.then(() => {
+      if (enqueueFailures.size) {
+        const firstFailure = enqueueFailures.values().next().value;
+        throw persistenceIncompleteError(
+          `${enqueueFailures.size} quiz operation(s) could not be queued in browser storage`
+          + ` (${firstFailure.message}). Free browser storage space and try saving again.`,
+        );
+      }
       const deadLettered = Math.max(
         currentOutcome.deadLettered,
         countStoredKeys(storage, DEAD_LETTER_PREFIX),
