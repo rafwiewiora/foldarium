@@ -27,9 +27,13 @@ const OPTS = {
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 const researchBackend = () => DEV ? null : window.foldariumBackend;
+const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
 let remoteSessionId = null;
+let viewerTraceRecorder = null;
+let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
+let viewerTransitionBusy = false;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
@@ -48,17 +52,29 @@ const hex = c => '#' + c.toString(16).padStart(6, '0');
 // "locked" = the green/red answer is on screen; controls are inert only then. In "my view" (revealed but
 // answer hidden) everything is interactive again, exactly as before voting.
 const locked = () => cur && cur.revealed && cur.showAnswer;
+const interactionBlocked = () => viewerTransitionBusy || revealRequested || locked();
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)' : 'AlphaFold3 (pLDDT-ranked)');
 
+function setViewerControlsBusy(busy) {
+  viewerTransitionBusy = busy;
+  document.querySelectorAll(
+    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #lock, '
+    + '#next, #prev, #myview, #showXtal, #start',
+  ).forEach(control => { control.disabled = busy; });
+  if (!busy && cur && !cur.revealed) {
+    $('#lock').disabled = revealRequested || cur.selected == null;
+  }
+}
+
 async function loadStruct(url, format) {
-  const data = await plugin.builders.data.download({ url: url + '?v=' + CACHE_BUST, isBinary: false });
+  const data = await plugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
   const traj = await plugin.builders.structure.parseTrajectory(data, format);
   const model = await plugin.builders.structure.createModel(traj);
   const struct = await plugin.builders.structure.createStructure(model);
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
-  const r = await fetch(url + '?v=' + CACHE_BUST);
+  const r = await fetch(assetUrl(url) + '?v=' + CACHE_BUST);
   return r.ok ? await r.text() : '';
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
@@ -177,10 +193,10 @@ async function buildLayer() {           // only the moving ligand poses (+ cryst
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
   restoreCam();
+  viewerTraceRecorder?.captureState();
 }
 
 async function loadQuestion(i) {
-  idx = i;
   const item = ITEMS[i];
   // build cluster objects in shuffled order, colour per cluster
   const byCluster = {};
@@ -190,22 +206,30 @@ async function loadQuestion(i) {
     members.forEach((m, j) => { m.color = color; m.label = label + (members.length > 1 ? '·' + (j + 1) : ''); });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
-  cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
-  // PERSIST across questions: seed displayMode / clustered / proteinMode from the user's last choice
-  // (userView), NOT from the live globals which reveal() may have overridden for its correctness list.
-  // RESET per question: shownOne (pose index differs) + the fresh-vote/reveal state (cur.selected /
-  // cur.revealed / cur.showAnswer, set above) so the answer starts hidden.
-  applyUserView();
-  shownOne = 0;
-  $('#myview').style.display = 'none'; $('#start').style.display = 'none';
-  $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
-  try { await plugin.clear(); } catch (e) {}
-  proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
-  showXtal = false;
-  syncButtons();
-  await buildLayer();          // builds the protein (via buildProtein) + the poses
-  try { plugin.canvas3d?.requestCameraReset(); } catch (e) {}  // frame only on a NEW question
-  renderUI();
+  await viewerRebuild.enqueue(
+    async () => {
+      viewerTraceRecorder?.stop();
+      idx = i;
+      cur = { item, clusters, selected: null, revealed: false, showAnswer: false };
+      // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
+      applyUserView();
+      shownOne = 0;
+      $('#myview').style.display = 'none'; $('#start').style.display = 'none';
+      $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
+      try { await plugin.clear(); } catch (e) {}
+      proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
+      showXtal = false;
+      syncButtons();
+    },
+    async () => {
+      await window.waitForCameraSettled({
+        cameraChanged: plugin.canvas3d?.camera?.changed,
+        requestReset: () => plugin.canvas3d?.requestCameraReset?.(),
+      });
+      viewerTraceRecorder?.start();
+      renderUI();
+    },
+  );
 }
 
 function renderUI() {
@@ -215,7 +239,7 @@ function renderUI() {
   const box = $('#choices'); box.innerHTML = '';
   visibleChoices().forEach((c, k) => {
     const b = document.createElement('button');
-    b.className = 'choice'; b.dataset.k = k;
+    b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
     let nm;
     if (clustered) {
       const cl = cur.clusters[k];
@@ -228,7 +252,7 @@ function renderUI() {
   });
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
-    nb.className = 'choice none'; nb.dataset.k = 'none';
+    nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
     nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
@@ -238,7 +262,7 @@ function renderUI() {
     else { const vis = visibleChoices(); const k = vis.findIndex(c => c.cluster === cur.selected.cluster); if (k >= 0) document.querySelectorAll('.choice')[k]?.classList.add('sel'); }
   }
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
-  $('#lock').disabled = cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
+  $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
   $('#next').style.display = cur.revealed ? '' : 'none';
   updateScore();
@@ -308,9 +332,20 @@ function startQuiz() {
   loadQuestion(0);
 }
 
-function onPick(k) {
-  if (locked()) return;
-  if (cur.revealed) { if (k !== 'none' && displayMode === 'one') { shownOne = k; buildLayer(); } return; }  // my-view: navigate, don't re-vote
+async function onPick(k) {
+  if (interactionBlocked()) return;
+  if (k !== 'none' && displayMode === 'one') {
+    const selected = cur.revealed ? null : visibleChoices()[k];
+    await viewerRebuild.enqueue(() => {
+      shownOne = k;
+      if (!cur.revealed) {
+        cur.selected = selected;
+        document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+      }
+    });
+    return;
+  }
+  if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
   if (k === 'none') {
     cur.selected = { none: true, correct: !cur.item.has_correct, label: 'None of these' };
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
@@ -320,13 +355,26 @@ function onPick(k) {
   cur.selected = visibleChoices()[k];
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
   $('#lock').disabled = false;
-  if (displayMode === 'one') { shownOne = k; buildLayer(); }
 }
 
 async function reveal() {
+  if (cur.selected == null || cur.revealed || revealRequested) return;
+  revealRequested = true;
+  $('#lock').disabled = true;
+  try {
+    await revealAfterIdle();
+  } finally {
+    revealRequested = false;
+    if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
+  }
+}
+
+async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
-  cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
-  await buildLayer();
+  const viewerTrace = viewerTraceRecorder?.stop() ?? null;
+  await viewerRebuild.enqueue(() => {
+    cur.revealed = true; cur.showAnswer = true; displayMode = 'all'; clustered = false; syncButtons();
+  });
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = !!picked.correct, af3Right = !!(af3 && af3.correct);
@@ -351,22 +399,27 @@ async function reveal() {
   $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Final score →';
   $('#myview').style.display = ''; $('#myview').textContent = '← Back to my view (hide answer)';
   if (cur.item.xtal_lig_file) $('#xtalrow').style.display = '';
-  updateScore(); logAnswer(picked, af3);
+  updateScore(); logAnswer(picked, af3, viewerTrace);
 }
 
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
 async function toggleAnswer() {
   if (DEV) return toggleAnswerDev();
-  if (!cur.revealed) return;
-  cur.showAnswer = !cur.showAnswer;
-  if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
-  else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
-  syncButtons();
-  await buildLayer();
-  if (cur.showAnswer) {
-    renderRevealList(cur.selected, cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null);
-  } else { renderUI(); }
-  $('#myview').textContent = cur.showAnswer ? '← Back to my view (hide answer)' : 'Show answer →';
+  if (!cur.revealed || viewerTransitionBusy) return;
+  await viewerRebuild.enqueue(
+    () => {
+      cur.showAnswer = !cur.showAnswer;
+      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
+      syncButtons();
+    },
+    () => {
+      if (cur.showAnswer) {
+        renderRevealList(cur.selected, cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null);
+      } else { renderUI(); }
+      $('#myview').textContent = cur.showAnswer ? '← Back to my view (hide answer)' : 'Show answer →';
+    },
+  );
 }
 
 function renderRevealList(picked, af3) {
@@ -399,7 +452,7 @@ function updateScore() {
   $('#sc-rand').textContent = score.n ? `${pct(score.randExp, score.n)}%`
     : `${Math.round(100 / (cur?.clusters.length || 3))}%`;
 }
-function logAnswer(picked, af3) {
+function logAnswer(picked, af3, viewerTrace) {
   const rec = { item_id: cur.item.id, source: cur.item.source, ligand: cur.item.ligand,
     difficulty, picked_none: !!picked.none, picked_sample: picked.none ? -1 : picked.af3_sample,
     picked_correct: !!picked.correct, picked_rmsd: picked.none ? null : picked.rmsd,
@@ -407,7 +460,7 @@ function logAnswer(picked, af3) {
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
-  researchBackend()?.recordAnswer(remoteSessionId, idx, rec);
+  researchBackend()?.recordAnswer(remoteSessionId, idx, { ...rec, viewer_trace: viewerTrace });
 }
 
 function syncButtons() {
@@ -432,23 +485,33 @@ function syncButtons() {
 // Sets cur.revealed alongside cur.showAnswer so buildLayer()/protUrls() colour by correctness and show the
 // crystal reference, but never scores or logs (that lives in reveal(), which dev never calls).
 async function toggleAnswerDev() {
-  cur.showAnswer = !cur.showAnswer;
-  cur.revealed = cur.showAnswer;
-  if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
-  else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
-  syncButtons();
-  await buildLayer();
-  if (cur.showAnswer) {
-    const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
-    renderRevealList(null, af3);
-  } else { renderUI(); }
-  renderDevNav();
+  if (viewerTransitionBusy) return;
+  await viewerRebuild.enqueue(
+    () => {
+      cur.showAnswer = !cur.showAnswer;
+      cur.revealed = cur.showAnswer;
+      if (cur.showAnswer) { clustered = false; displayMode = 'all'; }  // correctness list: always all/unclustered
+      else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
+      syncButtons();
+    },
+    () => {
+      if (cur.showAnswer) {
+        const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
+        renderRevealList(null, af3);
+      } else { renderUI(); }
+      renderDevNav();
+    },
+  );
 }
 // dev free navigation — wraps at the ends, works on every item with no lock required.
-function prevDev() { loadQuestion((idx - 1 + ITEMS.length) % ITEMS.length); }
-function nextDev() { loadQuestion((idx + 1) % ITEMS.length); }
+function prevDev() { if (!viewerTransitionBusy) void loadQuestion((idx - 1 + ITEMS.length) % ITEMS.length); }
+function nextDev() { if (!viewerTransitionBusy) void loadQuestion((idx + 1) % ITEMS.length); }
 
-function next() { if (DEV) return nextDev(); (idx + 1 < ITEMS.length) ? loadQuestion(idx + 1) : finish(); }
+function next() {
+  if (viewerTransitionBusy) return;
+  if (DEV) return nextDev();
+  (idx + 1 < ITEMS.length) ? void loadQuestion(idx + 1) : finish();
+}
 function finish() {
   researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
@@ -466,6 +529,21 @@ function finish() {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
+  viewerRebuild = window.createViewerRebuildCoordinator({
+    rebuild: buildLayer,
+    setBusy: setViewerControlsBusy,
+  });
+  revealAfterIdle = window.createRevealAfterIdle({
+    coordinator: viewerRebuild,
+    reveal: finalizeReveal,
+  });
+  if (!DEV && typeof window.createViewerTraceRecorder === 'function') {
+    try {
+      viewerTraceRecorder = window.createViewerTraceRecorder({ plugin });
+    } catch (error) {
+      console.warn('Viewer recording disabled:', error.message);
+    }
+  }
   if (DEV) {                                            // browse/inspection mode banner + page title
     document.title = 'Pose Quiz · DEV browse';
     const bd = $('#badge'); if (bd) bd.textContent = 'DEV browse · free Prev/Next · reveal answer + RMSDs on demand';
@@ -506,42 +584,67 @@ async function init() {
     difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
   });
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
-    if (locked()) return;
-    displayMode = b.dataset.m; if (displayMode === 'one') shownOne = 0;
-    if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
-    syncButtons(); await buildLayer();
+    if (interactionBlocked()) return;
+    const mode = b.dataset.m;
+    await viewerRebuild.enqueue(() => {
+      displayMode = mode; if (displayMode === 'one') shownOne = 0;
+      if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
+      syncButtons();
+    });
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
-    proteinMode = b.dataset.p;
-    if (!cur.revealed) rememberView();
-    syncButtons(); await buildLayer();
+    if (interactionBlocked()) return;
+    const mode = b.dataset.p;
+    await viewerRebuild.enqueue(() => {
+      proteinMode = mode;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+    });
   });
   $('#uncluster').onclick = async () => {
-    if (locked()) return;
-    clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
-    if (!cur.revealed) rememberView();
-    syncButtons(); await buildLayer(); renderUI();
+    if (interactionBlocked()) return;
+    await viewerRebuild.enqueue(() => {
+      clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+      renderUI();
+    });
   };
   $('#hbonds').onclick = async () => {
-    showHbonds = !showHbonds;
-    if (!cur.revealed) rememberView();       // persist across questions like the other view choices
-    syncButtons(); await buildLayer();
+    if (interactionBlocked()) return;
+    await viewerRebuild.enqueue(() => {
+      showHbonds = !showHbonds;
+      if (!cur.revealed) rememberView();       // persist across questions like the other view choices
+      syncButtons();
+    });
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
   $('#start').onclick = startQuiz;
   $('#myview').onclick = toggleAnswer;
-  $('#showXtal').onchange = async (e) => { showXtal = e.target.checked; await buildLayer(); };
+  $('#showXtal').onchange = async (e) => {
+    if (viewerTransitionBusy) return;
+    const checked = e.target.checked;
+    await viewerRebuild.enqueue(() => { showXtal = checked; });
+  };
   document.addEventListener('keydown', async e => {
     if (DEV && cur) {                                   // dev: Up/Down = prev/next item, any mode, no lock needed
       if (e.key === 'ArrowUp') { e.preventDefault(); prevDev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); nextDev(); return; }
     }
-    if (!cur || locked() || displayMode !== 'one') return;
-    const n = visibleChoices().length;
-    if (e.key === 'ArrowRight') { shownOne = (shownOne + 1) % n; await buildLayer(); }
-    if (e.key === 'ArrowLeft') { shownOne = (shownOne - 1 + n) % n; await buildLayer(); }
+    if (!cur || interactionBlocked() || displayMode !== 'one') return;
+    if (e.key === 'ArrowRight') {
+      await viewerRebuild.enqueue(() => {
+        shownOne = (shownOne + 1) % visibleChoices().length;
+      });
+    }
+    if (e.key === 'ArrowLeft') {
+      await viewerRebuild.enqueue(() => {
+        const n = visibleChoices().length;
+        shownOne = (shownOne - 1 + n) % n;
+      });
+    }
   });
   if (!POOLS.cameo.length && !POOLS.rnp.length) { $('#ligand').textContent = 'no quiz items'; return; }
   showIntro();
