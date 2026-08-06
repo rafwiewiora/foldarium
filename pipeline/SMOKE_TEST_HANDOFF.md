@@ -2,6 +2,10 @@
 
 Last updated: 2026-08-06 (America/Los_Angeles)
 
+> **Repository status change.** This pipeline work is no longer pushed to the public
+> `rafwiewiora/foldarium` remote. Commits stay local until a private remote exists. Do not push
+> `pipeline/...` to `origin` (`https://github.com/rafwiewiora/foldarium`).
+
 This is the working handoff for the next engineer/model. It records the decisions made, what is already
 implemented and pushed, and the exact remaining work to run **one Boltz-2 job and one OpenFold3 job** in
 the credit-limited Modal test workspace.
@@ -32,17 +36,20 @@ https://github.com/rafwiewiora/foldarium
 branch: main
 ```
 
-Relevant pushed commits, newest first:
+Local commits, newest first. Everything above `7d34423` is **local only and must not be pushed to the
+public remote**:
 
 ```text
+a1e3b2d Generate control-plane staging rows from planned tasks   (local only)
+cf81d1b Bound GPU containers and add a synchronous run entrypoint (local only)
+7d34423 Document Modal smoke-test handoff
 7216fca Disable weekly Modal cron by default
 760cd69 Bound Modal smoke-test resources
 c4a30b9 Use standard A100 profile for OpenFold3
 07775e4 Add portable cofolding pipeline scaffold
-f26254f Document independent prediction pipeline
 ```
 
-At handoff, `HEAD`, `origin/main`, and `origin/HEAD` are `7216fca`.
+`origin/main` is `7d34423`.
 
 Important: other work is modifying many `data_rnp_aligned/` and `prep/` files in the same worktree. Those
 changes are unrelated to the pipeline work and were deliberately left untouched. Check status and stage
@@ -60,7 +67,9 @@ only explicit `pipeline/...` paths; never use `git add -A` for this task.
 - `worker.py`: backend-independent subprocess execution and normalized successful/failed results;
 - `supabase.py`: stdlib-only Supabase REST/Storage publisher;
 - `execution.py`: interfaces for execution, object storage, and control-plane implementations;
-- `cli.py`: local validation, deterministic task creation, and no-GPU planning.
+- `staging.py`: derives campaign/target/run rows from a validated task and renders idempotent
+  registration SQL; has no database connectivity by design;
+- `cli.py`: local validation, deterministic task creation, staging SQL, and no-GPU planning.
 
 No Modal, GCP, or Supabase SDK types are present in the scientific adapters.
 
@@ -102,6 +111,8 @@ serialization. They must never enter task JSON, browser code, logs, or git.
 - explicit OF3 checkpoint/cache bootstrap;
 - OF3 GPU: A100-40GB, 8 physical CPU cores, 32 GiB host RAM;
 - Boltz GPU: L40S, 4 physical CPU cores, 16 GiB host RAM;
+- `GPU_FUNCTION_TIMEOUT_SECONDS = 20 * 60` as the outer container ceiling on both GPU functions;
+- a synchronous `run_task` local entrypoint that blocks on `.remote()` and prints the terminal result;
 - `max_containers=1` on each GPU function;
 - scale-to-zero behavior (no warm containers requested);
 - weekly cron completely absent unless `FOLDARIUM_ENABLE_WEEKLY_CRON=1` is present at deploy time.
@@ -152,7 +163,7 @@ the current scaffold, so the first tiny prediction also warms the cache. Do not 
 
 ## Validation already completed
 
-The local suite has 20 passing tests on Python 3.11:
+The local suite has 36 passing tests on Python 3.11:
 
 ```bash
 cd /Users/rafalwiewiora/repos/foldarium
@@ -168,10 +179,25 @@ Coverage includes:
 - path traversal rejection;
 - SHA-256/size verification;
 - idempotent Storage conflict verification;
-- credential redaction and serialization refusal.
+- credential redaction and serialization refusal;
+- staging-row derivation, digests, per-method checkpoint identity, and SQL escaping.
 
 The main pipeline scaffold test workflow and Pages deployment passed before the final two Modal-guard
 commits. Re-run the pipeline test workflow after any new source change.
+
+### Control plane verified against real Postgres
+
+The migration and generated staging SQL were applied to a throwaway `postgres:16-alpine` container and
+the full lifecycle was exercised without spending any GPU credits:
+
+- the migration applies cleanly (its Supabase-role grants are correctly skipped on plain Postgres);
+- the generated staging script applies cleanly and satisfies every payload/column drift constraint;
+- `claim_prediction_run` moves the run to `running` with `attempt_count = 1`;
+- re-applying the staging script while a run is `running` does **not** reset it;
+- a second claim is refused because `max_attempts = 1`;
+- `finish_prediction_run` records both artifact rows, releases the lease, and is idempotent on repeat.
+
+This is the cheapest place to catch schema mistakes. Re-run it after any migration or staging change.
 
 ## Local Modal CLI state
 
@@ -184,30 +210,25 @@ pipeline/.venv
 It contains Modal client `1.5.3`. This Intel Mac could not build the Rust-backed newest `cbor2`, so the
 environment intentionally installed `cbor2==5.9.0` first; Modal accepts it.
 
-Current blocker:
+The client is now authenticated (2026-08-06):
 
 ```text
-Modal token missing; the local client is not authenticated.
+Workspace: foldariumtest
+User:      rafwiewiora
+Environment: main (the only environment, active)
 ```
 
-The user must authenticate interactively. Do not ask them to paste a token into chat:
+## Supabase prerequisites
 
-```bash
-cd /Users/rafalwiewiora/repos/foldarium
-pipeline/.venv/bin/modal token new --profile foldariumtest --activate
-pipeline/.venv/bin/modal token info
+The user designated this project for the smoke test:
+
+```text
+https://supabase.com/dashboard/project/wwentnogbknrbmxhfgbg
+SUPABASE_URL = https://wwentnogbknrbmxhfgbg.supabase.co
 ```
 
-The first command opens a browser. Confirm it associates the CLI with workspace `foldariumtest` and
-environment `main` before any deployment.
-
-## Supabase prerequisites (not done yet)
-
-No Supabase URL/key is present in the local environment, no migration has been applied, no test bucket
-has been created, and no run rows have been inserted.
-
-Ask the user which Supabase project is safe for staging before making changes. Do not assume the live
-project. Recommended staging setup:
+Still outstanding: the migration has not been applied, the test bucket does not exist, the Modal secret
+has not been created, and no run rows have been inserted. Setup:
 
 1. Apply `pipeline/migrations/001_control_plane.sql` in the Supabase SQL editor.
 2. Create a **private** Storage bucket:
@@ -233,9 +254,10 @@ project. Recommended staging setup:
 5. Insert a staging campaign, target, and two prediction-run rows before launching Modal. The publisher
    refuses unknown/unclaimed tasks by design.
 
-There is not yet an enqueue helper. The next engineer/model should create a deterministic smoke-task
-generator that emits task JSON plus parameterized/upsert-safe staging SQL (or add a privileged enqueue
-RPC). Do not weaken the claim-before-run behavior to bypass this prerequisite.
+The enqueue helper now exists: `foldarium_pipeline.staging`, exposed as `cli.py stage-sql`. It derives
+every run column from the validated task, so the payload and its searchable columns cannot drift, and
+renders one idempotent transaction. Existing runs are never modified on conflict. Do not weaken the
+claim-before-run behavior to bypass this prerequisite.
 
 ## Exact two-job smoke-test policy
 
@@ -315,21 +337,17 @@ L40S:       $0.000542/sec -> $0.4878 for 900 GPU seconds
 CPU, host memory, image building, downloads, and Volume storage add cost, but two small bounded jobs
 should remain comfortably within USD 20.
 
-Important remaining hardening before launch: the method subprocess is capped by task
-`resources.timeout_seconds`, but the Modal GPU function decorator still has a six-hour outer timeout.
-For this credit-limited account, add dedicated smoke functions or set the outer GPU function timeout to
-approximately 20 minutes before spending credits. Keep `max_containers=1`. Do not rely only on the inner
-subprocess timeout if the container could hang during startup or publication.
+The outer-timeout hardening is done: both GPU functions now use a 20-minute ceiling
+(`GPU_FUNCTION_TIMEOUT_SECONDS`), which also caps the derived run lease, and `max_containers=1` is
+retained. The inner subprocess timeout is no longer the only bound.
 
 ## Task/run registration details
 
 Use `make_prediction_task(...)` so each run ID is deterministic from campaign, target, method version,
-runtime identity, and method configuration.
+runtime identity, and method configuration. `cli.py make-task` now takes `--resources-json`, so the task
+timeout is set without hand-editing a generated task ID.
 
-The CLI currently has no `--resources-json` option. Either add that option or create the task in a small
-checked-in smoke helper; do not edit the generated task ID by hand.
-
-For each `prediction_runs` row, populate and keep consistent:
+`stage-sql` populates and keeps consistent, for each `prediction_runs` row:
 
 ```text
 run_id                    task.task_id
@@ -358,16 +376,55 @@ core revision, then replace it with an Artifact Registry OCI digest before GCP/p
 The database constraints intentionally reject drift between `task_payload` and duplicated searchable
 columns.
 
+## Generating the two smoke tasks
+
+The configs are committed at `pipeline/examples/smoke/`. This regenerates both task payloads and the
+staging script; the run IDs are deterministic, so re-running it must reproduce them exactly.
+
+```bash
+cd /Users/rafalwiewiora/repos/foldarium
+OF3_IMAGE="docker.io/openfoldconsortium/openfold3:0.4-pixi@sha256:9bc891b799285f0edae94f9f3f05ffcb88f29dc8e758248ce384c64f80e16eec"
+BOLTZ_IMAGE="modal-recipe://foldarium/boltz2?package=boltz%5Bcuda%5D%3D%3D2.2.1&python=3.12&core=7d34423"
+PREFIX="supabase://foldarium-predictions-test/runs"
+
+PYTHONPATH=pipeline/src python3.11 -m foldarium_pipeline.cli make-task pipeline/examples/target.json \
+  --campaign foldarium-smoke --method boltz2 --method-version 2.2.1 \
+  --image "$BOLTZ_IMAGE" --config-json pipeline/examples/smoke/boltz2.config.json \
+  --resources-json pipeline/examples/smoke/resources.json --output-prefix "$PREFIX" > boltz2.task.json
+
+PYTHONPATH=pipeline/src python3.11 -m foldarium_pipeline.cli make-task pipeline/examples/target.json \
+  --campaign foldarium-smoke --method openfold3 --method-version 0.4.4 \
+  --image "$OF3_IMAGE" --config-json pipeline/examples/smoke/openfold3.config.json \
+  --resources-json pipeline/examples/smoke/resources.json --output-prefix "$PREFIX" > openfold3.task.json
+
+PYTHONPATH=pipeline/src python3.11 -m foldarium_pipeline.cli stage-sql \
+  boltz2.task.json openfold3.task.json \
+  --adapter-version "foldarium-pipeline 0.1.0+7d34423" \
+  --campaign-name "Foldarium Modal smoke test" > staging.sql
+```
+
+Expected deterministic run IDs at core revision `7d34423`:
+
+```text
+boltz2     run_80d9f22c2fcb606536750d0b
+openfold3  run_f04f63693b4a28984e0631f1
+```
+
+The task payloads and staging script are generated build products; keep them out of the repository. The
+`modal-recipe://` image identity is smoke-only and must be replaced by an Artifact Registry OCI digest
+before GCP/production use. Bump the `core=` revision if the adapters change.
+
 ## Safe execution order
 
 Do these in order and stop on the first failure:
 
-1. Confirm local Modal token/workspace/environment.
-2. Patch the outer GPU timeout to about 20 minutes; test, commit, and push only those pipeline files.
-3. Confirm the Supabase staging project with the user.
+1. ~~Confirm local Modal token/workspace/environment.~~ Done: `foldariumtest` / `main`.
+2. ~~Patch the outer GPU timeout to about 20 minutes.~~ Done in `cf81d1b`.
+3. ~~Confirm the Supabase staging project with the user.~~ Done: project `wwentnogbknrbmxhfgbg`.
 4. Apply the migration and create the private bucket.
 5. Create the Modal secret in the dashboard.
-6. Generate the deterministic campaign/target/two task payloads and staging upserts.
+6. ~~Generate the deterministic campaign/target/two task payloads and staging upserts.~~ Done in
+   `a1e3b2d`; see the commands above.
 7. Apply the staging rows and verify both runs are claimable but not running.
 8. Parse/import the Modal app locally without deploying to catch SDK errors.
 9. Deploy to environment `main`:
@@ -384,8 +441,15 @@ Do these in order and stop on the first failure:
       pipeline/deploy/modal_app.py::bootstrap_openfold3_cache
     ```
 
-12. Run the single Boltz task. The current local entrypoint uses `.spawn()` and returns a call ID, so
-    monitor it in Modal and Supabase until terminal. Do not submit OF3 concurrently.
+12. Run the single Boltz task synchronously and keep its printed result:
+
+    ```bash
+    pipeline/.venv/bin/modal run --env main \
+      pipeline/deploy/modal_app.py::run_task --task-path boltz2.task.json
+    ```
+
+    Do not submit OF3 concurrently. The asynchronous `submit` entrypoint still exists but should not be
+    used while credits are metered.
 13. Verify Boltz:
     - one succeeded run row;
     - one normalized sample;
@@ -396,8 +460,8 @@ Do these in order and stop on the first failure:
 14. Only then submit the single OF3 task and perform the same checks.
 15. Stop. Do not enable the weekly cron or submit additional samples.
 
-Consider adding a synchronous smoke-test entrypoint that waits for a remote result rather than relying on
-the current asynchronous `.spawn()` path. Preserve the claim/publish flow and hard budget timeout.
+The synchronous `run_task` entrypoint now exists and waits for the remote result. It reuses the same
+claim/publish flow and hard budget timeout as `submit`; it only changes how the operator observes the run.
 
 ## Expected Modal commands after authentication
 
@@ -469,5 +533,7 @@ pipeline/deploy/modal_app.py
 pipeline/deploy/gcp/README.md
 pipeline/migrations/001_control_plane.sql
 pipeline/migrations/README.md
+pipeline/src/foldarium_pipeline/staging.py
+pipeline/examples/smoke/
 DEPLOYMENT.md
 ```
