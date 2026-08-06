@@ -154,6 +154,78 @@ export function createReplayController({
   };
 }
 
+export function createReplayPlaybackUi({
+  replayController,
+  setControls,
+  setStatus,
+  hasSelectedAnswer,
+  validateTrace = validateViewerTrace,
+}) {
+  let generation = 0;
+
+  return {
+    async play(trace) {
+      try {
+        validateTrace(trace);
+      } catch (error) {
+        setStatus(error.message, true);
+        return false;
+      }
+
+      const playGeneration = ++generation;
+      setControls({ playDisabled: true, stopDisabled: false });
+      setStatus('Playing answer trace…');
+      try {
+        const completed = await replayController.play(trace);
+        if (playGeneration !== generation) return false;
+        if (completed) setStatus('Playback complete.');
+        return completed;
+      } catch (error) {
+        if (playGeneration === generation) setStatus(error.message, true);
+        return false;
+      } finally {
+        if (playGeneration === generation) {
+          setControls({ playDisabled: false, stopDisabled: true });
+        }
+      }
+    },
+
+    async selectionChanged(hasAnswer) {
+      const selectionGeneration = ++generation;
+      const stopping = replayController.stop();
+      setControls({ playDisabled: true, stopDisabled: true });
+      try {
+        await stopping;
+      } catch (error) {
+        if (selectionGeneration === generation) setStatus(error.message, true);
+      } finally {
+        if (selectionGeneration === generation) {
+          setControls({ playDisabled: !hasAnswer, stopDisabled: true });
+        }
+      }
+    },
+
+    async stop({ announce = true } = {}) {
+      const stopGeneration = ++generation;
+      const stopping = replayController.stop();
+      setControls({ playDisabled: true, stopDisabled: true });
+      try {
+        await stopping;
+        if (stopGeneration === generation && announce) setStatus('Playback stopped.');
+      } catch (error) {
+        if (stopGeneration === generation) setStatus(error.message, true);
+      } finally {
+        if (stopGeneration === generation) {
+          setControls({
+            playDisabled: !hasSelectedAnswer(),
+            stopDisabled: true,
+          });
+        }
+      }
+    },
+  };
+}
+
 async function initReplayPage() {
   const passwordInput = document.getElementById('replay-password');
   const connectButton = document.getElementById('connect');
@@ -196,6 +268,15 @@ async function initReplayPage() {
     return;
   }
   const replayController = createReplayController({ plugin: viewer.plugin });
+  const playbackUi = createReplayPlaybackUi({
+    replayController,
+    setStatus,
+    hasSelectedAnswer: () => answersById.has(answerSelect.value),
+    setControls({ playDisabled, stopDisabled }) {
+      playButton.disabled = playDisabled;
+      stopButton.disabled = stopDisabled;
+    },
+  });
   const sessionLoader = createSessionListLoader({
     requestSessions: signal => requestReplay({ action: 'sessions' }, signal),
     applySessions(sessions) {
@@ -214,7 +295,7 @@ async function initReplayPage() {
     setStatus(sessionId ? 'Loading traced answers…' : 'Select a session.');
     try {
       const result = await answerRequests.run(async signal => {
-        await replayController.stop();
+        await playbackUi.stop({ announce: false });
         if (!sessionId) return [];
         return requestReplay({
           action: 'answers',
@@ -271,31 +352,15 @@ async function initReplayPage() {
   });
   sessionSelect.addEventListener('change', () => { void loadAnswers(); });
   answerSelect.addEventListener('change', () => {
-    playButton.disabled = !answersById.has(answerSelect.value);
+    void playbackUi.selectionChanged(answersById.has(answerSelect.value));
   });
   playButton.addEventListener('click', () => {
     const answer = answersById.get(answerSelect.value);
     if (!answer) return;
-    playButton.disabled = true;
-    stopButton.disabled = false;
-    setStatus('Playing answer trace…');
-    void replayController.play(answer.viewer_trace).then(completed => {
-      if (completed) setStatus('Playback complete.');
-    }).catch(error => {
-      setStatus(error.message, true);
-    }).finally(() => {
-      playButton.disabled = false;
-      stopButton.disabled = true;
-    });
+    void playbackUi.play(answer.viewer_trace);
   });
   stopButton.addEventListener('click', () => {
-    void replayController.stop().then(() => {
-      setStatus('Playback stopped.');
-      playButton.disabled = !answersById.has(answerSelect.value);
-      stopButton.disabled = true;
-    }).catch(error => {
-      setStatus(error.message, true);
-    });
+    void playbackUi.stop();
   });
 
   setStatus('Enter the replay password to connect.');

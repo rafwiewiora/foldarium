@@ -568,6 +568,78 @@ test('persists a serializable viewer trace with the answer', async () => {
   assert.deepEqual(answerWrite(writes).value.viewer_trace, trace);
 });
 
+test('retries the same answer without its trace when storage rejects the trace-backed operation', async () => {
+  const warnings = await captureWarnings(async () => {
+    const { client, writes } = fakeSupabase();
+    const storage = memoryStorage();
+    const attempts = [];
+    const originalSetItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      const entry = JSON.parse(value);
+      attempts.push({ key, entry });
+      if (entry.value.viewer_trace !== null) throw new Error('quota exceeded');
+      originalSetItem(key, value);
+    };
+    const backend = createQuizBackend({
+      client,
+      storage,
+      uuid: sequenceUuid('answer-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    });
+
+    backend.recordAnswer('session-id', 0, answerRecord({
+      viewer_trace: {
+        version: 1,
+        molstar_version: '4.6.0',
+        snapshots: [{ t_ms: 0, kind: 'state', snapshot: { data: 'large' } }],
+      },
+    }));
+    await backend.flush();
+
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].key, attempts[1].key);
+    assert.deepEqual(attempts[1].entry.value, {
+      ...attempts[0].entry.value,
+      viewer_trace: null,
+    });
+    assert.equal(attempts[1].entry.value.id, 'answer-id');
+    assert.equal(attempts[1].entry.value.viewer_trace, null);
+    assert.deepEqual(answerWrite(writes).value, attempts[1].entry.value);
+  });
+
+  assert.deepEqual(warnings, [
+    ['Viewer trace omitted:', 'local queue rejected trace-backed answer'],
+  ]);
+});
+
+test('proactively omits a viewer trace over the serialized byte budget and queues the answer', async () => {
+  const warnings = await captureWarnings(async () => {
+    const { client, writes } = fakeSupabase();
+    const backend = createQuizBackend({
+      client,
+      storage: memoryStorage(),
+      uuid: sequenceUuid('answer-id'),
+      now: () => new Date('2026-08-05T18:00:00.000Z'),
+    });
+
+    backend.recordAnswer('session-id', 0, answerRecord({
+      viewer_trace: {
+        version: 1,
+        molstar_version: '4.6.0',
+        snapshots: [{ t_ms: 0, kind: 'state', snapshot: { data: 'é'.repeat(300_000) } }],
+      },
+    }));
+    await backend.flush();
+
+    assert.equal(answerWrite(writes).value.id, 'answer-id');
+    assert.equal(answerWrite(writes).value.viewer_trace, null);
+  });
+
+  assert.deepEqual(warnings, [
+    ['Viewer trace omitted:', 'exceeds 524288-byte limit'],
+  ]);
+});
+
 test('retains a JSON-safe viewer trace snapshot after caller mutation before flush', async () => {
   const warnings = await captureWarnings(async () => {
     const { client, writes, setFailing } = fakeSupabase();

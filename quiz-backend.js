@@ -1,6 +1,7 @@
 const OPERATION_PREFIX = 'foldariumSyncOpV2:';
 const DEAD_LETTER_PREFIX = 'foldariumSyncDeadV2:';
 const KIND_ORDER = { session: 0, answer: 1, complete: 2 };
+const MAX_VIEWER_TRACE_BYTES = 512 * 1024;
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 const disabledBackend = {
@@ -20,15 +21,17 @@ export function createQuizBackend({
   let flushing = null;
   let flushAgain = false;
 
-  const enqueue = (kind, value) => {
+  const enqueue = (kind, value, { warnOnFailure = true } = {}) => {
     const entry = { kind, value };
     try {
       storage.setItem(operationKey(entry), JSON.stringify(entry));
       if (flushing) flushAgain = true;
     } catch (error) {
-      console.warn('Quiz result queue could not be saved:', error.message);
+      if (warnOnFailure) console.warn('Quiz result queue could not be saved:', error.message);
+      return false;
     }
     void flush();
+    return true;
   };
 
   async function userId(remoteClient) {
@@ -121,6 +124,9 @@ export function createQuizBackend({
           if (serialized === undefined) {
             console.warn('Viewer trace omitted:', 'not JSON-serializable');
             viewerTrace = null;
+          } else if (new TextEncoder().encode(serialized).byteLength > MAX_VIEWER_TRACE_BYTES) {
+            console.warn('Viewer trace omitted:', `exceeds ${MAX_VIEWER_TRACE_BYTES}-byte limit`);
+            viewerTrace = null;
           } else {
             viewerTrace = JSON.parse(serialized);
           }
@@ -129,7 +135,7 @@ export function createQuizBackend({
         console.warn('Viewer trace omitted:', error.message);
         viewerTrace = null;
       }
-      enqueue('answer', {
+      const answer = {
         id: uuid(),
         session_id: sessionId,
         question_index: questionIndex,
@@ -146,7 +152,11 @@ export function createQuizBackend({
         n_clusters: record.n_clusters,
         answered_at: new Date(record.ts * 1000).toISOString(),
         viewer_trace: viewerTrace,
-      });
+      };
+      if (!enqueue('answer', answer, { warnOnFailure: viewerTrace === null }) && viewerTrace !== null) {
+        console.warn('Viewer trace omitted:', 'local queue rejected trace-backed answer');
+        enqueue('answer', { ...answer, viewer_trace: null });
+      }
     },
     completeSession(sessionId) {
       if (sessionId) enqueue('complete', { id: sessionId, completed_at: now().toISOString() });

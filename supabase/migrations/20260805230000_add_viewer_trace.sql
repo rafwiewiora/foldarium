@@ -9,5 +9,5 @@ alter table public.quiz_answers
       jsonb_typeof(viewer_trace) = 'object'
       and viewer_trace ->> 'version' = '1'
       and jsonb_typeof(viewer_trace -> 'snapshots') = 'array'
-    )
+    ) is true
   );

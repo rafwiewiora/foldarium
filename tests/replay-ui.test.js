@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import * as replayModule from '../replay.js';
 import {
   createLatestRequestGuard,
   createReplayController,
@@ -73,6 +74,123 @@ test('rejects an invalid trace before clearing or starting viewer playback', asy
   );
   assert.equal(clears, 0);
   assert.equal(plays, 0);
+});
+
+function replayUiHarness(replayController) {
+  assert.equal(
+    typeof replayModule.createReplayPlaybackUi,
+    'function',
+    'expected replay UI playback coordinator export',
+  );
+  let controls = {};
+  const statuses = [];
+  const ui = replayModule.createReplayPlaybackUi({
+    replayController,
+    hasSelectedAnswer: () => true,
+    setControls(next) {
+      controls = next;
+    },
+    setStatus(message, isError = false) {
+      statuses.push({ message, isError });
+    },
+  });
+  return {
+    ui,
+    statuses,
+    controls: () => controls,
+  };
+}
+
+test('an older play completion cannot disable Stop or replace status for newer playback', async () => {
+  const plays = [];
+  const harness = replayUiHarness({
+    play(trace) {
+      const completion = deferred();
+      plays.push({ trace, completion });
+      return completion.promise;
+    },
+    stop: async () => {},
+  });
+
+  const first = harness.ui.play(validTrace('answer-1'));
+  const second = harness.ui.play(validTrace('answer-2'));
+  plays[0].completion.resolve(true);
+  await first;
+
+  assert.deepEqual(harness.controls(), { playDisabled: true, stopDisabled: false });
+  assert.deepEqual(harness.statuses.at(-1), {
+    message: 'Playing answer trace…',
+    isError: false,
+  });
+
+  plays[1].completion.resolve(true);
+  await second;
+  assert.deepEqual(harness.controls(), { playDisabled: false, stopDisabled: true });
+  assert.deepEqual(harness.statuses.at(-1), {
+    message: 'Playback complete.',
+    isError: false,
+  });
+});
+
+test('changing answers stops playback immediately and ignores its stale completion', async () => {
+  const playback = deferred();
+  const stopping = deferred();
+  let stopCalls = 0;
+  const harness = replayUiHarness({
+    play: () => playback.promise,
+    stop() {
+      stopCalls += 1;
+      return stopping.promise;
+    },
+  });
+
+  const playing = harness.ui.play(validTrace('answer-1'));
+  const changing = harness.ui.selectionChanged(true);
+  assert.equal(stopCalls, 1);
+  assert.deepEqual(harness.controls(), { playDisabled: true, stopDisabled: true });
+
+  playback.resolve(true);
+  await playing;
+  assert.deepEqual(harness.controls(), { playDisabled: true, stopDisabled: true });
+  assert.deepEqual(harness.statuses.at(-1), {
+    message: 'Playing answer trace…',
+    isError: false,
+  });
+
+  stopping.resolve();
+  await changing;
+  assert.deepEqual(harness.controls(), { playDisabled: false, stopDisabled: true });
+});
+
+test('an invalid replacement trace leaves controls attached to active playback', async () => {
+  const playback = deferred();
+  let playCalls = 0;
+  const harness = replayUiHarness({
+    play() {
+      playCalls += 1;
+      return playback.promise;
+    },
+    stop: async () => {},
+  });
+
+  const playing = harness.ui.play(validTrace('answer-1'));
+  const accepted = await harness.ui.play({
+    version: 2,
+    molstar_version: '4.6.0',
+    snapshots: [],
+  });
+
+  assert.equal(accepted, false);
+  assert.equal(playCalls, 1);
+  assert.deepEqual(harness.controls(), { playDisabled: true, stopDisabled: false });
+  assert.deepEqual(harness.statuses.at(-1), {
+    message: 'Unsupported viewer trace',
+    isError: true,
+  });
+
+  playback.resolve(true);
+  await playing;
+  assert.deepEqual(harness.controls(), { playDisabled: false, stopDisabled: true });
 });
 
 test('ignores an out-of-order session-answer response and aborts its request', async () => {
