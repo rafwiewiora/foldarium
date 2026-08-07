@@ -3,8 +3,15 @@
 Last updated: 2026-08-06 (America/Los_Angeles)
 
 > **Repository status change.** This pipeline work is no longer pushed to the public
-> `rafwiewiora/foldarium` remote. Commits stay local until a private remote exists. Do not push
+> `rafwiewiora/foldarium` remote. It now lives on the private
+> `JunctionBioscience/foldarium` repository, branch `cofolding-pipeline`. Do not push
 > `pipeline/...` to `origin` (`https://github.com/rafwiewiora/foldarium`).
+>
+> The two repositories have **unrelated histories** (no common ancestor), so the branch was
+> created by replaying the pipeline commits onto `junction/main`; it touches no existing
+> Junction file. A pending, separately approved cleanup resets public `main` to `f26254f`
+> to remove `pipeline/` and the deployment names from the public repository; it had not been
+> run at the time of writing because the force-push required interactive approval.
 
 This is the working handoff for the next engineer/model. It records the decisions made, what is already
 implemented and pushed, and the exact remaining work to run **one Boltz-2 job and one OpenFold3 job** in
@@ -36,20 +43,15 @@ https://github.com/rafwiewiora/foldarium
 branch: main
 ```
 
-Local commits, newest first. Everything above `7d34423` is **local only and must not be pushed to the
-public remote**:
+Remotes:
 
 ```text
-a1e3b2d Generate control-plane staging rows from planned tasks   (local only)
-cf81d1b Bound GPU containers and add a synchronous run entrypoint (local only)
-7d34423 Document Modal smoke-test handoff
-7216fca Disable weekly Modal cron by default
-760cd69 Bound Modal smoke-test resources
-c4a30b9 Use standard A100 profile for OpenFold3
-07775e4 Add portable cofolding pipeline scaffold
+origin    https://github.com/rafwiewiora/foldarium      PUBLIC  — do not push pipeline/
+junction  https://github.com/JunctionBioscience/foldarium  PRIVATE — branch cofolding-pipeline
 ```
 
-`origin/main` is `7d34423`.
+Everything from `07775e4` onward is pipeline work and must not reach the public remote.
+`origin/main` is still `7d34423` pending the approved reset to `f26254f`.
 
 Important: other work is modifying many `data_rnp_aligned/` and `prep/` files in the same worktree. Those
 changes are unrelated to the pipeline work and were deliberately left untouched. Check status and stage
@@ -513,6 +515,67 @@ The smoke test is complete only when all of the following are true for each meth
 
 A scientifically plausible pose is **not** required for this synthetic target. This test proves packaging,
 execution, persistence, provenance, and portability.
+
+## Smoke-test results (2026-08-06)
+
+Both jobs ran once and succeeded. The synthetic target is `foldarium-smoke-001`
+(29-residue protein + ethanol) in campaign `foldarium-smoke`, staged at core revision
+`4216648`.
+
+```text
+boltz2     run_a32e8819da0d9331a14522cc  succeeded  392.78 s  L40S
+openfold3  run_f04f63693b4a28984e0631f1  succeeded  137.73 s  A100-40GB
+```
+
+Boltz-2 produced one sample `seed-0-rank-0` with five artifacts (mmCIF 24,824 B;
+confidence JSON 658 B; pae/pde/plddt npz) and confidence
+`complex_plddt 0.875 / ptm 0.647 / iptm 0.278`.
+
+OpenFold3 produced one sample at seed `2746317213` with three artifacts (mmCIF 30,005 B;
+aggregated confidence 367 B; full confidence 51,012 B) and confidence
+`avg_plddt 95.49 / ptm 0.676 / iptm 0.474`.
+
+Boltz's wall clock includes a cold ~6 GB weight download into its cache Volume; the
+OpenFold3 checkpoint was already warm from the bootstrap. Both are well inside the 900 s
+inner budget and the 20-minute container ceiling.
+
+`run_task` returned a terminal result in both cases. Because the publisher raises on any
+failure, that return is itself evidence that the claim, the local re-hash, the
+content-addressed uploads, and the atomic `finish_prediction_run` all succeeded.
+
+### Bugs found and fixed during the run
+
+Every one of these surfaced only on real contact with the runtime, which is why the
+CPU-only bootstrap runs before any GPU work.
+
+1. The Modal GPU functions still carried a six-hour outer timeout while the task budget was
+   900 s. Capped at 20 minutes (`GPU_FUNCTION_TIMEOUT_SECONDS`).
+2. `_add_core` cleared the image entrypoint. The official OpenFold3 image activates its
+   pixi environment there, so clearing it hid both the interpreter and the OF3 CLI.
+3. Preserving the entrypoint was not enough: Modal inspects an image for a Python
+   interpreter without going through `ENTRYPOINT`. The environment's `bin` directory is now
+   published on `PATH` as well, read from the image's own `/opt/activate.sh`.
+4. With `include_source=False`, `modal_app.py` was never shipped into the image, so every
+   container failed with `ModuleNotFoundError: No module named 'modal_app'` and crash-looped.
+   The file is now added explicitly, and this module's local-path logic is guarded by
+   `modal.is_local()` because Modal re-imports it inside every container.
+
+### Known gap observed
+
+The OpenFold3 bootstrap downloads `components.bcif` (63 MB) into
+`site-packages/biotite/structure/info/` inside the image rather than into `/cache/openfold`,
+so it is not persisted by the cache Volume and is re-fetched on every OpenFold3 container
+start. It costs a couple of seconds and did not affect this test, but the cache bootstrap
+does not cover it.
+
+### Not verified from this session
+
+The database and Storage state were not inspected directly: no Postgres credential was
+available locally, and the service-role key lives only in the Modal secret. Run
+`pipeline/tests/../..` — specifically the query saved during the session — or any equivalent
+select against `prediction_runs` / `prediction_artifacts` to confirm the run rows, the eight
+artifact rows, and that stored object bytes match the recorded digests.
+
 
 ## Known gaps after these two jobs
 
