@@ -568,14 +568,30 @@ so it is not persisted by the cache Volume and is re-fetched on every OpenFold3 
 start. It costs a couple of seconds and did not affect this test, but the cache bootstrap
 does not cover it.
 
-### Not verified from this session
+### Control-plane state verified
 
-The database and Storage state were not inspected directly: no Postgres credential was
-available locally, and the service-role key lives only in the Modal secret. Run
-`pipeline/tests/../..` — specifically the query saved during the session — or any equivalent
-select against `prediction_runs` / `prediction_artifacts` to confirm the run rows, the eight
-artifact rows, and that stored object bytes match the recorded digests.
+The database rows were confirmed directly after the run. Both `prediction_runs` rows are
+`succeeded` with `attempt_count 1 / max_attempts 1`, `lease_owner` null, and no error code,
+so each deterministic run was claimed exactly once, released cleanly, and never silently
+retried. Recorded durations match the returned results (392.78 s and 137.725 s), and each
+run records one sample.
 
+All eight `prediction_artifacts` rows are present — five for Boltz-2, three for OpenFold3 —
+and every size and SHA-256 matches the digest the worker computed locally before upload.
+Each `object_uri` follows `supabase://foldarium-predictions-test/sha256/<first-two>/<digest>`,
+so the storage key is the content digest itself and identical bytes cannot be stored twice.
+
+One nuance worth keeping straight: this verifies that the recorded metadata matches what was
+hashed locally, and that uploads were rejected rather than overwritten on conflict
+(`x-upsert: false`, with a download-and-compare on 409). It does not re-download the stored
+objects to re-hash them. The content-addressed key makes a mismatch detectable rather than
+silent, but an explicit read-back check is still worth adding before production.
+
+Cost was not read from Modal's billing view. At the researched rates the GPU time alone is
+roughly USD 0.21 for Boltz (392.78 s on L40S) and USD 0.08 for OpenFold3 (137.73 s on
+A100-40GB); image builds, the 7.5 GB pulls, the checkpoint downloads, and roughly 30 minutes
+of a crash-looping CPU container during the `modal_app` import failure are extra and not
+itemized here. Read the actual figure from the Modal dashboard before authorizing more work.
 
 ## Known gaps after these two jobs
 
