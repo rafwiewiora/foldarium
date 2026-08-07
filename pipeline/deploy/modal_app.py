@@ -178,9 +178,15 @@ def _load_weekly_hook(reference: str):
 
 
 if modal is not None:
-    if not _CORE_SOURCE.is_dir():
+    # Modal re-imports this module inside every container to find the function
+    # it should run. At that point the local checkout does not exist, so local
+    # paths may only be touched while running locally.
+    _IS_LOCAL = modal.is_local()
+    if _IS_LOCAL and not _CORE_SOURCE.is_dir():
         raise RuntimeError(f"Foldarium core source directory not found: {_CORE_SOURCE}")
 
+    # Source is added explicitly below rather than by automounting, so the image
+    # never picks up the repository's large data directories.
     app = modal.App(APP_NAME, include_source=False)
 
     # These volumes are disposable acceleration caches. Prediction inputs,
@@ -213,11 +219,19 @@ if modal is not None:
 
         if clear_entrypoint:
             image = image.entrypoint([])
-        return image.add_local_dir(
-            _CORE_SOURCE,
-            remote_path=f"{_REMOTE_SOURCE_ROOT}/foldarium_pipeline",
-            copy=True,
-        ).env({"PYTHONPATH": _REMOTE_SOURCE_ROOT})
+        if _IS_LOCAL:
+            image = image.add_local_dir(
+                _CORE_SOURCE,
+                remote_path=f"{_REMOTE_SOURCE_ROOT}/foldarium_pipeline",
+                copy=True,
+            ).add_local_file(
+                # Modal imports this module by name inside the container, so the
+                # file defining the functions must itself be importable there.
+                Path(__file__).resolve(),
+                remote_path=f"{_REMOTE_SOURCE_ROOT}/modal_app.py",
+                copy=True,
+            )
+        return image.env({"PYTHONPATH": _REMOTE_SOURCE_ROOT})
 
     # The official OpenFold3 image ships a pixi environment that is activated by
     # its entrypoint (``source /opt/activate.sh && exec "$@"``). Neither Python
