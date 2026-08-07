@@ -5,12 +5,75 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping
 
 from .contracts import SCHEMA_VERSION, validate_prediction_task
 from .methods import ADAPTERS
+
+GPU_SAMPLE_INTERVAL_SECONDS = 2.0
+
+
+class _GpuMemorySampler:
+    """Record peak device memory while a prediction subprocess runs.
+
+    Accelerator sizing is only as good as the measurements behind it, and the
+    method CLIs do not report peak memory. Sampling ``nvidia-smi`` is method- and
+    backend-neutral, and silently does nothing where it is unavailable, so a CPU
+    or non-NVIDIA runtime is unaffected.
+
+    The figure is whole-device rather than per-process. That is accurate here
+    because a prediction container owns its GPU, but it would overcount if
+    anything else shared the device.
+    """
+
+    def __init__(self) -> None:
+        self.peak_mib = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _sample_once(self) -> bool:
+        try:
+            completed = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if completed.returncode != 0:
+            return False
+        values = [
+            int(line.strip())
+            for line in completed.stdout.splitlines()
+            if line.strip().isdigit()
+        ]
+        if values:
+            self.peak_mib = max(self.peak_mib, max(values))
+        return True
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            if not self._sample_once():
+                return
+            self._stop.wait(GPU_SAMPLE_INTERVAL_SECONDS)
+
+    def __enter__(self) -> "_GpuMemorySampler":
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=15)
 
 
 def execute_task_json(
@@ -64,16 +127,18 @@ def execute_task_json(
         raise ValueError("resources.timeout_seconds must be a positive integer")
     logs = work_dir / "logs"
     logs.mkdir(exist_ok=True)
+    sampler = _GpuMemorySampler()
     try:
-        completed = subprocess.run(
-            list(plan.argv),
-            cwd=work_dir,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        with sampler:
+            completed = subprocess.run(
+                list(plan.argv),
+                cwd=work_dir,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
@@ -115,7 +180,7 @@ def execute_task_json(
             "error_code": "output_validation_failed",
             "error": "prediction outputs did not satisfy the method adapter contract",
         }
-    return {
+    result: dict[str, Any] = {
         **base_result,
         "status": "succeeded",
         "duration_seconds": duration,
@@ -123,5 +188,11 @@ def execute_task_json(
         "provenance": {
             "config": task["config"],
             "command": plan.public_dict(work_dir)["argv"],
+            "resources": dict(task["resources"]),
         },
     }
+    # Absent rather than zero where no accelerator was observed, so calibration
+    # never mistakes "not measured" for "used no memory".
+    if sampler.peak_mib > 0:
+        result["peak_gpu_memory_mib"] = sampler.peak_mib
+    return result

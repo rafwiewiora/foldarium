@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .contracts import make_prediction_task, validate_prediction_task, validate_target
+from .sizing import GPU_CLASS_NAMES, resolve_gpu_class
 from .staging import (
     DEFAULT_EXECUTION_BACKEND,
     DEFAULT_SELECTION_POLICY_VERSION,
@@ -47,6 +48,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--resources-json",
         help="execution budget (e.g. timeout_seconds); part of the task, not its identity",
     )
+    make.add_argument(
+        "--gpu-class",
+        choices=sorted(GPU_CLASS_NAMES),
+        help="pin the accelerator class; omit to size it from the target",
+    )
+    make.add_argument(
+        "--no-gpu-class",
+        action="store_true",
+        help="omit gpu_class entirely and let the execution backend decide",
+    )
 
     stage = commands.add_parser(
         "stage-sql", help="render idempotent control-plane rows for planned tasks"
@@ -79,16 +90,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "validate-task":
         _print(validate_prediction_task(_read(args.task_json)))
     elif args.command == "make-task":
+        target = _read(args.target_json)
+        config = _read(args.config_json)
+        resources = _read(args.resources_json) if args.resources_json else {}
+        if not args.no_gpu_class:
+            # Sizing is recorded in resources, which the identity hash excludes,
+            # so the run ID stays the same whatever hardware is chosen.
+            resources = {
+                **resources,
+                "gpu_class": resolve_gpu_class(target, config, args.gpu_class),
+            }
         _print(
             make_prediction_task(
                 campaign_id=args.campaign,
-                target=_read(args.target_json),
+                target=target,
                 method=args.method,
                 method_version=args.method_version,
                 container_image=args.image,
-                config=_read(args.config_json),
+                config=config,
                 output_uri_prefix=args.output_prefix,
-                resources=_read(args.resources_json) if args.resources_json else None,
+                resources=resources,
             )
         )
     elif args.command == "stage-sql":

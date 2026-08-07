@@ -55,6 +55,26 @@ OPENFOLD3_IMAGE_PATH = (
 
 WORK_ROOT = "/tmp/foldarium"
 
+# Translation from the core's backend-neutral accelerator classes to Modal's
+# names. The sizing decision itself belongs to foldarium_pipeline.sizing so every
+# backend makes it identically; only this mapping is Modal-specific, and a GCP
+# adapter supplies its own.
+MODAL_GPU_BY_CLASS = {
+    "l4": "L4",
+    "a100-40gb": "A100-40GB",
+    "l40s": "L40S",
+    "a100-80gb": "A100-80GB",
+}
+
+# Host resources scale with the accelerator so a large card is not starved by a
+# small loader, and a small card does not reserve a large machine.
+MODAL_HOST_BY_CLASS = {
+    "l4": (4.0, 16384),
+    "a100-40gb": (8.0, 32768),
+    "l40s": (4.0, 16384),
+    "a100-80gb": (8.0, 65536),
+}
+
 # Outer container budget for GPU work. The method subprocess is already capped by
 # the task's ``resources.timeout_seconds``, but a container can also stall outside
 # that subprocess: image pull, checkpoint reload, cache commit, or publication. On
@@ -327,15 +347,35 @@ if modal is not None:
         boltz_cache.commit()
         return result
 
+    def _sized_function(task_json: str):
+        """Return the method's function, moved onto the task's requested class.
+
+        The deployed decorator carries a default so the app is runnable without
+        sizing, but a task that names a ``gpu_class`` overrides it per call rather
+        than needing a separate deployed function for every accelerator.
+        """
+
+        payload = json.loads(task_json)
+        method = _method_name(task_json)
+        function = run_openfold3 if method == "openfold3" else run_boltz2
+
+        resources = payload.get("resources") or {}
+        gpu_class = resources.get("gpu_class")
+        if gpu_class is None:
+            return function
+        if gpu_class not in MODAL_GPU_BY_CLASS:
+            raise ValueError(
+                f"unsupported gpu_class {gpu_class!r}; this backend maps "
+                f"{sorted(MODAL_GPU_BY_CLASS)}"
+            )
+        cpu, memory = MODAL_HOST_BY_CLASS[gpu_class]
+        return function.with_options(
+            gpu=MODAL_GPU_BY_CLASS[gpu_class], cpu=cpu, memory=memory
+        )
+
     def _spawn_task(task_json: str | Mapping[str, Any]) -> str:
         canonical_json = _normalise_task_json(task_json)
-        method = _method_name(canonical_json)
-        call = (
-            run_openfold3.spawn(canonical_json)
-            if method == "openfold3"
-            else run_boltz2.spawn(canonical_json)
-        )
-        return call.object_id
+        return _sized_function(canonical_json).spawn(canonical_json).object_id
 
     @app.function(
         image=control_image,
@@ -395,9 +435,7 @@ if modal is not None:
 
         payload = json.loads(Path(task_path).read_text(encoding="utf-8"))
         canonical_json = _normalise_task_json(payload)
-        method = _method_name(canonical_json)
-        function = run_openfold3 if method == "openfold3" else run_boltz2
-        result = function.remote(canonical_json)
+        result = _sized_function(canonical_json).remote(canonical_json)
         print(json.dumps(result, indent=2, sort_keys=True))
 
 else:
