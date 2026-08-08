@@ -71,6 +71,7 @@ only explicit `pipeline/...` paths; never use `git add -A` for this task.
 - `execution.py`: interfaces for execution, object storage, and control-plane implementations;
 - `staging.py`: derives campaign/target/run rows from a validated task and renders idempotent
   registration SQL; has no database connectivity by design;
+- `sizing.py`: derives a backend-neutral accelerator class from the target's token count;
 - `cli.py`: local validation, deterministic task creation, staging SQL, and no-GPU planning.
 
 No Modal, GCP, or Supabase SDK types are present in the scientific adapters.
@@ -405,6 +406,10 @@ PYTHONPATH=pipeline/src python3.11 -m foldarium_pipeline.cli stage-sql \
   --campaign-name "Foldarium Modal smoke test" > staging.sql
 ```
 
+`make-task` now also records a derived `gpu_class` in `resources`; pass `--gpu-class` to pin
+one, or `--no-gpu-class` to leave the choice to the backend. Because the identity hash
+excludes `resources`, none of those options change the run IDs below.
+
 Expected deterministic run IDs at core revision `7d34423`:
 
 ```text
@@ -593,6 +598,58 @@ A100-40GB); image builds, the 7.5 GB pulls, the checkpoint downloads, and roughl
 of a crash-looping CPU container during the `modal_app` import failure are extra and not
 itemized here. Read the actual figure from the Modal dashboard before authorizing more work.
 
+## Accelerator sizing
+
+The GPU class was originally a literal in the Modal adapter (`gpu="A100-40GB"`,
+`gpu="L40S"`). Nothing recorded what a run had executed on, and a second backend would have
+had to re-invent the decision. Sizing now lives in `foldarium_pipeline/sizing.py`.
+
+`derive_gpu_class(target, config)` counts tokens from the normalized target — polymer
+sequence length multiplied by chain copies, plus ligand heavy atoms — then adjusts for the
+settings that drive memory (a real MSA inflates the estimate; `max_parallel_samples` scales
+it) and returns the smallest class that fits:
+
+```text
+l4          24 GB   <=  320 tokens
+a100-40gb   40 GB   <=  768 tokens
+l40s        48 GB   <= 1024 tokens
+a100-80gb   80 GB   <= 2048 tokens
+```
+
+**These thresholds are provisional.** They are ordered correctly by device memory and are
+deliberately conservative, but they were not measured against either method. Do not treat
+them as a capacity or cost policy until they are calibrated.
+
+The chosen class travels in the task's `resources`, which the identity hash deliberately
+excludes. Recording hardware therefore never changes a run's scientific identity: adding
+`gpu_class` left both smoke-test run IDs byte-identical. Each execution adapter maps the
+neutral class to its own vocabulary — Modal's `MODAL_GPU_BY_CLASS` plus a matching host
+CPU/RAM profile, applied per call with `Function.with_options(...)` so one deployed function
+per method serves every accelerator.
+
+Two rules are deliberate:
+
+- an explicit `--gpu-class` always beats the heuristic, so a benchmark can pin hardware and
+  sizing cannot silently change what a comparison ran on;
+- a target above the largest configured class raises at planning time. With
+  `max_attempts = 1` there is no retry, so an out-of-memory failure would be discovered only
+  after the GPU had already been paid for.
+
+### Calibrating the thresholds
+
+The worker samples `nvidia-smi` while the prediction subprocess runs and records
+`peak_gpu_memory_mib` in the result. The figure is whole-device rather than per-process,
+which is accurate while a container owns its GPU but would overcount a shared device.
+Sampling is skipped silently where `nvidia-smi` is absent, and the field is **absent rather
+than zero** when nothing was observed, so calibration cannot mistake "not measured" for
+"used no memory".
+
+Run a handful of targets of increasing size, plot `peak_gpu_memory_mib` against
+`sizing.count_tokens`, and replace the table with measured ceilings plus headroom.
+
+For reference: the smoke target is 32 tokens and sizes to `l4`. It was executed on L40S and
+A100-40GB, both heavily overprovisioned, because sizing did not exist yet.
+
 ## Known gaps after these two jobs
 
 The following remain intentionally out of scope for the two-job smoke test:
@@ -618,7 +675,9 @@ pipeline/deploy/modal_app.py
 pipeline/deploy/gcp/README.md
 pipeline/migrations/001_control_plane.sql
 pipeline/migrations/README.md
+pipeline/migrations/checks/README.md
 pipeline/src/foldarium_pipeline/staging.py
+pipeline/src/foldarium_pipeline/sizing.py
 pipeline/examples/smoke/
 DEPLOYMENT.md
 ```
