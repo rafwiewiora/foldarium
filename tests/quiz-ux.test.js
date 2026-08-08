@@ -26,3 +26,12 @@ test('quiz has responsive and accessible state cues', async () => {
   assert.match(app, /Selected/);
   assert.match(app, /Not quite/);
 });
+
+test('quiz panel uses a spacious high-contrast light theme', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /--panel:#fff; --line:#dce1e7; --ink:#101418/);
+  assert.match(html, /#side\{width:380px;[\s\S]*?padding:26px 24px;[\s\S]*?gap:18px/);
+  assert.match(html, /h1\{font-size:19px/);
+  assert.match(html, /\.choice\{[\s\S]*?min-height:44px;[\s\S]*?font-size:14px/);
+});
