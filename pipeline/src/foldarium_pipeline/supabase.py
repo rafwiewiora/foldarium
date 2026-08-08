@@ -703,6 +703,30 @@ class SupabaseCoordinator(SupabasePublisher):
         row["metadata"] = _json_object(row.get("metadata"), "weekly round metadata")
         return row
 
+    def current_weekly_quiz_round(self, campaign_id: str) -> dict[str, Any]:
+        """Return the one current public round and bind it to an expected campaign.
+
+        A Saturday campaign can acquire an immutable replacement round after a
+        publication defect is found.  The public RPC already resolves that
+        choice by ``opens_at``; this wrapper prevents a scheduled Wednesday
+        evaluator from silently crossing into another campaign.
+        """
+
+        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        rows = self._rpc("get_current_weekly_quiz_round", {})
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+            count = len(rows) if isinstance(rows, list) else 0
+            raise SupabasePublicationError(
+                f"current weekly quiz round query returned {count} rows"
+            )
+        row = dict(rows[0])
+        row["round_id"] = _safe_identifier(row.get("round_id"), "round_id")
+        if row.get("campaign_id") != campaign_id:
+            raise SupabasePublicationError(
+                "current weekly quiz round does not belong to the expected campaign"
+            )
+        return row
+
     def weekly_quiz_reveal_inputs(self, round_id: str) -> tuple[dict[str, Any], bytes]:
         """Resolve an exact private round and its digest-bound private index."""
 

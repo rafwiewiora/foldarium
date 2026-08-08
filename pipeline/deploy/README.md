@@ -118,8 +118,10 @@ modal run --env main pipeline/deploy/modal_app.py::wednesday_reveal_tick \
 ```
 
 Use `--publish` only for an explicitly approved manual reveal. If `--round-id`
-is omitted, the function derives the round opened on the most recent UTC
-Saturday. It reads that exact private round and digest-bound private index,
+is omitted, the function derives the most recent UTC Saturday campaign and
+resolves its newest immutable public round by `opens_at`. This permits a
+digest-preserving replacement round without direct edits to the original. It
+then reads that exact private round and digest-bound private index,
 downloads each original `predicted_complex` by exact `(run_id, sample_id)`, and
 uses the stored classic four-character PDB target IDs for RCSB coordinates. A
 missing round/index/artifact, digest mismatch, unavailable coordinate, or one

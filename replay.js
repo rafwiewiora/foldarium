@@ -89,22 +89,53 @@ function formatDate(value, fallback) {
 export function formatSessionLabel(session) {
   const source = String(session.source || 'unknown');
   const difficulty = String(session.difficulty || 'unknown');
-  const id = String(session.id || 'unknown session');
-  const userId = String(session.user_id || 'unknown user');
-  return `${formatDate(session.started_at, 'unknown date')} · ${source} · ${difficulty}`
-    + ` · session ${id} · user ${userId}`;
+  const id = String(session.session_id || session.id || 'unknown session');
+  const kind = session.session_kind === 'weekly' ? 'weekly' : 'classic';
+  const participant = typeof session.participant_hash === 'string'
+    ? session.participant_hash.slice(0, 12) : 'unavailable';
+  const detail = kind === 'weekly'
+    ? `round ${String(session.round_id || 'unknown')}`
+    : `${source} · ${difficulty}`;
+  return `${formatDate(session.started_at, 'unknown date')} · ${kind} · ${detail}`
+    + ` · session ${id} · participant ${participant}`;
+}
+
+export function sessionSelectionKey(session) {
+  const id = String(session?.session_id || session?.id || '');
+  if (!id) return '';
+  return `${session?.session_kind === 'weekly' ? 'weekly' : 'classic'}:${id}`;
+}
+
+export function replayActionForSession(session) {
+  return session?.session_kind === 'weekly' ? 'weekly-attempts' : 'answers';
+}
+
+export function answerSelectionKey(answer) {
+  return String(answer?.id || answer?.vote_attempt_id || '');
 }
 
 export function formatAnswerLabel(answer) {
   const question = Number(answer.question_index) + 1;
   const item = String(answer.item_id || 'unknown item');
-  const pick = answer.picked_none ? 'none' : `sample ${answer.picked_sample ?? 'unknown'}`;
-  const result = answer.picked_correct ? 'correct' : 'wrong';
+  const weekly = !!answer.vote_attempt_id;
+  const pick = answer.picked_none
+    ? 'none'
+    : (weekly ? `choice ${answer.choice_id ?? 'unknown'}`
+      : `sample ${answer.picked_sample ?? 'unknown'}`);
+  const result = typeof answer.picked_correct === 'boolean'
+    ? (answer.picked_correct ? 'correct' : 'wrong')
+    : 'blind vote';
   return `Question ${question} · ${item} · ${pick} · ${result}`
-    + ` · answered ${formatDate(answer.answered_at, 'unknown time')}`;
+    + ` · answered ${formatDate(answer.answered_at || answer.submitted_at, 'unknown time')}`;
 }
 
-export function replaceSelectOptions(select, rows, labelFor, documentImpl = document) {
+export function replaceSelectOptions(
+  select,
+  rows,
+  labelFor,
+  documentImpl = document,
+  valueFor = row => row.id,
+) {
   select.replaceChildren();
   const placeholder = documentImpl.createElement('option');
   placeholder.value = '';
@@ -112,17 +143,35 @@ export function replaceSelectOptions(select, rows, labelFor, documentImpl = docu
   select.appendChild(placeholder);
   for (const row of rows) {
     const option = documentImpl.createElement('option');
-    option.value = String(row.id);
+    option.value = String(valueFor(row) || '');
     option.textContent = labelFor(row);
     select.appendChild(option);
   }
   select.disabled = rows.length === 0;
 }
 
+export function formatCompactAppState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return 'No app state recorded';
+  const entries = Object.entries(state);
+  if (!entries.length) return 'No app state recorded';
+  return entries.map(([key, value]) => {
+    let rendered;
+    try {
+      rendered = typeof value === 'string' ? value : JSON.stringify(value);
+    } catch {
+      rendered = '[unavailable]';
+    }
+    return `${key}: ${rendered}`;
+  }).join('\n');
+}
+
 export function createReplayController({
   plugin,
   playTrace = playViewerTrace,
   validateTrace = validateViewerTrace,
+  onAppEvent,
+  onAppStateChange,
+  onActivePaneChange,
 }) {
   let generation = 0;
   let active = null;
@@ -144,6 +193,9 @@ export function createReplayController({
       const controller = new AbortController();
       const playback = Promise.resolve().then(() => playTrace(plugin, trace, {
         signal: controller.signal,
+        onAppEvent,
+        onAppStateChange,
+        onActivePaneChange,
       }));
       const current = { controller, playback };
       active = current;
@@ -334,7 +386,10 @@ async function initReplayPage() {
   const playButton = document.getElementById('play');
   const stopButton = document.getElementById('stop');
   const status = document.getElementById('status');
+  const activePane = document.getElementById('active-pane');
+  const appState = document.getElementById('app-state');
   const answersById = new Map();
+  const sessionsById = new Map();
   const answerRequests = createLatestRequestGuard();
   const connectionGeneration = createConnectionGeneration();
   let renderedConnectionGeneration = connectionGeneration.capture();
@@ -369,7 +424,15 @@ async function initReplayPage() {
     setStatus('Could not initialize the molecular viewer.', true);
     return;
   }
-  const replayController = createReplayController({ plugin: viewer.plugin });
+  const replayController = createReplayController({
+    plugin: viewer.plugin,
+    onActivePaneChange(paneId) {
+      activePane.textContent = paneId || 'Canonical viewer';
+    },
+    onAppStateChange(state) {
+      appState.textContent = formatCompactAppState(state);
+    },
+  });
   const playbackUi = createReplayPlaybackUi({
     replayController,
     setStatus,
@@ -383,7 +446,15 @@ async function initReplayPage() {
     requestSessions: signal => requestReplay({ action: 'sessions' }, signal),
     applySessions(sessions) {
       renderedConnectionGeneration = connectionGeneration.capture();
-      replaceSelectOptions(sessionSelect, sessions, formatSessionLabel);
+      sessionsById.clear();
+      for (const session of sessions) sessionsById.set(sessionSelectionKey(session), session);
+      replaceSelectOptions(
+        sessionSelect,
+        sessions,
+        formatSessionLabel,
+        document,
+        sessionSelectionKey,
+      );
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
       setStatus(sessions.length ? 'Select a session.' : 'No replay sessions are available.');
     },
@@ -405,6 +476,7 @@ async function initReplayPage() {
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
     },
     clearSessionState() {
+      sessionsById.clear();
       replaceSelectOptions(sessionSelect, [], formatSessionLabel);
     },
     setConnectDisabled(value) {
@@ -416,10 +488,14 @@ async function initReplayPage() {
     answerRequests,
     connectionGeneration,
     playbackUi,
-    requestAnswers: (sessionId, signal) => requestReplay({
-      action: 'answers',
-      session_id: sessionId,
-    }, signal),
+    requestAnswers: (sessionKey, signal) => {
+      const session = sessionsById.get(sessionKey);
+      if (!session) throw new Error('Select a replay session.');
+      return requestReplay({
+        action: replayActionForSession(session),
+        session_id: session.session_id || session.id,
+      }, signal);
+    },
     clearAnswers() {
       answersById.clear();
       playButton.disabled = true;
@@ -427,8 +503,14 @@ async function initReplayPage() {
       replaceSelectOptions(answerSelect, [], formatAnswerLabel);
     },
     applyAnswers(answers, sessionId) {
-      for (const answer of answers) answersById.set(String(answer.id), answer);
-      replaceSelectOptions(answerSelect, answers, formatAnswerLabel);
+      for (const answer of answers) answersById.set(answerSelectionKey(answer), answer);
+      replaceSelectOptions(
+        answerSelect,
+        answers,
+        formatAnswerLabel,
+        document,
+        answerSelectionKey,
+      );
       setStatus(sessionId
         ? (answers.length ? 'Select an answer to replay.' : 'This session has no traced answers.')
         : 'Select a session.');
@@ -449,6 +531,8 @@ async function initReplayPage() {
   });
   sessionSelect.addEventListener('change', () => { void loadAnswers(); });
   answerSelect.addEventListener('change', () => {
+    activePane.textContent = 'Not playing';
+    appState.textContent = 'No app state recorded';
     void playbackUi.selectionChanged(answersById.has(answerSelect.value));
   });
   playButton.addEventListener('click', () => {

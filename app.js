@@ -28,24 +28,28 @@ const OPTS = {
 };
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
+const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
-let POOLS = { cameo: [], rnp: [], weekly: [] }, quizSource = 'cameo', difficulty = 'easy';
+let POOLS = { cameo: [], rnp: [], weekly: [] };
+let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'hard' : 'easy';
 let WEEKLY_ROUND = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let remoteSessionId = null;
+let participantDisplayName = '';
 let viewerTraceRecorder = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
-let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
+let displayMode = WEEKLY_ONLY ? 'one' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
+let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
-let userView = { displayMode: 'all', clustered: true, proteinMode: 'crystal', showHbonds: false };
+let userView = { displayMode, clustered: true, proteinMode: 'crystal', showHbonds: false };
 const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds }; };
 const applyUserView = () => {
   ({ displayMode, clustered, proteinMode, showHbonds } = userView);
@@ -61,6 +65,47 @@ const locked = () => cur && cur.revealed && cur.showAnswer;
 const interactionBlocked = () => viewerTransitionBusy || revealRequested || locked();
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)'
   : (quizSource === 'weekly' ? 'Weekly benchmark' : 'AlphaFold3 (pLDDT-ranked)'));
+
+function currentReplayableAppState() {
+  const selectionKind = !cur?.selected ? null
+    : (cur.selected.none ? 'none' : (cur.selectionExact ? 'exact' : 'cluster'));
+  return {
+    schema_version: 1,
+    source: quizSource,
+    difficulty,
+    round_id: quizSource === 'weekly' ? (WEEKLY_ROUND?.round_id || null) : null,
+    question_index: cur ? idx : null,
+    item_id: cur?.item?.id || null,
+    display_mode: displayMode,
+    clustered,
+    protein_mode: proteinMode,
+    show_hbonds: showHbonds,
+    show_xtal: showXtal,
+    shown_one_index: shownOne,
+    grid_page_index: gridMethodIndex,
+    active_pane_id: activePaneId,
+    selected_pane_id: selectedPaneId,
+    selection_kind: selectionKind,
+    viewer_busy: viewerTransitionBusy || revealRequested,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      dpr: window.devicePixelRatio || 1,
+    },
+  };
+}
+
+function recordAppEvent(action) {
+  try { viewerTraceRecorder?.recordAppEvent?.(action, currentReplayableAppState()); }
+  catch (error) { console.warn('App replay event omitted:', error.message); }
+}
+
+function activatePane(paneId, reason = 'interaction') {
+  if (!paneId || paneId === activePaneId) return;
+  activePaneId = paneId;
+  try { viewerTraceRecorder?.setActivePane?.(paneId, reason); }
+  catch (error) { console.warn('Grid pane attribution omitted:', error.message); }
+}
 
 function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
@@ -180,7 +225,7 @@ function renderGridPages() {
       if (i === gridMethodIndex || interactionBlocked()) return;
       await viewerRebuild.enqueue(
         () => { gridMethodIndex = i; },
-        () => { renderGridPages(); renderUI(); },
+        () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
       );
     };
     nav.appendChild(b);
@@ -188,6 +233,13 @@ function renderGridPages() {
 }
 function gridProteinUrls(choice, spec) {
   const item = spec.item;
+  if (item.source === 'weekly') {
+    return {
+      prot: choice.afprotein_file || item.protein_file,
+      pocket: choice.afpocket_file || item.pocket_file,
+      color: PROT,
+    };
+  }
   if (spec.proteinMode === 'af3' && item.afprotein_ref) {
     return { prot: choice.afprotein_file || item.afprotein_ref,
       pocket: choice.afpocket_file || item.afpocket_union, color: AF3PROT };
@@ -212,7 +264,11 @@ function gridHeader(entry) {
 function disposeGridViewers() {
   if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
   if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
-  for (const cell of gridViewers) { cell.disposed = true; try { cell.viewer?.dispose(); } catch (e) {} }
+  for (const cell of gridViewers) {
+    cell.disposed = true;
+    try { cell.detachReplay?.(); } catch (e) {}
+    try { cell.viewer?.dispose(); } catch (e) {}
+  }
   gridViewers = []; $('#gridcells').replaceChildren();
 }
 function layoutGrid() {
@@ -244,14 +300,21 @@ function syncGridCameras(cells) {
   const tick = () => {
     if (!enabled) return;
     const snapshots = cells.map(cameraSnapshot);
-    const source = snapshots.findIndex((snapshot, i) => snapshot && JSON.stringify(snapshot) !== last[i]);
+    const changed = snapshots.map((snapshot, i) => (
+      snapshot && JSON.stringify(snapshot) !== last[i] ? i : -1
+    )).filter(i => i >= 0);
+    const attributed = cells.findIndex(cell => cell.paneId === activePaneId);
+    const source = changed.includes(attributed) ? attributed : (changed[0] ?? -1);
     if (source >= 0) {
       const snapshot = snapshots[source];
+      activatePane(cells[source].paneId, 'camera');
       for (let i = 0; i < cells.length; i++) {
         if (i !== source) cells[i].plugin?.canvas3d?.camera?.setState(snapshot, 0);
       }
       // mirror into the hidden canonical viewer so the trace recorder still sees Grid camera movement
       try { plugin?.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+      try { viewerTraceRecorder?.captureCamera?.(snapshot, { sourcePaneId: cells[source].paneId }); }
+      catch (error) { console.warn('Grid camera replay event omitted:', error.message); }
       last = cells.map(cell => JSON.stringify(cameraSnapshot(cell)));
     }
     raf = requestAnimationFrame(tick);
@@ -265,6 +328,15 @@ async function buildGridCell(cell, revision) {
     cell.viewer = gridViewer; cell.plugin = gridViewer.plugin;
     if (revision !== gridBuildRevision || cell.disposed) return gridViewer.dispose();
     configurePlugin(cell.plugin);
+    try {
+      cell.detachReplay = viewerTraceRecorder?.attachPane?.({
+        plugin: cell.plugin,
+        paneId: cell.paneId,
+        element: cell.card,
+      }) || null;
+    } catch (error) {
+      console.warn('Grid pane replay attachment omitted:', error.message);
+    }
     const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
@@ -294,14 +366,25 @@ async function buildGrid(preserveCamera = true) {
   disposeGridViewers();
   const view = $('#gridview'), cellsBox = $('#gridcells');
   view.classList.add('on', 'loading-grid'); renderGridPages();
-  const cells = gridEntries().map(entry => {
+  const cells = gridEntries().map((entry, paneIndex) => {
+    const paneId = `pane-${gridMethodIndex}-${paneIndex}`;
     const card = document.createElement('div');
     card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (entry.choice.correct ? ' correct' : ' wrong') : '');
+    card.dataset.paneId = paneId;
+    for (const [eventName, reason] of [['pointerenter', 'hover'], ['focusin', 'focus'], ['wheel', 'scroll']]) {
+      card.addEventListener(eventName, () => activatePane(paneId, reason), { passive: true });
+    }
     const head = document.createElement('button');
     head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry); head.disabled = locked();
-    head.onclick = () => { if (!locked()) onPick(entry.choiceIndex, entry.choice); };
+    head.onclick = () => {
+      if (locked()) return;
+      activatePane(paneId, 'click');
+      selectedPaneId = paneId;
+      onPick(entry.choiceIndex, entry.choice);
+    };
     const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
-    return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
+    return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
+      detachReplay: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
@@ -324,9 +407,17 @@ function restoreCam() { try { if (savedCam) plugin.canvas3d.camera.setState(save
 
 // ---- two layers: a FIXED reference (crystal protein cartoon + crystal pocket sticks, built once per
 //      question so the backbone never moves) and the rebuilt POSE layer (ligands + crystal-reveal). -----
-let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null;
+let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null, currentPocketUrl = null;
 function protUrls() {
   const answer = cur.revealed && cur.showAnswer;
+  if (cur.item.source === 'weekly') {
+    const vis = visibleChoices();
+    const shown = vis[Math.min(shownOne, vis.length - 1)];
+    return {
+      prot: shown?.afprotein_file || cur.item.protein_file,
+      pocket: shown?.afpocket_file || cur.item.pocket_file,
+    };
+  }
   if (proteinMode === 'af3' && cur.item.afprotein_ref) {   // CAMEO only; RnP has no per-pose AF3 protein
     const vis = visibleChoices();
     const shown = vis[Math.min(shownOne, vis.length - 1)];
@@ -338,7 +429,7 @@ function protUrls() {
 }
 async function buildProtein() {         // rebuilds ONLY when the target protein changes (no flicker)
   const { prot, pocket } = protUrls();
-  if (prot === currentProtUrl) return;
+  if (prot === currentProtUrl && pocket === currentPocketUrl) return;
   if (proteinData.length) { const b = plugin.build(); for (const x of proteinData) b.delete(x.ref || x); await b.commit(); proteinData = []; }
   const pr = await loadStruct(prot, 'pdb');
   proteinData.push(pr.data);
@@ -349,6 +440,7 @@ async function buildProtein() {         // rebuilds ONLY when the target protein
     await addSticks(ps.struct, 0.16, 0.95);
   }
   currentProtUrl = prot;
+  currentPocketUrl = pocket;
 }
 async function clearLayer() {
   if (!layerData.length && !hbondData.length) return;
@@ -469,13 +561,16 @@ async function loadQuestion(i) {
         }
       }
       gridMethodIndex = 0;
+      activePaneId = null;
+      selectedPaneId = null;
       // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
       applyUserView();
       shownOne = 0;
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
       $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
       try { await plugin.clear(); } catch (e) {}
-      proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
+      proteinData = []; layerData = []; hbondData = []; savedCam = null;
+      currentProtUrl = null; currentPocketUrl = null;
       showXtal = false;
       syncButtons();
     },
@@ -484,7 +579,8 @@ async function loadQuestion(i) {
         cameraChanged: plugin.canvas3d?.camera?.changed,
         requestReset: requestQuestionCameraReset,
       });
-      viewerTraceRecorder?.start();
+      viewerTraceRecorder?.start({ appState: currentReplayableAppState() });
+      recordAppEvent('question_loaded');
       renderUI();
       requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
     },
@@ -494,7 +590,13 @@ async function loadQuestion(i) {
 function renderUI() {
   $('#progress').textContent = DEV ? `item ${idx + 1} / ${ITEMS.length} · dev`
                                    : `question ${idx + 1} / ${ITEMS.length}`;
-  $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${cur.clusters.length} distinct pose clusters</small>`;
+  const rawPoseCount = cur.clusters.reduce((total, cluster) => total + cluster.members.length, 0);
+  const poseSummary = cur.item.source === 'weekly'
+    ? (cur.item.clustering_available
+      ? `${rawPoseCount} blind poses · ${cur.clusters.length} method-blind clusters`
+      : `${rawPoseCount} blind predicted poses`)
+    : `${cur.clusters.length} distinct pose clusters`;
+  $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${poseSummary}</small>`;
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = displayMode === 'grid'
     ? gridEntries()
@@ -583,6 +685,7 @@ function showIntro() {
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
   $('#setup').style.display = '';
+  $('#participant-setup').style.display = DEV ? 'none' : '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
   $('#hbonds').style.display = 'none';
@@ -604,6 +707,7 @@ function showIntro() {
         ? 'Choose the pose you believe is correct, or “none.” Locking records a vote but does not reveal the answer.'
         : 'The blind manifest remains visible, but no new votes are accepted after the deadline.');
     $('#start').style.display = pool.length && status !== 'closed' ? '' : 'none';
+    syncStartGate();
     return;
   }
   $('#ligand').innerHTML = `${pool.length} single-pocket ensembles · ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'}`;
@@ -623,7 +727,20 @@ function showIntro() {
     + (difficulty === 'hard' ? ` — and it can never answer “none”, so the no-correct-pose items are yours to win.` : '.')
     + ` Can you beat it?`;
   $('#start').style.display = pool.length ? '' : 'none';
+  syncStartGate();
   if (!pool.length) v.innerHTML += '<br><span style="color:var(--bad)">No items for this selection.</span>';
+}
+
+function renderWeeklyResultsStatus() {
+  if (!WEEKLY_ONLY) return;
+  const panel = $('#weekly-results');
+  const copy = $('#weekly-results-copy');
+  if (!panel || !copy) return;
+  const revealed = WEEKLY_ROUND?.public_status === 'revealed';
+  panel.dataset.status = revealed ? 'revealed' : 'pending';
+  copy.textContent = revealed
+    ? 'Wednesday results are available. Reveal each choice to see released-coordinate scores and vote totals.'
+    : 'Results and vote totals will be available Wednesday after released-coordinate evaluation.';
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
@@ -653,21 +770,154 @@ function drawSession() {
     for (const item of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(item)) { picked.push(item); used.add(item); } }
   return shuffle(picked).slice(0, SESSION_SIZE);
 }
-function startQuiz() {
-  remoteSessionId = quizSource === 'weekly' ? null : (researchBackend()?.startSession({
-    source: quizSource,
-    difficulty,
-  }) ?? null);
+function beginQuiz() {
   ITEMS = drawSession();
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
-  $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';
+  $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
+  $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
     ? (WEEKLY_ROUND?.public_status === 'revealed' ? 'Show result' : 'Record vote')
     : 'Lock in answer';
+  $('#suggestion-open').disabled = !remoteSessionId;
   loadQuestion(0);
+}
+
+function normalizedParticipantName() {
+  return $('#participant-name').value.trim().replace(/\s+/g, ' ');
+}
+
+function syncStartGate() {
+  const button = $('#start');
+  if (DEV) { button.disabled = false; return; }
+  const input = $('#participant-name');
+  const displayName = normalizedParticipantName();
+  button.disabled = !displayName || displayName.length > 80 || !input.checkValidity();
+  if (!button.disabled && $('#name-status').textContent === 'Enter your name to enable Start.') {
+    $('#name-status').textContent = 'Ready to start your recorded quiz.';
+  } else if (button.disabled && !remoteSessionId) {
+    $('#name-status').textContent = 'Enter your name to enable Start.';
+  }
+}
+
+async function startQuiz() {
+  if (DEV) {
+    remoteSessionId = null;
+    participantDisplayName = '';
+    beginQuiz();
+    return;
+  }
+  const input = $('#participant-name');
+  const button = $('#start');
+  const status = $('#name-status');
+  const displayName = normalizedParticipantName();
+  input.value = displayName;
+  if (!input.checkValidity() || !displayName) {
+    status.textContent = 'Enter your name (1–80 characters) before starting.';
+    input.focus();
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Creating your private quiz session…';
+  try {
+    const backend = researchBackend();
+    if (!backend) throw new Error('Quiz persistence is unavailable.');
+    remoteSessionId = await backend.startNamedSession({
+      source: quizSource,
+      difficulty,
+      weeklyRoundId: quizSource === 'weekly' ? WEEKLY_ROUND?.round_id : null,
+      displayName,
+      initialAppState: currentReplayableAppState(),
+    });
+    if (!remoteSessionId) throw new Error('The quiz session was not created.');
+    participantDisplayName = displayName;
+    beginQuiz();
+  } catch (error) {
+    remoteSessionId = null;
+    participantDisplayName = '';
+    status.textContent = `Could not start a recorded quiz. ${error.message}`;
+  } finally {
+    syncStartGate();
+  }
+}
+
+function fallbackSuggestionContext(appState) {
+  let camera = null;
+  try { camera = plugin?.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  return {
+    schema_version: 1,
+    captured_at: new Date().toISOString(),
+    app_state: appState,
+    viewer_snapshot: {
+      schema_version: 1,
+      shared_camera: camera,
+      viewer_state_omitted: 'recorder_unavailable',
+    },
+    deployment: {
+      environment: window.FOLDARIUM_SUPABASE?.deploymentEnvironment || null,
+      commit: window.FOLDARIUM_SUPABASE?.commitSha || null,
+    },
+  };
+}
+
+function openSuggestionDialog() {
+  const status = $('#suggestion-status');
+  status.textContent = remoteSessionId
+    ? '' : 'Start a named quiz before sending a suggestion.';
+  $('#suggestion-submit').disabled = !remoteSessionId;
+  $('#suggestion-dialog').showModal();
+  if (remoteSessionId) requestAnimationFrame(() => $('#suggestion-text').focus());
+}
+
+async function submitSuggestion(event) {
+  event.preventDefault();
+  const input = $('#suggestion-text');
+  const button = $('#suggestion-submit');
+  const status = $('#suggestion-status');
+  const suggestionText = input.value.trim();
+  if (!remoteSessionId) {
+    status.textContent = 'Start a named quiz before sending a suggestion.';
+    return;
+  }
+  if (!input.checkValidity() || !suggestionText) {
+    status.textContent = 'Enter a suggestion of up to 4,000 characters.';
+    input.focus();
+    return;
+  }
+  button.disabled = true;
+  status.textContent = 'Saving your suggestion with the current viewer state…';
+  try {
+    recordAppEvent('suggestion_submitted');
+    const appState = currentReplayableAppState();
+    let contextSnapshot;
+    try {
+      contextSnapshot = viewerTraceRecorder?.captureContext?.(appState)
+        || fallbackSuggestionContext(appState);
+    } catch (error) {
+      contextSnapshot = fallbackSuggestionContext(appState);
+      contextSnapshot.viewer_snapshot.viewer_state_omitted = `capture_failed:${error.name || 'Error'}`;
+    }
+    const backend = researchBackend();
+    if (!backend) throw new Error('Suggestion persistence is unavailable.');
+    await backend.submitUserSuggestion({
+      sessionId: remoteSessionId,
+      roundId: quizSource === 'weekly' ? WEEKLY_ROUND?.round_id : null,
+      itemId: cur?.item?.id || null,
+      suggestionText,
+      contextSnapshot,
+    });
+    input.value = '';
+    status.textContent = 'Suggestion saved. Thank you.';
+    setTimeout(() => {
+      if ($('#suggestion-dialog').open) $('#suggestion-dialog').close();
+    }, 650);
+  } catch (error) {
+    status.textContent = `Suggestion was not saved. ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function onPick(k, exactChoice = null) {
@@ -679,9 +929,11 @@ async function onPick(k, exactChoice = null) {
       shownOne = k;
       if (!cur.revealed) {
         cur.selected = selected;
+        selectedPaneId = null;
         document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
       }
     });
+    recordAppEvent('pose_navigated');
     return;
   }
   if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
@@ -689,20 +941,27 @@ async function onPick(k, exactChoice = null) {
     cur.selected = { none: true, correct: !answerChoices.some(c => c.correct), label: 'None of these' };
     cur.selectionExact = displayMode === 'grid' || !clustered;
     cur.answerChoices = answerChoices;
+    selectedPaneId = null;
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
     $('#lock').disabled = false;
+    recordAppEvent('choice_selected');
     return;
   }
   cur.selected = exactChoice || visibleChoices()[k];
   cur.selectionExact = !!exactChoice || !clustered;
   cur.answerChoices = answerChoices;
+  selectedPaneId = exactChoice
+    ? (gridViewers.find(cell => sameChoice(cell.entry.choice, exactChoice))?.paneId || selectedPaneId)
+    : null;
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
   syncGridSelection();
   $('#lock').disabled = false;
+  recordAppEvent('choice_selected');
 }
 
 async function reveal() {
   if (cur.selected == null || cur.revealed || revealRequested) return;
+  recordAppEvent('lock_requested');
   revealRequested = true;
   $('#lock').disabled = true;
   try {
@@ -719,7 +978,7 @@ async function finalizeReveal() {
     await finalizeWeeklyVote();
     return;
   }
-  const viewerTrace = viewerTraceRecorder?.stop() ?? null;
+  const viewerTrace = viewerTraceRecorder?.stop({ appState: currentReplayableAppState() }) ?? null;
   await viewerRebuild.enqueue(() => {
     const keepGrid = displayMode === 'grid';
     cur.revealed = true; cur.showAnswer = true;
@@ -762,17 +1021,22 @@ async function finalizeWeeklyVote() {
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
-    await backend.submitWeeklyVote(
-      WEEKLY_ROUND.round_id,
-      cur.item.id,
+    const viewerTrace = viewerTraceRecorder?.snapshot?.(currentReplayableAppState()) ?? null;
+    await backend.submitWeeklyVoteAttempt({
+      sessionId: remoteSessionId,
+      roundId: WEEKLY_ROUND.round_id,
+      itemId: cur.item.id,
+      questionIndex: idx,
       choiceId,
-      !!picked.none,
-    );
+      pickedNone: !!picked.none,
+      viewerTrace,
+      appState: currentReplayableAppState(),
+    });
   } catch (error) {
     verdict.textContent = `Vote was not recorded. ${error.message}`;
     return;
   }
-  viewerTraceRecorder?.stop();
+  viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
   WEEKLY_VOTES.set(cur.item.id, {
     item_id: cur.item.id,
     choice_id: choiceId,
@@ -866,6 +1130,7 @@ function syncButtons() {
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
   const inPlay = !!cur;
+  $('#mode').style.display = inPlay ? '' : 'none';
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   $('#protmode').style.display = (inPlay && quizSource !== 'rnp' && quizSource !== 'weekly') ? '' : 'none';
   document.querySelectorAll('#protmode button').forEach(b => b.classList.toggle('on', b.dataset.p === proteinMode));
@@ -876,10 +1141,20 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
-  $('#modehint').textContent = displayMode === 'grid'
-    ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
-                 : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
-    : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.';
+  const weeklyHasClusters = cur?.item.source === 'weekly'
+    && cur.clusters.some(cluster => cluster.members.length > 1);
+  const weeklyClusteringAvailable = cur?.item.source === 'weekly'
+    && cur.item.clustering_available;
+  $('#modehint').textContent = cur?.item.source === 'weekly'
+    ? (displayMode === 'grid'
+      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per method-blind pose cluster' : 'One linked viewer per raw blind pose'}. Each pane uses that pose's exact predicted protein; drag or zoom any pane to move them together.`
+      : (displayMode === 'one'
+        ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? ' and the cluster medoid' : ''}.`
+        : `${weeklyHasClusters && clustered ? 'Method-blind pose-cluster representatives' : 'All raw blind poses'} are overlaid in one shared frame. Use One at a time for each pose's exact matching predicted protein.`))
+    : (displayMode === 'grid'
+      ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
+                   : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
+      : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.');
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
 }
 
@@ -1057,6 +1332,11 @@ async function init() {
     if (!Array.isArray(blindItems)) return [];
     const revealItems = new Map((round?.reveal_manifest?.items || []).map(item => [item.id, item]));
     return blindItems.map(item => {
+      const clusteringAvailable = item.choices.every(choice => (
+        typeof choice.cluster_id === 'string'
+        && choice.cluster_id.length > 0
+        && typeof choice.is_rep === 'boolean'
+      ));
       const revealChoices = new Map(
         (revealItems.get(item.id)?.choices || []).map(choice => [choice.id, choice]),
       );
@@ -1073,8 +1353,8 @@ async function init() {
           rmsd: typeof reveal.rmsd === 'number' ? reveal.rmsd : null,
           correct: typeof reveal.correct === 'boolean' ? reveal.correct : null,
           _method: reveal.method || null,
-          cluster: index,
-          is_rep: true,
+          cluster: choice.cluster_id || `choice-${index}`,
+          is_rep: typeof choice.is_rep === 'boolean' ? choice.is_rep : true,
           plddt: 0,
         };
       });
@@ -1089,10 +1369,11 @@ async function init() {
         afprotein_ref: choices[0]?.afprotein_file,
         afpocket_union: item.pocket_uri || choices[0]?.afpocket_file,
         choices,
-        n_clusters: choices.length,
+        n_clusters: new Set(choices.map(choice => choice.cluster)).size,
         plddt_pick_sample: -1,
         n_heavy: item.ligand?.heavy_atoms || HEAVY_MIN,
         source: 'weekly',
+        clustering_available: clusteringAvailable,
         bucket: 'weekly',
         has_correct: choices.some(choice => choice.correct === true),
         easyPlayable: true,
@@ -1137,17 +1418,25 @@ async function init() {
   }
   const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
   if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
-  document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
-    if (b.disabled) return;
-    quizSource = b.dataset.q;
-    if (quizSource === 'weekly') difficulty = 'hard';
-    $('#diff').style.display = quizSource === 'weekly' ? 'none' : '';
-    document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x.dataset.d === difficulty));
-    document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
-  });
-  document.querySelectorAll('#diff button').forEach(b => b.onclick = () => {
-    difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
-  });
+  if (WEEKLY_ONLY) {
+    document.title = 'Pose Quiz · Weekly blind';
+    document.querySelectorAll('#quizsrc button').forEach(button => {
+      button.classList.toggle('on', button.dataset.q === 'weekly');
+    });
+    renderWeeklyResultsStatus();
+  } else {
+    document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
+      if (b.disabled) return;
+      quizSource = b.dataset.q;
+      if (quizSource === 'weekly') difficulty = 'hard';
+      $('#diff').style.display = quizSource === 'weekly' ? 'none' : '';
+      document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x.dataset.d === difficulty));
+      document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+    });
+    document.querySelectorAll('#diff button').forEach(b => b.onclick = () => {
+      difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+    });
+  }
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
     if (interactionBlocked()) return;
     const mode = b.dataset.m;
@@ -1159,7 +1448,7 @@ async function init() {
       }
       if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
       syncButtons();
-    }, renderUI);
+    }, () => { renderUI(); recordAppEvent('display_mode_changed'); });
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
     if (interactionBlocked()) return;
@@ -1169,6 +1458,7 @@ async function init() {
       if (!cur.revealed) rememberView();
       syncButtons();
     });
+    recordAppEvent('protein_mode_changed');
   });
   $('#uncluster').onclick = async () => {
     if (interactionBlocked()) return;
@@ -1178,6 +1468,7 @@ async function init() {
       syncButtons();
       renderUI();
     });
+    recordAppEvent('cluster_mode_changed');
   };
   $('#hbonds').onclick = async () => {
     if (interactionBlocked()) return;
@@ -1186,16 +1477,25 @@ async function init() {
       if (!cur.revealed) rememberView();       // persist across questions like the other view choices
       syncButtons();
     });
+    recordAppEvent('hbonds_toggled');
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
   $('#start').onclick = startQuiz;
+  $('#participant-name').addEventListener('input', syncStartGate);
+  $('#participant-name').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
+  });
+  $('#suggestion-open').onclick = openSuggestionDialog;
+  $('#suggestion-form').addEventListener('submit', submitSuggestion);
+  $('#suggestion-cancel').onclick = () => $('#suggestion-dialog').close();
   $('#myview').onclick = toggleAnswer;
   $('#showXtal').onchange = async (e) => {
     if (viewerTransitionBusy) return;
     const checked = e.target.checked;
     await viewerRebuild.enqueue(() => { showXtal = checked; });
+    recordAppEvent('crystal_reference_toggled');
   };
   document.addEventListener('keydown', async e => {
     if (DEV && cur) {                                   // dev: Up/Down = prev/next item, any mode, no lock needed
@@ -1207,15 +1507,19 @@ async function init() {
       await viewerRebuild.enqueue(() => {
         shownOne = (shownOne + 1) % visibleChoices().length;
       });
+      recordAppEvent('pose_navigated');
     }
     if (e.key === 'ArrowLeft') {
       await viewerRebuild.enqueue(() => {
         const n = visibleChoices().length;
         shownOne = (shownOne - 1 + n) % n;
       });
+      recordAppEvent('pose_navigated');
     }
   });
-  if (!POOLS.cameo.length && !POOLS.rnp.length) { $('#ligand').textContent = 'no quiz items'; return; }
+  if (!WEEKLY_ONLY && !POOLS.cameo.length && !POOLS.rnp.length) {
+    $('#ligand').textContent = 'no quiz items'; return;
+  }
   showIntro();
 }
 init().catch(e => { $('#ligand').textContent = 'error: ' + e.message; console.error(e); });

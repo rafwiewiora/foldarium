@@ -997,6 +997,34 @@ class SupabaseCoordinatorTests(unittest.TestCase):
             coordinator.weekly_quiz_round("weekly-2026-08-08")
         self.assertEqual(len(opener.calls), 1)
 
+    def test_current_weekly_round_is_bound_to_expected_campaign(self) -> None:
+        current = {
+            "round_id": "weekly-2026-08-08-v2",
+            "campaign_id": "wwpdb-2026-08-08",
+            "public_status": "open",
+        }
+
+        class CurrentRoundOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                self.test_case.assertIn(
+                    "/rest/v1/rpc/get_current_weekly_quiz_round",
+                    request.full_url,  # type: ignore[attr-defined]
+                )
+                self.test_case.assertEqual(request.data, b"{}")  # type: ignore[attr-defined]
+                return FakeResponse(json.dumps([current]).encode())
+
+        opener = CurrentRoundOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        self.assertEqual(
+            coordinator.current_weekly_quiz_round("wwpdb-2026-08-08"), current
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "expected campaign"):
+            coordinator.current_weekly_quiz_round("wwpdb-2026-08-15")
+
     def test_downloads_only_exact_run_sample_predicted_complex_with_digest(self) -> None:
         content = b"data_original_complex\n#\n"
         digest = hashlib.sha256(content).hexdigest()

@@ -24,7 +24,16 @@ REVEAL_ONLY_FIELDS = frozenset(
     }
 )
 BLIND_CHOICE_FIELDS = frozenset(
-    {"id", "pose_uri", "protein_uri", "pocket_uri", "display_label", "media_type"}
+    {
+        "id",
+        "pose_uri",
+        "protein_uri",
+        "pocket_uri",
+        "display_label",
+        "media_type",
+        "cluster_id",
+        "is_rep",
+    }
 )
 
 
@@ -102,6 +111,16 @@ def build_blind_manifest(
                     public_choice[key] = deepcopy(choice[key])
             if "pose_uri" not in public_choice:
                 raise QuizManifestError("every blind choice requires pose_uri")
+            if "cluster_id" in public_choice:
+                public_choice["cluster_id"] = _nonempty(
+                    public_choice["cluster_id"], "choice.cluster_id"
+                )
+                if not isinstance(public_choice.get("is_rep"), bool):
+                    raise QuizManifestError(
+                        "a clustered blind choice requires boolean is_rep"
+                    )
+            elif "is_rep" in public_choice:
+                raise QuizManifestError("choice.is_rep requires choice.cluster_id")
             private_choice = deepcopy(choice)
             private_choice["id"] = choice_id
             public_choices.append(public_choice)
@@ -126,14 +145,17 @@ def build_blind_manifest(
             if key in item:
                 blind_item[key] = deepcopy(item[key])
         blind_items.append(blind_item)
-        private_items.append(
-            {
-                "id": item_id,
-                "target_id": item.get("target_id", item_id),
-                "ligand": item.get("ligand"),
-                "choices": private_choices,
-            }
-        )
+        private_item = {
+            "id": item_id,
+            "target_id": item.get("target_id", item_id),
+            "ligand": item.get("ligand"),
+            "choices": private_choices,
+        }
+        if "clustering" in item:
+            private_item["clustering"] = _object(
+                item.get("clustering"), f"items[{item_index}].clustering"
+            )
+        private_items.append(private_item)
 
     blind_items.sort(key=lambda item: item["id"])
     private_items.sort(key=lambda item: item["id"])

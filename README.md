@@ -29,11 +29,40 @@ To enable remote quiz-result persistence:
 2. Enable anonymous sign-ins under Auth providers.
 3. Apply `supabase/migrations/20260805180000_create_quiz_results.sql`.
 4. Apply `supabase/migrations/20260806040000_add_shared_leaderboard.sql`.
-5. Put the project URL and browser-safe publishable key in `supabase-config.js`; do not use credentials intended for privileged server-side access.
+5. Configure the browser-safe Vercel runtime variables described below; do not put credentials intended for privileged server-side access in browser configuration.
 6. Before production, run live RLS checks with two anonymous accounts: verify own writes succeed, cross-user session updates and answer inserts fail, and answer updates/deletes fail. This is a required pre-production check.
 7. Deploy through the existing Vercel Git integration.
 
-Leaving `supabase-config.js` empty keeps the quiz local-only. The anonymous browser identity is lost when site data is cleared.
+If the runtime browser configuration is absent or invalid, the quiz stays local-only. The anonymous browser identity is lost when site data is cleared.
+
+### Environment-isolated browser configuration
+
+`supabase-config.js` loads browser-safe settings from `/api/config`. The endpoint
+selects a separate variable namespace from Vercel's `VERCEL_ENV`; it never reads
+`SUPABASE_SERVICE_ROLE_KEY`, `REPLAY_PASSWORD`, or the server-only `SUPABASE_URL`.
+
+Set these variables for Production:
+
+- `FOLDARIUM_PRODUCTION_SUPABASE_URL`
+- `FOLDARIUM_PRODUCTION_SUPABASE_PUBLISHABLE_KEY` (or the legacy
+  `FOLDARIUM_PRODUCTION_SUPABASE_ANON_KEY`)
+- Optional: `FOLDARIUM_PRODUCTION_STRUCTURE_BASE_URL`; when omitted, the public
+  `structures` bucket URL is derived from the project URL.
+
+Preview is deliberately disabled unless a separate staging project is configured
+with all of the following:
+
+- `FOLDARIUM_PREVIEW_SUPABASE_URL`
+- `FOLDARIUM_PREVIEW_SUPABASE_PUBLISHABLE_KEY` (or the legacy
+  `FOLDARIUM_PREVIEW_SUPABASE_ANON_KEY`)
+- `FOLDARIUM_PREVIEW_WRITES_ENABLED=1`
+- Optional: `FOLDARIUM_PREVIEW_STRUCTURE_BASE_URL`
+
+Do not point the Preview variables at Production. Without the complete Preview
+configuration and explicit opt-in, Preview remains local-only and cannot write
+quiz or analytics data. Local development uses the corresponding
+`FOLDARIUM_DEVELOPMENT_*` names and likewise requires
+`FOLDARIUM_DEVELOPMENT_WRITES_ENABLED=1`.
 
 The standalone shared leaderboard is available at [`leaderboard.html`](leaderboard.html).
 
@@ -53,7 +82,9 @@ npm run upload:structures
 
 Keep the server credential uncommitted. Rerunning the command without `--overwrite` is safe: existing objects are skipped. Pass `-- --overwrite` to replace existing objects.
 
-Production loads structures from the public Supabase Storage URL configured in `supabase-config.js`. The PDB files remain in Git as a backup, while `.vercelignore` excludes `data/` and `data_rnp/` from Vercel deployments.
+Production loads structures from the public Supabase Storage URL supplied by the
+runtime configuration endpoint. The PDB files remain in Git as a backup, while
+`.vercelignore` excludes `data/` and `data_rnp/` from Vercel deployments.
 
 ## Uploading benchmark demo assets
 

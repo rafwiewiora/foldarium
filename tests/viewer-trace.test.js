@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createViewerTraceRecorder } from '../viewer-trace.js';
+import { createViewerTraceRecorder, MAX_CAPTURE_BYTES } from '../viewer-trace.js';
 
 function fakeClock() {
   let time = 0;
@@ -314,6 +314,128 @@ test('deeply freezes the returned JSON trace', () => {
   assert.throws(() => { trace.snapshots.push({}); }, TypeError);
 });
 
+test('records compact semantic app state and active pane attribution without changing v1', () => {
+  const clock = fakeClock();
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({
+    plugin,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+
+  recorder.start({ appState: { display_mode: 'grid', ignored: () => 'nope' } });
+  clock.advance(10);
+  recorder.setActivePane('pose-B', 'pointerenter');
+  clock.advance(5);
+  recorder.recordAppEvent('hbonds_toggled', {
+    display_mode: 'grid',
+    show_hbonds: true,
+    cyclic: null,
+  });
+  recorder.captureCamera({ position: [1, 2, 3] }, { sourcePaneId: 'pose-B' });
+
+  const trace = recorder.stop({ appState: { display_mode: 'grid', show_hbonds: true } });
+  assert.equal(trace.version, 1);
+  assert.deepEqual(trace.app_state, { display_mode: 'grid', show_hbonds: true });
+  assert.deepEqual(trace.app_trace.map(event => event.kind), [
+    'app', 'active_pane', 'app',
+  ]);
+  assert.equal(trace.app_trace[0].action, 'question_start');
+  assert.deepEqual(trace.app_trace[0].state, { display_mode: 'grid' });
+  assert.equal(trace.app_trace[2].active_pane_id, 'pose-B');
+  assert.equal(trace.snapshots.at(-1).source_pane_id, 'pose-B');
+});
+
+test('snapshot is non-stopping and returns immutable history for a retryable vote', () => {
+  const plugin = fakePlugin();
+  const recorder = createViewerTraceRecorder({ plugin });
+  recorder.start();
+
+  const pendingVoteTrace = recorder.snapshot({ question_index: 2 });
+  recorder.recordAppEvent('vote_retry', { question_index: 2 });
+  const completedTrace = recorder.stop();
+
+  assert.equal(pendingVoteTrace.snapshots.length, 1);
+  assert.equal(pendingVoteTrace.app_trace, undefined);
+  assert.deepEqual(pendingVoteTrace.app_state, { question_index: 2 });
+  assert.equal(completedTrace.app_trace[0].action, 'vote_retry');
+  assert.equal(Object.isFrozen(pendingVoteTrace), true);
+});
+
+test('attaches pane focus and selection capture with interaction attribution and disposal', () => {
+  const clock = fakeClock();
+  const canonical = fakePlugin();
+  const pane = fakePlugin();
+  const listeners = new Map();
+  const removed = [];
+  const element = {
+    addEventListener(name, callback) { listeners.set(name, callback); },
+    removeEventListener(name) { removed.push(name); listeners.delete(name); },
+  };
+  const recorder = createViewerTraceRecorder({
+    plugin: canonical,
+    now: clock.now,
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  const detach = recorder.attachPane({ plugin: pane, paneId: 'pose-C', element });
+  recorder.start();
+
+  listeners.get('pointerenter')({ type: 'pointerenter' });
+  pane.focusChanged();
+  clock.advance(100);
+  const trace = recorder.snapshot();
+  assert.equal(trace.app_trace[0].pane_id, 'pose-C');
+  assert.equal(trace.snapshots.at(-1).scope, 'pane');
+  assert.equal(trace.snapshots.at(-1).source_pane_id, 'pose-C');
+
+  detach();
+  pane.selectionChanged();
+  clock.advance(100);
+  assert.equal(recorder.stop().snapshots.length, 2);
+  assert.deepEqual(removed.sort(), [
+    'focusin', 'pointerdown', 'pointerenter', 'touchstart', 'wheel',
+  ]);
+});
+
+test('compacts oversized traces below the 480 KiB persistence budget', () => {
+  const plugin = fakePlugin();
+  plugin.state.getSnapshot = () => ({ data: { text: 'x'.repeat(MAX_CAPTURE_BYTES) } });
+  const recorder = createViewerTraceRecorder({ plugin });
+  recorder.start();
+  for (let index = 0; index < 50; index += 1) {
+    recorder.recordAppEvent('view_changed', { index, label: 'é'.repeat(500) });
+  }
+
+  const trace = recorder.stop();
+  const size = new TextEncoder().encode(JSON.stringify(trace)).byteLength;
+  assert.ok(size < MAX_CAPTURE_BYTES, `expected ${size} bytes below ${MAX_CAPTURE_BYTES}`);
+  assert.equal(trace.truncated, true);
+  assert.equal(trace.byte_compacted, true);
+});
+
+test('captures a bounded non-stopping suggestion context and omits an oversized viewer state', () => {
+  const plugin = fakePlugin();
+  plugin.state.getSnapshot = () => ({ data: { text: 'x'.repeat(140 * 1024) } });
+  const recorder = createViewerTraceRecorder({ plugin });
+  recorder.start();
+  recorder.recordAppEvent('display_mode_changed', { display_mode: 'grid' });
+
+  const context = recorder.captureContext({ display_mode: 'grid', active_pane_id: 'pose-A' });
+  assert.deepEqual(context.app_state, { display_mode: 'grid', active_pane_id: 'pose-A' });
+  assert.equal(context.viewer_snapshot.viewer_state, null);
+  assert.equal(context.viewer_snapshot.viewer_state_omitted, 'byte_budget');
+  assert.deepEqual(context.viewer_snapshot.shared_camera, { position: [0, 0, 0] });
+  assert.equal(context.viewer_trace_tail.version, 1);
+  assert.ok(new TextEncoder().encode(JSON.stringify(context.viewer_snapshot)).byteLength < 128 * 1024);
+  assert.ok(new TextEncoder().encode(JSON.stringify(context.viewer_trace_tail)).byteLength < 128 * 1024);
+  assert.ok(new TextEncoder().encode(JSON.stringify(context)).byteLength < MAX_CAPTURE_BYTES);
+
+  recorder.recordAppEvent('suggestion_saved', { display_mode: 'grid' });
+  assert.equal(recorder.stop().app_trace.at(-1).action, 'suggestion_saved');
+});
+
 test('recorder import failure does not block quiz application startup', async () => {
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const recorderImport = html.indexOf("await import('./viewer-trace.js')");
@@ -329,9 +451,9 @@ test('quiz records only pre-reveal viewer interactions and keeps the local log l
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 
   assert.match(app, /if \(!DEV && typeof window\.createViewerTraceRecorder === 'function'\)/);
-  assert.match(app, /await viewerRebuild\.enqueue\([\s\S]*?viewerTraceRecorder\?\.start\(\);/);
+  assert.match(app, /await viewerRebuild\.enqueue\([\s\S]*?viewerTraceRecorder\?\.start\(\{ appState: currentReplayableAppState\(\) \}\);/);
   assert.match(app, /restoreCam\(\);\s*viewerTraceRecorder\?\.captureState\(\);/);
-  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\) \?\? null;[\s\S]*?await viewerRebuild\.enqueue\([\s\S]*?cur\.revealed = true/);
+  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\{ appState: currentReplayableAppState\(\) \}\) \?\? null;[\s\S]*?await viewerRebuild\.enqueue\([\s\S]*?cur\.revealed = true/);
   assert.match(app, /function logAnswer\(picked, af3, viewerTrace\)/);
   assert.match(app, /log\.push\(rec\);[\s\S]*?recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);
 

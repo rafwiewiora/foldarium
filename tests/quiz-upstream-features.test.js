@@ -90,6 +90,12 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /function drawSession\(\)/);
   assert.match(app, /function gridEntriesFor\(method\)/);
   assert.match(app, /const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'\.split\(''\);/);
+  assert.match(app, /\$\('#mode'\)\.style\.display = inPlay \? '' : 'none';/);
+  assert.match(app, /\$\{rawPoseCount\} blind predicted poses/);
+  assert.match(app, /method-blind clusters/);
+  assert.match(app, /The protein and pocket change with the pose/);
+  assert.match(app, /method-blind pose cluster/);
+  assert.match(html, /\.seg\{display:flex;flex:none;/);
   assert.match(html, /data-m="grid"/);
 });
 
@@ -204,7 +210,7 @@ test('question finalization preserves Grid framing but resets other modes before
   const loadQuestion = app.slice(start, end);
   const stop = loadQuestion.indexOf('viewerTraceRecorder?.stop();');
   const settled = loadQuestion.indexOf('await window.waitForCameraSettled(');
-  const started = loadQuestion.indexOf('viewerTraceRecorder?.start();');
+  const started = loadQuestion.indexOf('viewerTraceRecorder?.start({ appState: currentReplayableAppState() });');
 
   assert.ok(stop >= 0, 'expected the recorder to stop in the queued mutation');
   assert.ok(stop < settled && settled < started, 'expected recording to start after the rebuild settles');
@@ -222,6 +228,7 @@ test('switching display mode renders choices after the queued mutation', async (
     rememberView: () => { calls.push('rememberView'); },
     syncButtons: () => { calls.push('syncButtons'); },
     renderUI: () => { calls.push('renderUI'); },
+    recordAppEvent: action => { calls.push(`trace:${action}`); },
     viewerRebuild: {
       enqueue: async (mutate, finalize = () => {}) => {
         await mutate();
@@ -238,7 +245,7 @@ test('switching display mode renders choices after the queued mutation', async (
 
   await onModeClick({ dataset: { m: 'all' } });
 
-  assert.deepEqual(calls, ['rememberView', 'syncButtons', 'rebuild:all', 'renderUI']);
+  assert.deepEqual(calls, ['rememberView', 'syncButtons', 'rebuild:all', 'renderUI', 'trace:display_mode_changed']);
   assert.equal(sandbox.displayMode, 'all');
   assert.equal(sandbox.cur.selected, null, 'leaving Grid clears the Grid-exact selection');
 });
@@ -254,6 +261,7 @@ test('Grid page switching rebuilds once with the new page already applied', asyn
     methodName: method => method.toUpperCase(),
     interactionBlocked: () => false,
     renderUI: () => { calls.push('renderUI'); },
+    recordAppEvent: action => { calls.push(`trace:${action}`); },
     buildGrid: () => { calls.push('buildGrid'); },
     document: { createElement: tag => fakeElement(tag) },
     $: registry.$,
@@ -275,7 +283,7 @@ test('Grid page switching rebuilds once with the new page already applied', asyn
   await nav.children[1].onclick();
 
   assert.equal(sandbox.gridMethodIndex, 1);
-  assert.deepEqual(calls, ['rebuild:page=1', 'renderUI'],
+  assert.deepEqual(calls, ['rebuild:page=1', 'renderUI', 'trace:grid_page_changed'],
     'expected exactly one rebuild, with only page/UI state rendered afterwards');
 });
 
@@ -389,6 +397,9 @@ test('Grid camera sync mirrors the canonical viewer and tolerates lost canvases'
   const frames = [];
   const sandbox = {
     plugin: undefined,
+    activePaneId: null,
+    viewerTraceRecorder: null,
+    activatePane: () => {},
     requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
     cancelAnimationFrame: () => {},
   };

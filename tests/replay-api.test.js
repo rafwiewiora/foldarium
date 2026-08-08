@@ -39,6 +39,7 @@ function failIfCalled() {
 
 function recordingFetch(body, options = {}) {
   async function fetchImpl(url, requestOptions) {
+    fetchImpl.calls.push({ url, headers: requestOptions.headers });
     fetchImpl.url = url;
     fetchImpl.headers = requestOptions.headers;
     return {
@@ -46,6 +47,7 @@ function recordingFetch(body, options = {}) {
       json: async () => body,
     };
   }
+  fetchImpl.calls = [];
   return fetchImpl;
 }
 
@@ -64,7 +66,7 @@ test('rejects an invalid replay password without calling Supabase', async () => 
   assert.equal(response.body, '{"error":"Invalid password"}');
 });
 
-test('lists recent sessions with the server credential', async () => {
+test('lists recent classic and weekly safe sessions without raw user identities', async () => {
   const fetchImpl = recordingFetch([{ id: 'session-1' }]);
   const response = await invoke(handler({ fetchImpl }), {
     password: 'correct horse',
@@ -72,7 +74,10 @@ test('lists recent sessions with the server credential', async () => {
   });
 
   assert.equal(response.statusCode, 200);
-  assert.match(fetchImpl.url, /quiz_sessions/);
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.match(fetchImpl.calls[0].url, /replay_quiz_sessions_safe/);
+  assert.match(fetchImpl.calls[1].url, /replay_weekly_sessions_safe/);
+  assert.doesNotMatch(fetchImpl.calls.map(call => call.url).join(' '), /user_id|display_name,/);
   assert.equal(fetchImpl.headers.apikey, 'sb_secret_test');
   assert.equal(fetchImpl.headers.Authorization, undefined);
   assert.doesNotMatch(response.body, /sb_secret_test|correct horse/);
@@ -115,8 +120,43 @@ test('returns traced answers ordered by question index', async () => {
   });
 
   assert.equal(response.statusCode, 200);
+  assert.match(fetchImpl.url, /replay_quiz_answers_safe/);
   assert.match(fetchImpl.url, /viewer_trace=not\.is\.null/);
   assert.match(fetchImpl.url, /order=question_index\.asc/);
+});
+
+test('returns ordered weekly vote attempts and bounded suggestion records from safe views', async () => {
+  const fetchImpl = recordingFetch([]);
+  const weekly = await invoke(handler({ fetchImpl }), {
+    password: 'correct horse',
+    action: 'weekly-attempts',
+    session_id: '00000000-0000-4000-8000-000000000001',
+  });
+  assert.equal(weekly.statusCode, 200);
+  assert.match(fetchImpl.url, /replay_weekly_vote_attempts_safe/);
+  assert.match(fetchImpl.url, /order=question_index\.asc,submitted_at\.asc/);
+
+  const suggestions = await invoke(handler({ fetchImpl }), {
+    password: 'correct horse',
+    action: 'suggestions',
+  });
+  assert.equal(suggestions.statusCode, 200);
+  assert.match(fetchImpl.url, /replay_user_suggestions_safe/);
+  assert.match(fetchImpl.url, /limit=100/);
+});
+
+test('Preview replay service never falls back to production credentials', async () => {
+  const fetchImpl = failIfCalled();
+  const response = await invoke(handler({
+    fetchImpl,
+    env: { ...configuredEnv, VERCEL_ENV: 'preview' },
+  }), {
+    password: 'correct horse',
+    action: 'sessions',
+  });
+
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.body, '{"error":"Replay service is not configured"}');
 });
 
 test('rejects non-POST requests without calling Supabase', async () => {

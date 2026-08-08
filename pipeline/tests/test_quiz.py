@@ -65,8 +65,63 @@ class BlindManifestTests(unittest.TestCase):
         with self.assertRaises(QuizManifestError):
             build_blind_manifest("week", items)
 
+    def test_exposes_only_opaque_cluster_assignments_and_keeps_private_audit(self) -> None:
+        items = source_items()
+        items[0]["clustering"] = {
+            "version": "cluster/v1",
+            "threshold_angstrom": 2.0,
+            "distance_matrix_sha256": "a" * 64,
+        }
+        for index, choice in enumerate(items[0]["choices"]):
+            choice["cluster_id"] = "cluster_opaque"
+            choice["is_rep"] = index == 0
+            choice["protein_uri"] = f"supabase://bucket/protein-{index}.pdb"
+            choice["pocket_uri"] = f"supabase://bucket/pocket-{index}.pdb"
+
+        blind, private = build_blind_manifest("week", items)
+
+        self.assertEqual(len(blind["items"][0]["choices"]), 2)
+        self.assertNotIn("clustering", blind["items"][0])
+        self.assertEqual(private["items"][0]["clustering"], items[0]["clustering"])
+        for choice in blind["items"][0]["choices"]:
+            self.assertEqual(choice["cluster_id"], "cluster_opaque")
+            self.assertIsInstance(choice["is_rep"], bool)
+            self.assertIn("protein_uri", choice)
+            self.assertIn("pocket_uri", choice)
+
+    def test_cluster_representative_flag_requires_an_opaque_cluster_id(self) -> None:
+        items = source_items()
+        items[0]["choices"][0]["is_rep"] = True
+        with self.assertRaisesRegex(QuizManifestError, "requires choice.cluster_id"):
+            build_blind_manifest("week", items)
+
 
 class RevealManifestTests(unittest.TestCase):
+    def test_cluster_metadata_never_collapses_wednesday_raw_choice_ids(self) -> None:
+        item = source_items()[0]
+        template = item["choices"][0]
+        item["choices"] = [
+            {
+                **template,
+                "run_id": f"run-{index}",
+                "sample_id": f"sample-{index}",
+                "pose_uri": f"supabase://bucket/pose-{index}.pdb",
+                "cluster_id": "cluster_opaque",
+                "is_rep": index == 4,
+            }
+            for index in range(10)
+        ]
+        blind, _private = build_blind_manifest("week", [item])
+        choices = [
+            {"id": choice["id"], "rmsd": 1.0, "correct": True}
+            for choice in blind["items"][0]["choices"]
+        ]
+        reveal = build_reveal_manifest(
+            blind, [{"id": item["id"], "choices": choices}]
+        )
+        self.assertEqual(len(blind["items"][0]["choices"]), 10)
+        self.assertEqual(len(reveal["items"][0]["choices"]), 10)
+
     def test_reveal_requires_every_blind_choice(self) -> None:
         blind, _private = build_blind_manifest("week-2026-08-08", source_items())
         choices = [

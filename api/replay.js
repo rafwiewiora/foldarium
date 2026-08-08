@@ -13,7 +13,7 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
       return send(response, 400, { error: 'Invalid request' });
     }
 
-    const { REPLAY_PASSWORD, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = env;
+    const { password: REPLAY_PASSWORD, url: SUPABASE_URL, serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY } = replayConfig(env);
     if (!REPLAY_PASSWORD || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       return send(response, 500, { error: 'Replay service is not configured' });
     }
@@ -21,28 +21,88 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
       return send(response, 401, { error: 'Invalid password' });
     }
 
-    let path;
-    if (body.action === 'sessions') {
-      path = '/rest/v1/quiz_sessions?select=id,user_id,source,difficulty,started_at,completed_at'
-        + '&order=started_at.desc&limit=100';
-    } else if (body.action === 'answers' && typeof body.session_id === 'string' && UUID.test(body.session_id)) {
-      const id = encodeURIComponent(body.session_id);
-      path = '/rest/v1/quiz_answers?select=id,session_id,question_index,item_id,picked_none,'
-        + 'picked_sample,picked_correct,answered_at,viewer_trace'
-        + `&session_id=eq.${id}&viewer_trace=not.is.null&order=question_index.asc`;
-    } else {
-      return send(response, 400, { error: 'Invalid action' });
-    }
-
     try {
-      const upstream = await fetchImpl(`${SUPABASE_URL}${path}`, {
-        headers: serviceHeaders(SUPABASE_SERVICE_ROLE_KEY),
-      });
-      if (!upstream.ok) return send(response, 502, { error: 'Replay data unavailable' });
-      return send(response, 200, await upstream.json());
+      const fetchRows = async path => {
+        const upstream = await fetchImpl(`${SUPABASE_URL}${path}`, {
+          headers: serviceHeaders(SUPABASE_SERVICE_ROLE_KEY),
+        });
+        if (!upstream.ok) throw new Error('upstream unavailable');
+        const rows = await upstream.json();
+        if (!Array.isArray(rows)) throw new Error('invalid upstream rows');
+        return rows;
+      };
+      if (body.action === 'sessions') {
+        const [classic, weekly] = await Promise.all([
+          fetchRows('/rest/v1/replay_quiz_sessions_safe?select=session_id,session_kind,'
+            + 'participant_hash,display_name_hash,source,difficulty,round_id,started_at,'
+            + 'completed_at,has_recorded_name&order=started_at.desc&limit=100'),
+          fetchRows('/rest/v1/replay_weekly_sessions_safe?select=session_id,session_kind,'
+            + 'participant_hash,display_name_hash,source,difficulty,round_id,started_at,'
+            + 'completed_at,has_recorded_name&order=started_at.desc&limit=100'),
+        ]);
+        const sessions = [...classic, ...weekly]
+          .sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)))
+          .slice(0, 100);
+        return send(response, 200, sessions);
+      }
+      if (body.action === 'answers' && validSessionId(body.session_id)) {
+        const id = encodeURIComponent(body.session_id);
+        return send(response, 200, await fetchRows(
+          '/rest/v1/replay_quiz_answers_safe?select=id,session_id,question_index,item_id,'
+          + 'picked_none,picked_sample,picked_correct,answered_at,viewer_trace,app_trace,'
+          + `app_state,active_pane_id&session_id=eq.${id}&viewer_trace=not.is.null`
+          + '&order=question_index.asc',
+        ));
+      }
+      if (body.action === 'weekly-attempts' && validSessionId(body.session_id)) {
+        const id = encodeURIComponent(body.session_id);
+        return send(response, 200, await fetchRows(
+          '/rest/v1/replay_weekly_vote_attempts_safe?select=vote_attempt_id,session_id,'
+          + 'round_id,participant_hash,display_name_hash,item_id,question_index,choice_id,'
+          + `picked_none,viewer_trace,app_state,active_pane_id,submitted_at&session_id=eq.${id}`
+          + '&viewer_trace=not.is.null&order=question_index.asc,submitted_at.asc',
+        ));
+      }
+      if (body.action === 'suggestions') {
+        return send(response, 200, await fetchRows(
+          '/rest/v1/replay_user_suggestions_safe?select=suggestion_id,participant_hash,'
+          + 'display_name_hash,quiz_session_id,weekly_session_id,context,item_id,page_path,'
+          + 'suggestion_text,app_state,viewer_snapshot,viewer_trace_tail,submitted_at'
+          + '&order=submitted_at.desc&limit=100',
+        ));
+      }
+      return send(response, 400, { error: 'Invalid action' });
     } catch {
       return send(response, 502, { error: 'Replay data unavailable' });
     }
+  };
+}
+
+function validSessionId(value) {
+  return typeof value === 'string' && UUID.test(value);
+}
+
+function replayConfig(env) {
+  if (env.VERCEL_ENV === 'preview') {
+    return {
+      password: env.FOLDARIUM_PREVIEW_REPLAY_PASSWORD,
+      url: env.FOLDARIUM_PREVIEW_SUPABASE_URL,
+      serviceRoleKey: env.FOLDARIUM_PREVIEW_SUPABASE_SERVICE_ROLE_KEY,
+    };
+  }
+  if (env.VERCEL_ENV === 'production') {
+    return {
+      password: env.FOLDARIUM_PRODUCTION_REPLAY_PASSWORD || env.REPLAY_PASSWORD,
+      url: env.FOLDARIUM_PRODUCTION_SUPABASE_URL || env.SUPABASE_URL,
+      serviceRoleKey: env.FOLDARIUM_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY
+        || env.SUPABASE_SERVICE_ROLE_KEY,
+    };
+  }
+  return {
+    password: env.FOLDARIUM_DEVELOPMENT_REPLAY_PASSWORD || env.REPLAY_PASSWORD,
+    url: env.FOLDARIUM_DEVELOPMENT_SUPABASE_URL || env.SUPABASE_URL,
+    serviceRoleKey: env.FOLDARIUM_DEVELOPMENT_SUPABASE_SERVICE_ROLE_KEY
+      || env.SUPABASE_SERVICE_ROLE_KEY,
   };
 }
 

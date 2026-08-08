@@ -234,6 +234,157 @@ test('loads the current blind round and submits one server-validated weekly vote
   ]);
 });
 
+test('requires a server-created named session before a classic quiz starts', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const storage = memoryStorage();
+  const backend = createQuizBackend({
+    client,
+    storage,
+    uuid: sequenceUuid('00000000-0000-4000-8000-000000000101'),
+  });
+
+  const sessionId = await backend.startNamedSession({
+    source: 'cameo',
+    difficulty: 'easy',
+    displayName: '  Ada   Lovelace  ',
+  });
+
+  assert.equal(sessionId, '00000000-0000-4000-8000-000000000101');
+  assert.deepEqual(rpcs, [{
+    name: 'start_named_quiz_session',
+    args: {
+      p_session_id: sessionId,
+      p_source: 'cameo',
+      p_difficulty: 'easy',
+      p_display_name: 'Ada Lovelace',
+    },
+  }]);
+  assert.deepEqual(storage.keys(), [], 'the display name must never enter browser storage');
+});
+
+test('persists a named weekly session, append-only traced vote, and contextual suggestion', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const ids = [
+    '00000000-0000-4000-8000-000000000201',
+    '00000000-0000-4000-8000-000000000202',
+    '00000000-0000-4000-8000-000000000203',
+  ];
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid(...ids),
+    pagePath: '/quiz',
+  });
+  const appState = {
+    schema_version: 1,
+    source: 'weekly',
+    item_id: 'item-1',
+    active_pane_id: 'pane-0-2',
+  };
+  const trace = {
+    version: 1,
+    snapshots: [],
+    app_trace: [{ t_ms: 1, action: 'choice_selected', state: appState }],
+    app_state: appState,
+  };
+
+  const sessionId = await backend.startNamedSession({
+    source: 'weekly',
+    difficulty: 'hard',
+    weeklyRoundId: 'weekly-2026-08-08',
+    displayName: 'Grace Hopper',
+    initialAppState: appState,
+  });
+  await backend.submitWeeklyVoteAttempt({
+    sessionId,
+    roundId: 'weekly-2026-08-08',
+    itemId: 'item-1',
+    questionIndex: 0,
+    choiceId: 'choice-4',
+    pickedNone: false,
+    viewerTrace: trace,
+    appState,
+  });
+  await backend.submitUserSuggestion({
+    sessionId,
+    roundId: 'weekly-2026-08-08',
+    itemId: 'item-1',
+    suggestionText: '  Make the pane labels larger.  ',
+    contextSnapshot: {
+      app_state: appState,
+      viewer_snapshot: { schema_version: 1, shared_camera: { radius: 4 } },
+      viewer_trace_tail: { version: 1, snapshots: [] },
+    },
+  });
+
+  assert.equal(sessionId, ids[0]);
+  assert.deepEqual(rpcs, [
+    {
+      name: 'start_named_weekly_quiz_session',
+      args: {
+        p_session_id: ids[0],
+        p_round_id: 'weekly-2026-08-08',
+        p_display_name: 'Grace Hopper',
+        p_initial_app_state: appState,
+      },
+    },
+    {
+      name: 'submit_weekly_quiz_vote_attempt',
+      args: {
+        p_vote_attempt_id: ids[1],
+        p_session_id: ids[0],
+        p_round_id: 'weekly-2026-08-08',
+        p_item_id: 'item-1',
+        p_question_index: 0,
+        p_choice_id: 'choice-4',
+        p_picked_none: false,
+        p_viewer_trace: trace,
+        p_app_state: appState,
+        p_active_pane_id: 'pane-0-2',
+      },
+    },
+    {
+      name: 'submit_user_suggestion',
+      args: {
+        p_suggestion_id: ids[2],
+        p_suggestion_text: 'Make the pane labels larger.',
+        p_context: 'weekly-quiz',
+        p_quiz_session_id: null,
+        p_weekly_session_id: ids[0],
+        p_item_id: 'item-1',
+        p_page_path: '/quiz',
+        p_app_state: appState,
+        p_viewer_snapshot: { schema_version: 1, shared_camera: { radius: 4 } },
+        p_viewer_trace_tail: { version: 1, snapshots: [] },
+      },
+    },
+  ]);
+});
+
+test('rejects malformed named research events before any RPC', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+
+  await assert.rejects(
+    backend.startNamedSession({ source: 'weekly', difficulty: 'hard', displayName: 'Name' }),
+    /weekly session identity/i,
+  );
+  await assert.rejects(
+    backend.submitWeeklyVoteAttempt({
+      sessionId: 'session', roundId: 'round', itemId: 'item', questionIndex: -1,
+      choiceId: null, pickedNone: true,
+    }),
+    /identity is invalid/i,
+  );
+  await assert.rejects(
+    backend.submitUserSuggestion({
+      sessionId: 'session', suggestionText: 'x', contextSnapshot: 'not-an-object',
+    }),
+    /context is invalid/i,
+  );
+  assert.deepEqual(rpcs, []);
+});
+
 test('leaderboard RPC errors reject without creating a local fallback', async () => {
   const { client, setRpcResult } = fakeSupabase();
   const storage = memoryStorage();
@@ -485,7 +636,8 @@ test('quiz application loading does not await persistence startup', async () => 
 test('dev mode disables every remote research lifecycle call', async () => {
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
   assert.match(app, /const researchBackend = \(\) => DEV \? null : window\.foldariumBackend;/);
-  assert.equal((app.match(/researchBackend\(\)\?\./g) || []).length, 4);
+  assert.ok((app.match(/researchBackend\(\)/g) || []).length >= 6);
+  assert.match(app, /if \(DEV\) \{[\s\S]*?beginQuiz\(\);[\s\S]*?return;/);
   assert.doesNotMatch(app, /window\.foldariumBackend\?\./);
 });
 

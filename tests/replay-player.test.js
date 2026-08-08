@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { playViewerTrace } from '../replay-player.js';
+import { playViewerTrace, validateViewerTrace } from '../replay-player.js';
 
 function fakeReplayPlugin(calls, onState) {
   return {
@@ -309,4 +309,54 @@ test('keeps camera-only playback active and pins the camera when aborted mid-tra
 
   await assert.rejects(playback, error => error.name === 'AbortError');
   assert.deepEqual(calls, ['camera', 'camera:pin']);
+});
+
+test('replays semantic app state and active-pane callbacks alongside old viewer entries', async () => {
+  const calls = [];
+  const clock = fakeAsyncClock();
+  const plugin = fakeReplayPlugin(calls);
+  const semanticTrace = {
+    version: 1,
+    molstar_version: '4.6.0',
+    app_state: { display_mode: 'all' },
+    snapshots: [
+      { t_ms: 0, seq: 0, kind: 'state', snapshot: { data: {} } },
+      { t_ms: 100, seq: 3, kind: 'camera', camera: {}, source_pane_id: 'pose-B' },
+    ],
+    app_trace: [
+      { t_ms: 50, seq: 1, kind: 'app', action: 'display_mode_changed', state: { display_mode: 'grid' } },
+      { t_ms: 75, seq: 2, kind: 'active_pane', pane_id: 'pose-B' },
+    ],
+  };
+
+  await playViewerTrace(plugin, semanticTrace, {
+    ...clock.options,
+    onAppEvent: event => calls.push(`app:${event.action || event.kind}`),
+    onAppStateChange: state => calls.push(`mode:${state.display_mode}`),
+    onActivePaneChange: paneId => calls.push(`pane:${paneId}`),
+  });
+
+  assert.deepEqual(calls, [
+    'mode:all',
+    'state',
+    'app:display_mode_changed',
+    'mode:grid',
+    'app:active_pane',
+    'pane:pose-B',
+    'camera',
+    'pane:pose-B',
+  ]);
+  assert.deepEqual(clock.waits, [50, 25, 25, 250]);
+});
+
+test('keeps legacy v1 traces valid and rejects malformed semantic extensions', () => {
+  assert.equal(validateViewerTrace(trace), trace);
+  for (const invalid of [
+    { ...trace, app_trace: {} },
+    { ...trace, app_trace: [{ t_ms: 0, kind: 'app', action: '' }] },
+    { ...trace, app_trace: [{ t_ms: 0, kind: 'active_pane', pane_id: 2 }] },
+    { ...trace, app_state: [] },
+  ]) {
+    assert.throws(() => validateViewerTrace(invalid), /Unsupported viewer trace/);
+  }
 });

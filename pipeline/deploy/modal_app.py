@@ -274,6 +274,10 @@ def _default_weekly_round_id(now: datetime | None = None) -> str:
     return f"weekly-{saturday.isoformat()}"
 
 
+def _default_weekly_campaign_id(now: datetime | None = None) -> str:
+    return _default_weekly_round_id(now).replace("weekly-", "wwpdb-", 1)
+
+
 def _wednesday_publish_enabled(explicit: bool | None) -> bool:
     """Resolve the explicit mutation gate for a manual or scheduled call."""
 
@@ -780,11 +784,13 @@ if modal is not None:
             run_wednesday_reveal,
         )
 
-        selected_round_id = (
-            _default_weekly_round_id() if round_id is None else round_id
-        )
         mutation_enabled = _wednesday_publish_enabled(publish)
         coordinator = SupabaseCoordinator.from_env()
+        selected_round_id = round_id
+        if selected_round_id is None:
+            selected_round_id = coordinator.current_weekly_quiz_round(
+                _default_weekly_campaign_id()
+            )["round_id"]
         try:
             round_record, private_index_content = (
                 coordinator.weekly_quiz_reveal_inputs(selected_round_id)

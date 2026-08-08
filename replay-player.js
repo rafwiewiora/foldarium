@@ -44,6 +44,8 @@ function isSupportedTrace(trace) {
       || !Number.isFinite(entry.t_ms)
       || entry.t_ms < 0
       || entry.t_ms < previousTime) return false;
+    if (entry.seq !== undefined && (!Number.isFinite(entry.seq) || entry.seq < 0)) return false;
+    if (entry.source_pane_id !== undefined && typeof entry.source_pane_id !== 'string') return false;
 
     if (entry.kind === 'state') {
       if (!isObject(entry.snapshot)) return false;
@@ -54,6 +56,28 @@ function isSupportedTrace(trace) {
     }
     previousTime = entry.t_ms;
   }
+
+  if (trace.app_trace !== undefined) {
+    if (!Array.isArray(trace.app_trace)) return false;
+    previousTime = -1;
+    for (const event of trace.app_trace) {
+      if (!isObject(event)
+        || !Number.isFinite(event.t_ms)
+        || event.t_ms < 0
+        || event.t_ms < previousTime) return false;
+      if (event.seq !== undefined && (!Number.isFinite(event.seq) || event.seq < 0)) return false;
+      if (event.kind === 'app') {
+        if (typeof event.action !== 'string' || !event.action) return false;
+        if (event.state !== undefined && !isObject(event.state)) return false;
+      } else if (event.kind === 'active_pane') {
+        if (event.pane_id !== null && typeof event.pane_id !== 'string') return false;
+      } else {
+        return false;
+      }
+      previousTime = event.t_ms;
+    }
+  }
+  if (trace.app_state !== undefined && !isObject(trace.app_state)) return false;
   return true;
 }
 
@@ -84,14 +108,24 @@ export async function playViewerTrace(plugin, trace, {
   now = () => performance.now(),
   sleep = defaultSleep,
   signal,
+  onAppEvent = () => {},
+  onAppStateChange = () => {},
+  onActivePaneChange = () => {},
 } = {}) {
   validateViewerTrace(trace);
   throwIfAborted(signal);
 
   const startedAt = now();
   let cameraTransitionEndsAt = -Infinity;
+  const timeline = [
+    ...trace.snapshots.map((entry, index) => ({ entry, type: 'viewer', index })),
+    ...(trace.app_trace ?? []).map((entry, index) => ({ entry, type: 'app', index })),
+  ].sort((left, right) => left.entry.t_ms - right.entry.t_ms
+    || (Number(left.entry.seq) || 0) - (Number(right.entry.seq) || 0)
+    || (left.type === right.type ? left.index - right.index : left.type.localeCompare(right.type)));
   try {
-    for (const entry of trace.snapshots) {
+    if (trace.app_state !== undefined) await onAppStateChange(trace.app_state, null);
+    for (const { entry, type } of timeline) {
       throwIfAborted(signal);
       const waitMs = entry.t_ms - (now() - startedAt);
       if (waitMs > 0) {
@@ -99,8 +133,22 @@ export async function playViewerTrace(plugin, trace, {
         throwIfAborted(signal);
       }
 
-      if (entry.kind === 'state') {
+      if (type === 'app') {
+        await onAppEvent(entry);
+        if (entry.kind === 'active_pane') {
+          await onActivePaneChange(entry.pane_id, entry);
+        } else {
+          if (entry.state !== undefined) await onAppStateChange(entry.state, entry);
+          if (entry.active_pane_id !== undefined) {
+            await onActivePaneChange(entry.active_pane_id, entry);
+          }
+        }
+        throwIfAborted(signal);
+      } else if (entry.kind === 'state') {
         await plugin.state.setSnapshot(entry.snapshot);
+        if (entry.source_pane_id !== undefined) {
+          await onActivePaneChange(entry.source_pane_id, entry);
+        }
         const transitionDuration = stateCameraTransitionDuration(entry.snapshot);
         if (transitionDuration !== null) {
           cameraTransitionEndsAt = transitionDuration > 0
@@ -110,6 +158,9 @@ export async function playViewerTrace(plugin, trace, {
         throwIfAborted(signal);
       } else {
         plugin.canvas3d.camera.setState(entry.camera, 250);
+        if (entry.source_pane_id !== undefined) {
+          await onActivePaneChange(entry.source_pane_id, entry);
+        }
         cameraTransitionEndsAt = now() + 250;
       }
     }

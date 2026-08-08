@@ -5,8 +5,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from foldarium_pipeline.contracts import make_prediction_task
+from foldarium_pipeline.evaluation import EvaluationError
+from foldarium_pipeline import weekly_quiz as weekly_quiz_module
 from foldarium_pipeline.weekly_quiz import (
     publish_staged_weekly_quiz,
     select_complete_method_pairs,
@@ -16,6 +19,7 @@ from foldarium_pipeline.weekly_quiz import (
 try:
     import gemmi  # noqa: F401
     import numpy  # noqa: F401
+    import rdkit  # noqa: F401
 
     HAS_ASSEMBLY_DEPS = True
 except (ImportError, ModuleNotFoundError):
@@ -35,7 +39,9 @@ def pdb_fixture(shift: float) -> bytes:
             )
     for atom_index in range(15):
         serial += 1
-        x = shift + 10.0 + atom_index * 0.2
+        # Covalent-like spacing keeps RDKit connectivity inference stable; the
+        # old 0.2 A synthetic spacing created an impossible all-to-all graph.
+        x = shift + 10.0 + atom_index * 1.5
         lines.append(
             f"HETATM{serial:5d} C{atom_index + 1:<3d} LIG B{1:4d}    "
             f"{x:8.3f}{2.0:8.3f}{0.0:8.3f}  1.00 70.00           C"
@@ -149,6 +155,64 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
         )
 
 
+class PairwisePoseDistanceTests(unittest.TestCase):
+    def test_uses_shared_receptor_frame_without_ligand_kabsch(self) -> None:
+        import numpy
+
+        coordinates = [
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        ]
+        with (
+            patch.object(
+                weekly_quiz_module,
+                "_connectivity_molecule",
+                side_effect=lambda ligand, _chem, _bonds: ligand,
+            ),
+            patch.object(
+                weekly_quiz_module,
+                "_symmetry_mappings",
+                return_value=((0, 1),),
+            ),
+        ):
+            matrix = weekly_quiz_module._pairwise_pose_distances(
+                ["left", "right"],
+                coordinates,
+                numpy=numpy,
+                Chem=object(),
+                rdDetermineBonds=object(),
+            )
+        # A ligand-only fit would collapse this translation to zero.
+        self.assertAlmostEqual(matrix[0][1], 1.0)
+
+    def test_connectivity_mismatch_fails_closed(self) -> None:
+        import numpy
+
+        with (
+            patch.object(
+                weekly_quiz_module,
+                "_connectivity_molecule",
+                side_effect=lambda ligand, _chem, _bonds: ligand,
+            ),
+            patch.object(
+                weekly_quiz_module,
+                "_symmetry_mappings",
+                side_effect=EvaluationError("connectivity mismatch"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "connectivity",
+            ):
+                weekly_quiz_module._pairwise_pose_distances(
+                    ["left", "right"],
+                    [[[0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]],
+                    numpy=numpy,
+                    Chem=object(),
+                    rdDetermineBonds=object(),
+                )
+
+
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class WeeklyQuizAssemblyTests(unittest.TestCase):
     def test_aligns_cross_method_poses_and_publishes_only_sanitized_assets(self) -> None:
@@ -174,6 +238,18 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             )
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
+            self.assertEqual(stage["items"][0]["clustering"]["cluster_count"], 1)
+            self.assertEqual(
+                sum(choice["is_rep"] for choice in stage["items"][0]["choices"]),
+                1,
+            )
+            self.assertEqual(
+                len({choice["cluster_id"] for choice in stage["items"][0]["choices"]}),
+                1,
+            )
+            for choice in stage["items"][0]["choices"]:
+                self.assertTrue(Path(temporary, choice["protein_path"]).is_file())
+                self.assertTrue(Path(temporary, choice["pocket_path"]).is_file())
             poses = [
                 Path(temporary, choice["pose_path"]).read_text()
                 for choice in stage["items"][0]["choices"]
@@ -204,6 +280,12 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
             self.assertNotIn("method", json.dumps(blind))
+            self.assertNotIn("clustering", blind["items"][0])
+            self.assertEqual(len(blind["items"][0]["choices"]), 2)
+            self.assertTrue(all("cluster_id" in choice for choice in blind["items"][0]["choices"]))
+            self.assertTrue(all("is_rep" in choice for choice in blind["items"][0]["choices"]))
+            self.assertTrue(all("protein_uri" in choice for choice in blind["items"][0]["choices"]))
+            self.assertTrue(all("pocket_uri" in choice for choice in blind["items"][0]["choices"]))
             self.assertTrue(
                 blind["items"][0]["choices"][0]["pose_uri"].startswith(
                     "supabase://quiz-public/"
@@ -214,6 +296,10 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 {choice["method"] for choice in private_index["items"][0]["choices"]},
                 {"openfold3", "boltz2"},
             )
+            clustering = private_index["items"][0]["clustering"]
+            self.assertIn("distance_matrix_sha256", clustering)
+            self.assertEqual(clustering["threshold_angstrom"], 2.0)
+            self.assertIn("no ligand superposition", clustering["distance_metric"])
 
 
 if __name__ == "__main__":

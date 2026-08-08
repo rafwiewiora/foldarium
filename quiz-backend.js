@@ -2,6 +2,7 @@ const OPERATION_PREFIX = 'foldariumSyncOpV2:';
 const DEAD_LETTER_PREFIX = 'foldariumSyncDeadV2:';
 const KIND_ORDER = { session: 0, answer: 1, complete: 2 };
 const MAX_VIEWER_TRACE_BYTES = 512 * 1024;
+const MAX_SUGGESTION_CONTEXT_BYTES = 512 * 1024;
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 function normalizeViewerTraceResult(viewerTrace) {
@@ -34,8 +35,27 @@ export function normalizeViewerTrace(viewerTrace) {
   return normalizeViewerTraceResult(viewerTrace).value;
 }
 
+function normalizeJsonObject(value, label, maxBytes = MAX_SUGGESTION_CONTEXT_BYTES) {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined || new TextEncoder().encode(serialized).byteLength > maxBytes) {
+      throw new Error(`${label} exceeds its ${maxBytes}-byte limit`);
+    }
+    const normalized = JSON.parse(serialized);
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+      throw new Error(`${label} must be a JSON object`);
+    }
+    return normalized;
+  } catch (error) {
+    throw new Error(`${label} is invalid: ${error.message}`, { cause: error });
+  }
+}
+
 const disabledBackend = {
   startSession: () => null,
+  startNamedSession: async () => {
+    throw new Error('Named quiz persistence is unavailable.');
+  },
   recordAnswer: () => {},
   completeSession: () => {},
   flush: async ({ strict = false } = {}) => {
@@ -52,6 +72,12 @@ const disabledBackend = {
   getWeeklyVoteTotals: async () => [],
   submitWeeklyVote: async () => {
     throw new Error('Weekly quiz persistence is unavailable.');
+  },
+  submitWeeklyVoteAttempt: async () => {
+    throw new Error('Weekly quiz replay persistence is unavailable.');
+  },
+  submitUserSuggestion: async () => {
+    throw new Error('Suggestion persistence is unavailable.');
   },
 };
 
@@ -94,6 +120,9 @@ export function createDeferredBackend({
         return null;
       }
     },
+    async startNamedSession(...args) {
+      return (await requireTarget()).startNamedSession(...args);
+    },
     recordAnswer: (...args) => { call('recordAnswer', args); },
     completeSession: (...args) => { call('completeSession', args); },
     flush(options = {}) {
@@ -118,6 +147,12 @@ export function createDeferredBackend({
     async submitWeeklyVote(...args) {
       return (await requireTarget()).submitWeeklyVote(...args);
     },
+    async submitWeeklyVoteAttempt(...args) {
+      return (await requireTarget()).submitWeeklyVoteAttempt(...args);
+    },
+    async submitUserSuggestion(...args) {
+      return (await requireTarget()).submitUserSuggestion(...args);
+    },
     attach(backend) {
       if (target || failure) return;
       target = backend;
@@ -141,11 +176,13 @@ export function createQuizBackend({
   storage = window.localStorage,
   uuid = () => crypto.randomUUID(),
   now = () => new Date(),
+  pagePath = globalThis.location?.pathname || '/',
 }) {
   let flushing = null;
   let flushOutcome = null;
   let flushAgain = false;
   const enqueueFailures = new Map();
+  const weeklyNamedSessionIds = new Set();
 
   const enqueue = (kind, value, { warnOnFailure = true } = {}) => {
     const entry = { kind, value };
@@ -294,6 +331,38 @@ export function createQuizBackend({
       });
       return id;
     },
+    async startNamedSession({
+      id = uuid(), source, difficulty, weeklyRoundId = null, displayName, initialAppState = null,
+    }) {
+      const normalizedName = String(displayName || '').trim().replace(/\s+/g, ' ');
+      if (!id || !['cameo', 'rnp', 'weekly'].includes(source)
+        || !['easy', 'hard'].includes(difficulty)
+        || !normalizedName || normalizedName.length > 80) {
+        throw new Error('Named quiz session values are invalid.');
+      }
+      if ((source === 'weekly') !== !!weeklyRoundId) {
+        throw new Error('Named weekly session identity is invalid.');
+      }
+      if (source === 'weekly') {
+        const appState = initialAppState == null
+          ? null : normalizeJsonObject(initialAppState, 'Initial app state');
+        await leaderboardRpc('start_named_weekly_quiz_session', {
+          p_session_id: id,
+          p_round_id: weeklyRoundId,
+          p_display_name: normalizedName,
+          p_initial_app_state: appState,
+        }, true);
+        weeklyNamedSessionIds.add(id);
+      } else {
+        await leaderboardRpc('start_named_quiz_session', {
+          p_session_id: id,
+          p_source: source,
+          p_difficulty: difficulty,
+          p_display_name: normalizedName,
+        }, true);
+      }
+      return id;
+    },
     recordAnswer(sessionId, questionIndex, record) {
       if (!sessionId) return;
       const normalizedTrace = normalizeViewerTraceResult(record.viewer_trace);
@@ -323,7 +392,16 @@ export function createQuizBackend({
       }
     },
     completeSession(sessionId) {
-      if (sessionId) enqueue('complete', { id: sessionId, completed_at: now().toISOString() });
+      if (!sessionId) return;
+      if (weeklyNamedSessionIds.has(sessionId)) {
+        void leaderboardRpc('complete_named_weekly_quiz_session', {
+          p_session_id: sessionId,
+        }, true).catch(error => {
+          console.warn('Weekly session completion was not saved:', error.message);
+        });
+        return;
+      }
+      enqueue('complete', { id: sessionId, completed_at: now().toISOString() });
     },
     flush,
     async claimUsername(username) {
@@ -377,6 +455,67 @@ export function createQuizBackend({
       });
       if (result.error) throw result.error;
       return result.data;
+    },
+    async submitWeeklyVoteAttempt({
+      sessionId, roundId, itemId, questionIndex, choiceId, pickedNone,
+      viewerTrace = null, appState = null,
+    }) {
+      if (!sessionId || !roundId || !itemId || !Number.isInteger(questionIndex)
+        || questionIndex < 0 || typeof pickedNone !== 'boolean') {
+        throw new Error('Weekly vote-attempt identity is invalid.');
+      }
+      if ((pickedNone && choiceId != null) || (!pickedNone && !choiceId)) {
+        throw new Error('Weekly vote-attempt choice is invalid.');
+      }
+      const normalizedTrace = normalizeViewerTraceResult(viewerTrace);
+      if (normalizedTrace.warning) {
+        throw new Error(`Weekly viewer trace is invalid: ${normalizedTrace.warning}`);
+      }
+      const normalizedState = appState == null
+        ? null : normalizeJsonObject(appState, 'Weekly app state');
+      const stateFromTrace = normalizedTrace.value?.app_state;
+      const submittedState = normalizedState || (stateFromTrace && typeof stateFromTrace === 'object'
+        ? normalizeJsonObject(stateFromTrace, 'Weekly app state') : null);
+      return leaderboardRpc('submit_weekly_quiz_vote_attempt', {
+        p_vote_attempt_id: uuid(),
+        p_session_id: sessionId,
+        p_round_id: roundId,
+        p_item_id: itemId,
+        p_question_index: questionIndex,
+        p_choice_id: pickedNone ? null : choiceId,
+        p_picked_none: pickedNone,
+        p_viewer_trace: normalizedTrace.value,
+        p_app_state: submittedState,
+        p_active_pane_id: submittedState?.active_pane_id || null,
+      }, true);
+    },
+    async submitUserSuggestion({
+      sessionId, roundId = null, itemId = null, suggestionText, contextSnapshot,
+    }) {
+      const text = String(suggestionText || '').trim();
+      if (!sessionId || !text || text.length > 4000) {
+        throw new Error('Suggestion values are invalid.');
+      }
+      const context = normalizeJsonObject(contextSnapshot, 'Suggestion context');
+      const isWeekly = weeklyNamedSessionIds.has(sessionId) || !!roundId;
+      const appState = context.app_state && typeof context.app_state === 'object'
+        ? normalizeJsonObject(context.app_state, 'Suggestion app state') : null;
+      const viewerSnapshot = context.viewer_snapshot && typeof context.viewer_snapshot === 'object'
+        ? normalizeJsonObject(context.viewer_snapshot, 'Suggestion viewer snapshot') : null;
+      const traceTail = context.viewer_trace_tail && typeof context.viewer_trace_tail === 'object'
+        ? normalizeJsonObject(context.viewer_trace_tail, 'Suggestion viewer trace tail') : null;
+      return leaderboardRpc('submit_user_suggestion', {
+        p_suggestion_id: uuid(),
+        p_suggestion_text: text,
+        p_context: isWeekly ? 'weekly-quiz' : 'pose-quiz',
+        p_quiz_session_id: isWeekly ? null : sessionId,
+        p_weekly_session_id: isWeekly ? sessionId : null,
+        p_item_id: itemId,
+        p_page_path: pagePath,
+        p_app_state: appState,
+        p_viewer_snapshot: viewerSnapshot,
+        p_viewer_trace_tail: traceTail,
+      }, true);
     },
   };
 }

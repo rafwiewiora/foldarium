@@ -12,11 +12,22 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 
+from .clustering import (
+    PoseClusteringError,
+    choice_order_digest,
+    cluster_distance_matrix,
+)
 from .contracts import canonical_json, validate_prediction_task
-from .evaluation import EvaluationError, best_receptor_superposition
+from .evaluation import (
+    EvaluationError,
+    _connectivity_molecule,
+    _mapped_rmsd,
+    _symmetry_mappings,
+    best_receptor_superposition,
+)
 from .quiz import build_blind_manifest, manifest_sha256
 
-WEEKLY_QUIZ_STAGE_VERSION = 1
+WEEKLY_QUIZ_STAGE_VERSION = 2
 POCKET_RADIUS_ANGSTROM = 5.0
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 
@@ -25,15 +36,17 @@ class WeeklyQuizAssemblyError(RuntimeError):
     """Raised when completed predictions cannot form a safe blind round."""
 
 
-def _dependencies() -> tuple[Any, Any]:
+def _dependencies() -> tuple[Any, Any, Any, Any]:
     try:
         import gemmi
         import numpy
+        from rdkit import Chem
+        from rdkit.Chem import rdDetermineBonds
     except (ImportError, ModuleNotFoundError) as exc:
         raise WeeklyQuizAssemblyError(
-            "weekly quiz assembly requires Gemmi and NumPy"
+            "weekly quiz assembly requires Gemmi, NumPy, and RDKit"
         ) from exc
-    return gemmi, numpy
+    return gemmi, numpy, Chem, rdDetermineBonds
 
 
 def _safe_path(root: Path, relative: Any, field: str) -> Path:
@@ -154,6 +167,7 @@ def _write_polymer(
     model: Any,
     *,
     near: Any | None,
+    transform: Any,
     gemmi: Any,
     numpy: Any,
 ) -> None:
@@ -165,7 +179,7 @@ def _write_polymer(
     for chain, residue in _polymer_residues(model):
         atoms = _heavy_atoms(residue)
         coordinates = numpy.array(
-            [[atom.pos.x, atom.pos.y, atom.pos.z] for atom in atoms], dtype=float
+            [_position(atom, transform, gemmi) for atom in atoms], dtype=float
         )
         if near is not None and (
             not len(coordinates)
@@ -188,7 +202,7 @@ def _write_polymer(
                     residue.name,
                     chain_names[chain.name],
                     residue_number,
-                    (float(atom.pos.x), float(atom.pos.y), float(atom.pos.z)),
+                    _position(atom, transform, gemmi),
                     atom.element.name,
                 )
             )
@@ -205,6 +219,49 @@ def _load_model(path: Path, gemmi: Any) -> tuple[Any, Any]:
         return structure, structure[0]
     except Exception as exc:
         raise WeeklyQuizAssemblyError(f"could not parse prediction coordinates: {path.name}") from exc
+
+
+def _pairwise_pose_distances(
+    ligands: list[Any],
+    pose_coordinates: list[list[list[float]]],
+    *,
+    numpy: Any,
+    Chem: Any,
+    rdDetermineBonds: Any,
+) -> list[list[float]]:
+    """Return graph-symmetry RMSDs in the shared receptor frame.
+
+    The ligand coordinates have already received their receptor transform.  No
+    ligand Kabsch fit is performed here.  Mutual graph matching makes a
+    connectivity disagreement a hard assembly failure rather than quietly
+    comparing atom order or producing a partial substructure score.
+    """
+
+    try:
+        molecules = [
+            _connectivity_molecule(ligand, Chem, rdDetermineBonds)
+            for ligand in ligands
+        ]
+        coordinates = [numpy.array(pose, dtype=float) for pose in pose_coordinates]
+        matrix = [[0.0 for _ in ligands] for _ in ligands]
+        for left in range(len(ligands)):
+            for right in range(left + 1, len(ligands)):
+                mappings = _symmetry_mappings(molecules[left], molecules[right])
+                # A same-sized query can still match a graph with additional
+                # edges. Requiring the reverse match rejects that mismatch.
+                _symmetry_mappings(molecules[right], molecules[left])
+                distance, _mapping = _mapped_rmsd(
+                    coordinates[left], coordinates[right], mappings, numpy
+                )
+                if not math.isfinite(distance):
+                    raise EvaluationError("ligand pair RMSD is not finite")
+                matrix[left][right] = distance
+                matrix[right][left] = distance
+        return matrix
+    except EvaluationError as exc:
+        raise WeeklyQuizAssemblyError(
+            "prediction ligand connectivity does not support unambiguous clustering"
+        ) from exc
 
 
 def _normalized_runs(
@@ -303,7 +360,7 @@ def stage_weekly_quiz(
     if (root / "stage.json").exists():
         raise WeeklyQuizAssemblyError("stage destination already contains stage.json")
     root.mkdir(parents=True, exist_ok=True)
-    gemmi, numpy = _dependencies()
+    gemmi, numpy, Chem, rdDetermineBonds = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
     staged_items: list[dict[str, Any]] = []
 
@@ -325,9 +382,13 @@ def stage_weekly_quiz(
                 if not isinstance(artifact, Mapping):
                     raise WeeklyQuizAssemblyError("prediction sample lacks predicted_complex metadata")
                 digest = artifact.get("sha256")
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise WeeklyQuizAssemblyError("prediction artifact has no valid SHA-256")
                 content = downloader(artifact.get("object_uri"), expected_sha256=digest)
                 if not isinstance(content, bytes) or not content:
                     raise WeeklyQuizAssemblyError("prediction artifact download returned no bytes")
+                if hashlib.sha256(content).hexdigest() != digest:
+                    raise WeeklyQuizAssemblyError("prediction artifact content does not match SHA-256")
                 media_type = str(artifact.get("media_type") or "chemical/x-mmcif")
                 suffix = ".pdb" if "pdb" in media_type.lower() else ".cif"
                 raw_name = hashlib.sha256(
@@ -342,6 +403,7 @@ def stage_weekly_quiz(
                         "run_id": row["run_id"],
                         "sample_id": sample["sample_id"],
                         "sample_index": sample.get("sample_index"),
+                        "artifact_sha256": digest,
                         "method": row["method"],
                         "method_version": row["method_version"],
                         "structure": structure,
@@ -351,9 +413,21 @@ def stage_weekly_quiz(
 
         if len(raw_choices) < len(required_methods):
             raise WeeklyQuizAssemblyError(f"target {target_id} has too few blind choices")
+        raw_choices.sort(
+            key=lambda choice: choice_order_digest(
+                round_id,
+                target_id,
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            )
+        )
         reference_model = raw_choices[0]["model"]
         choice_rows: list[dict[str, Any]] = []
         pose_coordinates: list[list[list[float]]] = []
+        ligands: list[Any] = []
         for index, choice in enumerate(raw_choices, start=1):
             if index == 1:
                 transform = _identity_transform(gemmi)
@@ -372,17 +446,39 @@ def stage_weekly_quiz(
                     ) from exc
                 transform = alignment["transform"]
             ligand = _prediction_ligand(choice["model"], heavy_atom_count, ligand_chains)
+            ligands.append(ligand)
             pose_relative = f"assets/{target_id}/pose-{index}.pdb"
             coordinates = _write_ligand(root / pose_relative, ligand, transform, gemmi)
             pose_coordinates.append(coordinates)
+            choice_protein_relative = f"assets/{target_id}/protein-{index}.pdb"
+            choice_pocket_relative = f"assets/{target_id}/pocket-{index}.pdb"
+            _write_polymer(
+                root / choice_protein_relative,
+                choice["model"],
+                near=None,
+                transform=transform,
+                gemmi=gemmi,
+                numpy=numpy,
+            )
+            _write_polymer(
+                root / choice_pocket_relative,
+                choice["model"],
+                near=numpy.array(coordinates, dtype=float),
+                transform=transform,
+                gemmi=gemmi,
+                numpy=numpy,
+            )
             choice_rows.append(
                 {
                     "run_id": choice["run_id"],
                     "sample_id": choice["sample_id"],
                     "sample_index": choice["sample_index"],
+                    "artifact_sha256": choice["artifact_sha256"],
                     "method": choice["method"],
                     "method_version": choice["method_version"],
                     "pose_path": pose_relative,
+                    "protein_path": choice_protein_relative,
+                    "pocket_path": choice_pocket_relative,
                     "alignment": {
                         key: value for key, value in alignment.items() if key != "transform"
                     },
@@ -391,16 +487,57 @@ def stage_weekly_quiz(
         atom_counts = {len(coordinates) for coordinates in pose_coordinates}
         if atom_counts != {heavy_atom_count}:
             raise WeeklyQuizAssemblyError(f"target {target_id} ligand atom counts are inconsistent")
+        distance_matrix = _pairwise_pose_distances(
+            ligands,
+            pose_coordinates,
+            numpy=numpy,
+            Chem=Chem,
+            rdDetermineBonds=rdDetermineBonds,
+        )
+        identities = [
+            {
+                "run_id": choice["run_id"],
+                "sample_id": choice["sample_id"],
+                "artifact_sha256": choice["artifact_sha256"],
+            }
+            for choice in choice_rows
+        ]
+        try:
+            assignments, clustering = cluster_distance_matrix(
+                round_id,
+                target_id,
+                identities,
+                distance_matrix,
+            )
+        except PoseClusteringError as exc:
+            raise WeeklyQuizAssemblyError(
+                f"could not cluster blind poses for {target_id}"
+            ) from exc
+        for choice, assignment in zip(choice_rows, assignments):
+            choice["cluster_id"] = assignment["cluster_id"]
+            choice["is_rep"] = assignment["is_rep"]
+            if assignment["choice_digest"] != choice_order_digest(
+                round_id,
+                target_id,
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            ):
+                raise WeeklyQuizAssemblyError("clustering choice identity changed during assembly")
         pose_cloud = numpy.array(
             [coordinate for pose in pose_coordinates for coordinate in pose], dtype=float
         )
-        protein_relative = f"assets/{target_id}/protein.pdb"
-        pocket_relative = f"assets/{target_id}/pocket.pdb"
-        _write_polymer(root / protein_relative, reference_model, near=None, gemmi=gemmi, numpy=numpy)
+        # The shared receptor is the stable-hash-selected predicted anchor. It
+        # is only an all-overlay fallback and is never an experimental answer.
+        protein_relative = choice_rows[0]["protein_path"]
+        pocket_relative = f"assets/{target_id}/overlay-pocket.pdb"
         _write_polymer(
             root / pocket_relative,
             reference_model,
             near=pose_cloud,
+            transform=_identity_transform(gemmi),
             gemmi=gemmi,
             numpy=numpy,
         )
@@ -416,6 +553,7 @@ def stage_weekly_quiz(
                 },
                 "protein_path": protein_relative,
                 "pocket_path": pocket_relative,
+                "clustering": clustering,
                 "choices": choice_rows,
             }
         )
@@ -494,17 +632,36 @@ def publish_staged_weekly_quiz(
             if not isinstance(choice, Mapping):
                 raise WeeklyQuizAssemblyError("stage choices must be objects")
             pose = _safe_path(root, choice.get("pose_path"), "choice.pose_path")
-            if not pose.is_file():
-                raise WeeklyQuizAssemblyError("staged pose asset is missing")
+            choice_protein = _safe_path(
+                root, choice.get("protein_path"), "choice.protein_path"
+            )
+            choice_pocket = _safe_path(
+                root, choice.get("pocket_path"), "choice.pocket_path"
+            )
+            if not pose.is_file() or not choice_protein.is_file() or not choice_pocket.is_file():
+                raise WeeklyQuizAssemblyError("staged choice pose/protein/pocket asset is missing")
             pose_object = public_coordinator.store_bytes(pose.read_bytes(), "chemical/x-pdb")
+            choice_protein_object = public_coordinator.store_bytes(
+                choice_protein.read_bytes(), "chemical/x-pdb"
+            )
+            choice_pocket_object = public_coordinator.store_bytes(
+                choice_pocket.read_bytes(), "chemical/x-pdb"
+            )
             choices.append(
                 {
                     "run_id": choice.get("run_id"),
                     "sample_id": choice.get("sample_id"),
+                    "sample_index": choice.get("sample_index"),
+                    "artifact_sha256": choice.get("artifact_sha256"),
                     "method": choice.get("method"),
                     "method_version": choice.get("method_version"),
                     "pose_uri": pose_object["object_uri"],
+                    "protein_uri": choice_protein_object["object_uri"],
+                    "pocket_uri": choice_pocket_object["object_uri"],
                     "media_type": "chemical/x-pdb",
+                    "cluster_id": choice.get("cluster_id"),
+                    "is_rep": choice.get("is_rep"),
+                    "alignment": choice.get("alignment"),
                 }
             )
         manifest_items.append(
@@ -515,6 +672,7 @@ def publish_staged_weekly_quiz(
                 "ligand": item.get("ligand"),
                 "protein_uri": protein_object["object_uri"],
                 "pocket_uri": pocket_object["object_uri"],
+                "clustering": item.get("clustering"),
                 "choices": choices,
             }
         )

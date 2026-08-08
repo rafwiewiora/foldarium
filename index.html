@@ -61,7 +61,7 @@
   .q{font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
   .lig{font-size:18px;font-weight:600}
   .lig small{font-size:12px;color:var(--muted);font-weight:400}
-  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg{display:flex;flex:none;border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .seg button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px;font-size:12px;cursor:pointer}
   .seg button.on{background:#1b2330;color:var(--ink)}
   .choices{display:flex;flex-direction:column;gap:7px}
@@ -85,9 +85,37 @@
   .score{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:6px}
   .score .row{display:flex;justify-content:space-between}
   .score b{font-variant-numeric:tabular-nums}
+  .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
+  .weekly-results .hint{margin-top:6px}
   .hint{font-size:11px;color:var(--faint);line-height:1.5}
   .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
     padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+  dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
+  dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
+  .dialog-form{display:flex;flex-direction:column;gap:12px;padding:20px}
+  .dialog-form h2{font-size:15px;letter-spacing:.08em;margin:0}
+  .dialog-form label{font-size:12px;color:var(--muted)}
+  .dialog-form input,.dialog-form textarea{width:100%;margin-top:6px;background:#0d1117;
+    border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
+  .dialog-form textarea{min-height:130px;resize:vertical}
+  .dialog-form input:focus,.dialog-form textarea:focus{outline:none;border-color:var(--accent)}
+  .dialog-actions{display:flex;justify-content:flex-end;gap:8px}
+  .dialog-status{min-height:1.3em;margin:0;color:var(--muted);font-size:12px;line-height:1.4}
+  .privacy-note{margin:0;padding:9px 10px;border-radius:7px;background:#0d1117;color:var(--faint);
+    font-size:11px;line-height:1.45}
+  .participant-setup{display:flex;flex-direction:column;gap:8px;padding:11px;border:1px solid var(--line);
+    border-radius:9px;background:#0d1117}
+  .participant-setup label{font-size:12px;color:var(--muted)}
+  .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
+    color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
+  .participant-setup input:focus{outline:none;border-color:var(--accent)}
+  #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:var(--panel)}
+  html[data-quiz-mode="weekly"] #quizsrc,
+  html[data-quiz-mode="weekly"] #diff,
+  html[data-quiz-mode="weekly"] #leaderboard-link,
+  html[data-quiz-mode="weekly"] #score{display:none!important}
+  html[data-quiz-mode="weekly"] #weekly-results{display:block}
 </style>
 </head>
 <body>
@@ -104,8 +132,16 @@
   <div id="side">
     <div>
       <h1>Pose Quiz</h1>
-      <div class="sub">which predicted pose is correct? · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></div>
+      <div class="sub">which predicted pose is correct?<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
     </div>
+
+    <section class="participant-setup" id="participant-setup">
+      <label>Your name — required before starting
+        <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
+      </label>
+      <p class="privacy-note">We save your name, a server-protected identity hash, quiz choices, and viewer/app interactions so the team can study and improve Foldarium. Your name is not placed in the replay trace or browser storage.</p>
+      <p class="dialog-status" id="name-status" role="status" aria-live="polite">Enter your name to enable Start.</p>
+    </section>
 
     <div id="setup">
       <div class="seg" id="quizsrc">
@@ -150,11 +186,15 @@
       <button class="ghost" id="next" style="display:none;flex:1">Next question →</button>
     </div>
 
-    <div class="score">
+    <div class="score" id="score">
       <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
       <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
       <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
     </div>
+    <section class="weekly-results" id="weekly-results" aria-live="polite">
+      <div class="q">Results / leaderboard</div>
+      <div class="hint" id="weekly-results-copy">Results and vote totals will be available Wednesday.</div>
+    </section>
   </div>
   <div id="stage">
     <div id="app"></div>
@@ -162,7 +202,23 @@
     <div id="gridview"><div id="gridcells"></div></div>
   </div>
 </div>
+<button class="ghost mini" id="suggestion-open" type="button" disabled hidden>Suggestions</button>
+<dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
+  <form class="dialog-form" id="suggestion-form">
+    <h2 id="suggestion-title">Suggest an improvement</h2>
+    <label>What should we improve?
+      <textarea id="suggestion-text" maxlength="4000" required></textarea>
+    </label>
+    <p class="privacy-note">Your suggestion is saved with the current quiz/app state, active Grid pane, shared camera, and a bounded viewer snapshot so the team can reproduce the context.</p>
+    <p class="dialog-status" id="suggestion-status" role="status" aria-live="polite"></p>
+    <div class="dialog-actions">
+      <button class="ghost" id="suggestion-cancel" type="button">Cancel</button>
+      <button class="primary" id="suggestion-submit" type="submit">Send suggestion</button>
+    </div>
+  </form>
+</dialog>
 <script type="module">
+import './quiz-entry-mode.js';
 import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 
 (function () {
@@ -190,7 +246,10 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
   async function initPersistence() {
     try {
       await loadScript('supabase-config.js');
-      window.foldariumBackend.attach(initQuizBackend(window.FOLDARIUM_SUPABASE || {}));
+      const config = window.FOLDARIUM_CONFIG_READY
+        ? await window.FOLDARIUM_CONFIG_READY
+        : (window.FOLDARIUM_SUPABASE || {});
+      window.foldariumBackend.attach(initQuizBackend(config));
     } catch (e) {
       window.foldariumBackend.fail(e);
       console.warn('Remote quiz persistence disabled:', e.message);
@@ -203,6 +262,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
     sessionStorage.setItem(KEY, '1');
     gate.hidden = true;
     wrap.hidden = false;
+    document.getElementById('suggestion-open').hidden = false;
     const css = document.createElement('link');
     css.rel = 'stylesheet';
     css.href = 'https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.css';
@@ -226,6 +286,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;
       wrap.hidden = true;
+      document.getElementById('suggestion-open').hidden = true;
       loading = false;
     }
   }

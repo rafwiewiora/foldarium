@@ -155,8 +155,9 @@ evaluation image pins `gemmi==0.7.3`, `numpy==2.3.2`, and `rdkit==2025.3.6`. Pub
 `FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH=1` is present, or an operator explicitly passes `--publish` to a
 manual invocation; `--no-publish` performs the full scoring dry run without the reveal RPC.
 
-The reveal worker derives the most recent Saturday round when no round ID is supplied, reads the exact
-private round and checksum-bound private index with the service role, then resolves every original
+The reveal worker derives the most recent Saturday campaign when no round ID is supplied, resolves its
+newest immutable public round by `opens_at`, reads that exact private round and checksum-bound private
+index with the service role, then resolves every original
 `predicted_complex` by exact `(run_id, sample_id)` and recorded digest. Classic four-character PDB target
 IDs select the released RCSB coordinates. Missing/delayed coordinates, an incomplete item, a missing
 artifact, or a checksum mismatch aborts the entire reveal before mutation. A round already revealed with

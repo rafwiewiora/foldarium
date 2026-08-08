@@ -6,9 +6,13 @@ import {
   createLatestRequestGuard,
   createReplayController,
   createSessionListLoader,
+  answerSelectionKey,
   formatAnswerLabel,
+  formatCompactAppState,
   formatSessionLabel,
+  replayActionForSession,
   replaceSelectOptions,
+  sessionSelectionKey,
 } from '../replay.js';
 
 function validTrace(label) {
@@ -438,8 +442,10 @@ test('a stale old-session answers response cannot overwrite newly connected sess
 
 test('displays replay identifiers and answer time as option text', () => {
   const session = {
-    id: '00000000-0000-4000-8000-000000000001',
+    session_id: '00000000-0000-4000-8000-000000000001',
+    session_kind: 'classic',
     user_id: '<img src=x onerror=alert(1)>',
+    participant_hash: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
     source: 'cameo',
     difficulty: 'easy',
     started_at: '2026-08-05T12:00:00.000Z',
@@ -470,22 +476,52 @@ test('displays replay identifiers and answer time as option text', () => {
     },
   };
 
-  replaceSelectOptions(select, [session], formatSessionLabel, documentImpl);
-  assert.match(select.children[1].textContent, new RegExp(session.id));
-  assert.match(select.children[1].textContent, /<img src=x onerror=alert\(1\)>/);
+  replaceSelectOptions(select, [session], formatSessionLabel, documentImpl, sessionSelectionKey);
+  assert.equal(select.children[1].value, `classic:${session.session_id}`);
+  assert.match(select.children[1].textContent, new RegExp(session.session_id));
+  assert.match(select.children[1].textContent, /participant abcdef012345/);
+  assert.doesNotMatch(select.children[1].textContent, /<img|user/i);
 
   replaceSelectOptions(select, [answer], formatAnswerLabel, documentImpl);
   assert.match(select.children[1].textContent, /<script>alert\(1\)<\/script>/);
   assert.match(select.children[1].textContent, /Aug|2026|12:05/);
 });
 
+test('routes safe classic and weekly session rows to their replay actions', () => {
+  const classic = { session_id: 'classic-id', session_kind: 'classic' };
+  const weekly = { session_id: 'weekly-id', session_kind: 'weekly' };
+  assert.equal(sessionSelectionKey(classic), 'classic:classic-id');
+  assert.equal(sessionSelectionKey(weekly), 'weekly:weekly-id');
+  assert.equal(replayActionForSession(classic), 'answers');
+  assert.equal(replayActionForSession(weekly), 'weekly-attempts');
+  assert.equal(answerSelectionKey({ id: 'answer-id' }), 'answer-id');
+  assert.equal(answerSelectionKey({ vote_attempt_id: 'attempt-id' }), 'attempt-id');
+  assert.match(formatAnswerLabel({
+    vote_attempt_id: 'attempt-id',
+    question_index: 1,
+    item_id: '9ABC',
+    choice_id: 'choice-4',
+    picked_none: false,
+    submitted_at: '2026-08-08T12:05:00.000Z',
+  }), /Question 2 · 9ABC · choice choice-4 · blind vote/);
+});
+
 test('replay page exposes the required controls and pinned Molstar version', async () => {
   const html = await readFile(new URL('../replay.html', import.meta.url), 'utf8');
 
-  for (const id of ['replay-password', 'connect', 'sessions', 'answers', 'play', 'stop', 'status', 'viewer']) {
+  for (const id of [
+    'replay-password', 'connect', 'sessions', 'answers', 'play', 'stop',
+    'active-pane', 'app-state', 'status', 'viewer',
+  ]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /molstar@4\.6\.0\/build\/viewer\/molstar\.css/);
   assert.match(html, /molstar@4\.6\.0\/build\/viewer\/molstar\.js/);
   assert.match(html, /<script type="module" src="replay\.js"><\/script>/);
+});
+
+test('formats compact app state as inert readable text', () => {
+  assert.equal(formatCompactAppState(null), 'No app state recorded');
+  assert.equal(formatCompactAppState({ display_mode: 'grid', show_hbonds: true }),
+    'display_mode: grid\nshow_hbonds: true');
 });

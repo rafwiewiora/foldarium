@@ -108,6 +108,55 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             module._default_weekly_round_id(datetime(2026, 8, 12, 0, 5))
+        self.assertEqual(
+            module._default_weekly_campaign_id(
+                datetime(2026, 8, 12, 0, 5, tzinfo=timezone.utc)
+            ),
+            "wwpdb-2026-08-08",
+        )
+
+    def test_scheduled_tick_resolves_latest_immutable_campaign_round(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            def current_weekly_quiz_round(self, campaign_id):
+                self.campaign_id = campaign_id
+                return {"round_id": "weekly-2026-08-08-v2"}
+
+            def weekly_quiz_reveal_inputs(self, round_id):
+                self.round_id = round_id
+                return {"round_id": round_id}, b"private-index"
+
+            def download_predicted_complex(self, run_id, sample_id):
+                raise AssertionError("fixture does not resolve predictions")
+
+        coordinator = Coordinator()
+
+        def reveal_service(round_record, private_index_content, destination, **kwargs):
+            return {
+                "status": "evaluated-not-revealed",
+                "round_id": round_record["round_id"],
+                "item_count": 0,
+                "choice_count": 0,
+            }
+
+        raw_function = module.wednesday_reveal_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=coordinator,
+        ), patch(
+            "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal",
+            side_effect=reveal_service,
+        ), patch.object(
+            module,
+            "_default_weekly_campaign_id",
+            return_value="wwpdb-2026-08-08",
+        ):
+            report = raw_function(None, False)
+
+        self.assertEqual(coordinator.campaign_id, "wwpdb-2026-08-08")
+        self.assertEqual(coordinator.round_id, "weekly-2026-08-08-v2")
+        self.assertEqual(report["round_id"], "weekly-2026-08-08-v2")
 
     def test_schedule_and_cpu_image_have_bounded_retries_and_evaluation_stack(self) -> None:
         module = self.deployment_module()
