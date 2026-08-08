@@ -363,6 +363,58 @@ test('Surface mode adds protein and ligand surfaces in Grid at the requested opa
   ]);
 });
 
+test('Grid H-bonds are built inside each visible tile', async () => {
+  const app = await readApp();
+  const hbondCalls = [];
+  const plugin = { canvas3d: { requestCameraReset() {} } };
+  const sandbox = {
+    molstar: { Viewer: { create: async () => ({ plugin, handleResize() {}, dispose() {} }) } },
+    OPTS: {},
+    gridBuildRevision: 3,
+    configurePlugin: () => {},
+    gridProteinUrls: () => ({
+      prot: 'protein.pdb',
+      pocket: 'pocket.pdb',
+      color: 0x9aa6b2,
+    }),
+    loadStruct: async url => ({ struct: { url } }),
+    addRep: async () => {},
+    addSticks: async () => {},
+    addPose: async () => {},
+    addHbonds: async (targetPlugin, pocketUrl, poseUrls) => {
+      hbondCalls.push({ targetPlugin, pocketUrl, poseUrls });
+    },
+    structureSphere: () => null,
+    GOOD: 0x2BA84A,
+    BAD: 0xE23B2E,
+  };
+  const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
+  const cell = {
+    entry: { choice: { pose_file: 'pose.pdb', color: 0x5B8FF9, label: 'A' } },
+    card: fakeElement(),
+    head: fakeElement('button'),
+    host: fakeElement(),
+    viewer: null,
+    plugin: null,
+    disposed: false,
+    spec: {
+      item: {},
+      proteinMode: 'crystal',
+      answer: false,
+      showSurface: false,
+      showHbonds: true,
+    },
+  };
+
+  await buildGridCell(cell, 3);
+
+  assert.equal(hbondCalls.length, 1);
+  assert.equal(hbondCalls[0].targetPlugin, plugin);
+  assert.equal(hbondCalls[0].pocketUrl, 'pocket.pdb');
+  assert.deepEqual([...hbondCalls[0].poseUrls], ['pose.pdb']);
+  assert.match(app, /spec: \{ item: cur\.item, proteinMode, answer: cur\.revealed && cur\.showAnswer, showSurface, showHbonds \}/);
+});
+
 test('Surface toggle rebuilds the canonical protein and removes its surface when disabled', async () => {
   const app = await readApp();
   const reps = [];

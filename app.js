@@ -271,6 +271,7 @@ async function buildGridCell(cell, revision) {
     const poseColor = cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color;
     await addPose(pose.struct, poseColor, cell.plugin);
     if (cell.spec.showSurface) await addRep(pose.struct, 'all', 'molecular-surface', poseColor, 0.7, cell.plugin);
+    if (cell.spec.showHbonds && urls.pocket) await addHbonds(cell.plugin, urls.pocket, [c.pose_file]);
     cell.poseSphere = structureSphere(pose.struct);
     if (revision === gridBuildRevision && !cell.disposed) { cell.viewer.handleResize?.(); cell.plugin.canvas3d.requestCameraReset(); }
   } catch (e) {
@@ -302,7 +303,7 @@ async function buildGrid(preserveCamera = true) {
     head.onclick = () => { if (!locked()) onPick(entry.choiceIndex, entry.choice); };
     const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
     return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
-      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer, showSurface } };
+      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer, showSurface, showHbonds } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
@@ -365,21 +366,24 @@ async function clearLayer() {
 // render Mol*'s built-in 'interactions' representation over it (dashed cylinders). This is treated as an
 // "H-bonds" affordance; Mol*'s default provider set is H-bond-dominated (see report note). Poses stay
 // anonymised (geometry only) and correctness is never revealed — all shown poses are treated equally.
-async function buildHbonds(poseUrls) {
-  if (!showHbonds || !poseUrls.length) return;
-  const { pocket } = protUrls();
-  if (!pocket) return;
-  const parts = [atomRecords(await fetchPdbText(pocket))];
+async function addHbonds(targetPlugin, pocketUrl, poseUrls) {
+  if (!pocketUrl || !poseUrls.length) return null;
+  const parts = [atomRecords(await fetchPdbText(pocketUrl))];
   for (const u of poseUrls) parts.push(atomRecords(await fetchPdbText(u)));
   const pdb = parts.filter(Boolean).join('\nTER\n') + '\nEND\n';
-  const data = await plugin.builders.data.rawData({ data: pdb });
-  hbondData.push(data);
-  const traj = await plugin.builders.structure.parseTrajectory(data, 'pdb');
-  const model = await plugin.builders.structure.createModel(traj);
-  const struct = await plugin.builders.structure.createStructure(model);
-  const comp = await plugin.builders.structure.tryCreateComponentStatic(struct, 'all');
-  if (!comp) return;
-  await plugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
+  const data = await targetPlugin.builders.data.rawData({ data: pdb });
+  const traj = await targetPlugin.builders.structure.parseTrajectory(data, 'pdb');
+  const model = await targetPlugin.builders.structure.createModel(traj);
+  const struct = await targetPlugin.builders.structure.createStructure(model);
+  const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
+  if (!comp) return data;
+  await targetPlugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
+  return data;
+}
+async function buildHbonds(poseUrls) {
+  if (!showHbonds || !poseUrls.length) return;
+  const data = await addHbonds(plugin, protUrls().pocket, poseUrls);
+  if (data) hbondData.push(data);
 }
 async function buildCanonicalLayer(shown) {
   saveCam();
