@@ -449,6 +449,9 @@ async function loadQuestion(i) {
       shownOne = 0;
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
       $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
+      $('#instruction').style.display = ''; $('#choices').style.display = '';
+      $('#answer-details').hidden = true; $('#answer-details').open = false;
+      $('#answer-choices').replaceChildren(); $('#answer-ai').textContent = '';
       try { await plugin.clear(); } catch (e) {}
       proteinData = []; layerData = []; hbondData = []; savedCam = null; currentProtUrl = null;
       showXtal = false;
@@ -499,13 +502,18 @@ function renderUI() {
     box.appendChild(nb);
   }
   if (cur.selected) {                                   // keep the player's pick highlighted
-    if (cur.selected.none) box.querySelector('.choice.none')?.classList.add('sel');
+    let selected;
+    if (cur.selected.none) selected = box.querySelector('.choice.none');
     else {
       const k = uiEntries.findIndex(entry => cur.selectionExact
         ? sameChoice(entry.choice, cur.selected) : entry.choice.cluster === cur.selected.cluster);
-      if (k >= 0) box.querySelectorAll('.choice')[k]?.classList.add('sel');
+      if (k >= 0) selected = box.querySelectorAll('.choice')[k];
     }
+    selected?.classList.add('sel');
+    const tag = selected?.querySelector('[data-tag]');
+    if (tag) tag.textContent = 'Selected ✓';
   }
+  box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
@@ -523,6 +531,7 @@ function renderDevNav() {
   $('#myview').style.display = '';
   $('#myview').textContent = cur.showAnswer ? '← Hide answer (my view)' : 'Reveal answer →';
   $('#xtalrow').style.display = (cur.showAnswer && cur.item.xtal_lig_file) ? '' : 'none';
+  $('#answer-details').hidden = !cur.showAnswer;
 }
 
 // items for the current (source, difficulty) selection. Easy = only game-able (a real pick puzzle).
@@ -556,30 +565,17 @@ function easyPlayable(choices, source) {
 function showIntro() {
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
+  $('#wrap').classList.add('intro');
   $('#setup').style.display = '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
   $('#hbonds').style.display = 'none';
   $('#myview').style.display = 'none'; $('#xtalrow').style.display = 'none';
-  $('#progress').textContent = 'ready';
-  $('#ligand').innerHTML = `${pool.length} single-pocket ensembles · ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'}`;
-  // AI baseline accuracy on this pool: pLDDT-pick correct (all-wrong -> always wrong; the model can't say "none")
-  const aiCorrect = pool.filter(it => it.choices.find(c => c.af3_sample === it.plddt_pick_sample)?.correct).length;
-  const pct = pool.length ? Math.round(100 * aiCorrect / pool.length) : 0;
-  $('#setuphint').innerHTML = (difficulty === 'easy'
-    ? 'Easy — every ensemble has a correct pose; pick it.'
-    : 'Hard — some ensembles have a correct pose, some have <b>none</b> (answer “none of these”); you decide which.')
-    + ' <b>Single pocket only</b> (multi-pocket coming later).';
-  const v = $('#verdict'); v.style.display = '';
-  v.innerHTML = `Each question: a binding pocket with the ligand removed + `
-    + (quizSource === 'rnp' ? 'anonymised poses pooled from <b>multiple co-folding methods</b>' : "<b>AlphaFold3</b>'s poses")
-    + ` (clustered). Pick the correct binding pose`
-    + (difficulty === 'hard' ? ', or <b>“none of these are correct.”</b>' : '.')
-    + `<br><br>Opponent = ${oppLabel()}. <b>It scored ${aiCorrect}/${pool.length} (${pct}%)</b> here`
-    + (difficulty === 'hard' ? ` — and it can never answer “none”, so the no-correct-pose items are yours to win.` : '.')
-    + ` Can you beat it?`;
+  $('#question-head').style.display = 'none'; $('#ligand').style.display = 'none';
+  $('#instruction').style.display = 'none'; $('#view-options').hidden = true;
+  $('#answer-details').hidden = true; $('#verdict').style.display = 'none';
+  $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
   $('#start').style.display = pool.length ? '' : 'none';
-  if (!pool.length) v.innerHTML += '<br><span style="color:var(--bad)">No items for this selection.</span>';
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
@@ -616,7 +612,10 @@ function startQuiz() {
   ITEMS = drawSession();
   if (quizSource === 'rnp') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
+  $('#wrap').classList.remove('intro');
   $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';
+  $('#question-head').style.display = ''; $('#ligand').style.display = '';
+  $('#instruction').style.display = ''; $('#view-options').hidden = false;
   $('#protmode').style.display = quizSource === 'rnp' ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   loadQuestion(0);
@@ -631,7 +630,12 @@ async function onPick(k, exactChoice = null) {
       shownOne = k;
       if (!cur.revealed) {
         cur.selected = selected;
-        document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+        document.querySelectorAll('#choices .choice').forEach(el => {
+          const on = el.dataset.k == k;
+          el.classList.toggle('sel', on);
+          const tag = el.querySelector('[data-tag]');
+          if (tag) tag.textContent = on ? 'Selected ✓' : '';
+        });
       }
     });
     return;
@@ -641,14 +645,24 @@ async function onPick(k, exactChoice = null) {
     cur.selected = { none: true, correct: !answerChoices.some(c => c.correct), label: 'None of these' };
     cur.selectionExact = displayMode === 'grid' || !clustered;
     cur.answerChoices = answerChoices;
-    document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
+    document.querySelectorAll('#choices .choice').forEach(el => {
+      const on = el.dataset.k === 'none';
+      el.classList.toggle('sel', on);
+      const tag = el.querySelector('[data-tag]');
+      if (tag) tag.textContent = on ? 'Selected ✓' : '';
+    });
     $('#lock').disabled = false;
     return;
   }
   cur.selected = exactChoice || visibleChoices()[k];
   cur.selectionExact = !!exactChoice || !clustered;
   cur.answerChoices = answerChoices;
-  document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+  document.querySelectorAll('#choices .choice').forEach(el => {
+    const on = el.dataset.k == k;
+    el.classList.toggle('sel', on);
+    const tag = el.querySelector('[data-tag]');
+    if (tag) tag.textContent = on ? 'Selected ✓' : '';
+  });
   syncGridSelection();
   $('#lock').disabled = false;
 }
@@ -683,20 +697,23 @@ async function finalizeReveal() {
   const opts = answerChoices.length + (difficulty === 'hard' ? 1 : 0);
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealList(picked, af3);
-  $('#lock').style.display = 'none';
-  const youMsg = picked.none
-    ? (youRight ? `<b style="color:var(--good)">Correct — none of these were right.</b>`
-                : `<b style="color:var(--bad)">Wrong</b> — a correct pose was present.`)
-    : (youRight ? `<b style="color:var(--good)">Correct.</b> Pose ${picked.label} is ${picked.rmsd.toFixed(2)} Å from crystal.`
-                : `<b style="color:var(--bad)">Wrong.</b> Pose ${picked.label} is ${picked.rmsd.toFixed(2)} Å off.`);
+  $('#lock').style.display = 'none'; $('#choices').style.display = 'none';
+  const correct = cur.clusters.flatMap(c => c.members).filter(c => c.correct).sort((a, b) => a.rmsd - b.rmsd)[0];
+  const detail = youRight
+    ? (picked.none ? 'None of these poses was correct.'
+                   : `Pose ${picked.label} is ${picked.rmsd.toFixed(2)} Å from the crystal pose.`)
+    : (correct ? `Correct pose: ${correct.label} (${correct.rmsd.toFixed(2)} Å).`
+               : 'None of these poses was correct.');
   const afMethod = (cur.item.source === 'rnp' && af3 && af3._method) ? ` (${methodName(af3._method)})` : '';
   const afMsg = af3
-    ? `${oppLabel()} picked Pose ${af3.label}${afMethod} — <b style="color:${af3Right ? 'var(--good)' : 'var(--bad)'}">${af3Right ? 'right' : 'wrong'}</b>`
+    ? `${oppLabel()} picked Pose ${af3.label}${afMethod} — ${af3Right ? 'right' : 'wrong'}`
       + (!cur.item.has_correct ? ` (can’t answer “none”)` : '')
     : '';
   const v = $('#verdict'); v.style.display = '';
-  v.innerHTML = youMsg + (afMsg ? '<br>' + afMsg : '') + (youRight && !af3Right ? ` — <b>you beat it.</b>` : '.');
-  $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Final score →';
+  v.innerHTML = `<strong style="color:${youRight ? 'var(--good)' : 'var(--bad)'}">${youRight ? 'Correct' : 'Not quite'}</strong>${detail}`;
+  $('#answer-ai').textContent = afMsg;
+  $('#answer-details').hidden = false; $('#answer-details').open = false;
+  $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next question →' : 'View final score →';
   $('#myview').style.display = ''; $('#myview').textContent = '← Back to my view (hide answer)';
   if (cur.item.xtal_lig_file) $('#xtalrow').style.display = '';
   updateScore(); logAnswer(picked, af3, viewerTrace);
@@ -726,7 +743,7 @@ async function toggleAnswer() {
 }
 
 function renderRevealList(picked, af3) {
-  const box = $('#choices'); box.innerHTML = '';
+  const box = $('#answer-choices'); box.innerHTML = '';
   if (picked && picked.none) {
     const el = document.createElement('div');
     el.className = 'choice ' + (picked.correct ? 'correct' : 'wrong');
@@ -750,6 +767,7 @@ function renderRevealList(picked, af3) {
 
 function updateScore() {
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+  $('#score-summary').textContent = `score ${score.you} / ${score.n}`;
   $('#sc-you').textContent = `${score.you} / ${score.n}  (${pct(score.you, score.n)}%)`;
   $('#sc-af3').textContent = `${score.af3} / ${score.n}  (${pct(score.af3, score.n)}%)`;
   const initialOptions = cur
@@ -770,14 +788,20 @@ function logAnswer(picked, af3, viewerTrace) {
 }
 
 function syncButtons() {
-  document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === displayMode));
+  document.querySelectorAll('#mode button').forEach(b => {
+    const on = b.dataset.m === displayMode;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  });
   renderGridPages();
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
   const inPlay = !!cur;
   if (quizSource === 'rnp') proteinMode = 'crystal';
   $('#protmode').style.display = (inPlay && quizSource !== 'rnp') ? '' : 'none';
-  document.querySelectorAll('#protmode button').forEach(b => b.classList.toggle('on', b.dataset.p === proteinMode));
+  document.querySelectorAll('#protmode button').forEach(b => {
+    const on = b.dataset.p === proteinMode;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  });
   const uc = $('#uncluster');
   uc.textContent = clustered ? 'Uncluster poses' : 'Re-cluster';
   uc.classList.toggle('on', !clustered);
@@ -786,9 +810,8 @@ function syncButtons() {
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
   $('#modehint').textContent = displayMode === 'grid'
-    ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
-                 : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
-    : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.';
+    ? (clustered ? 'Linked viewers, one per pose cluster.' : 'Linked viewers, one per raw pose.')
+    : 'Pose colours identify choices; they do not indicate correctness.';
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
 }
 
@@ -831,6 +854,7 @@ function finish() {
   researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
+  $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
   $('#hbonds').style.display = 'none';
@@ -968,10 +992,18 @@ async function init() {
   POOLS.cameo = capAllCorrect([...cg, ...ca, ...cx].map(it => norm(it, 'cameo')).filter(keep));
   POOLS.rnp = capAllCorrect(rn.map(it => norm(it, 'rnp')).filter(keep));
   document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
-    quizSource = b.dataset.q; document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+    quizSource = b.dataset.q;
+    document.querySelectorAll('#quizsrc button').forEach(x => {
+      const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+    });
+    showIntro();
   });
   document.querySelectorAll('#diff button').forEach(b => b.onclick = () => {
-    difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+    difficulty = b.dataset.d;
+    document.querySelectorAll('#diff button').forEach(x => {
+      const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+    });
+    showIntro();
   });
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
     if (interactionBlocked()) return;

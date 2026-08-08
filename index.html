@@ -101,11 +101,12 @@
   .hint{font-size:11px;color:var(--faint);line-height:1.5}
   .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
     padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+  #wrap.intro #stage{display:none}
+  #wrap.intro #side{width:100%;max-width:420px;margin:auto;border:0;justify-content:center}
   @media (max-width: 760px){
     #wrap{height:100dvh;flex-direction:column}
     #stage{order:1;flex:1;min-height:50dvh}
     #side{order:2;width:100%;height:46dvh;max-height:46dvh;border-right:0;border-top:1px solid var(--line)}
-    #wrap.intro #stage{display:none}
     #wrap.intro #side{height:100dvh;max-height:none;justify-content:center}
     .badge{top:8px;left:8px}
   }
