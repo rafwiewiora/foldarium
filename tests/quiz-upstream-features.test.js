@@ -144,7 +144,10 @@ function gridLayerSandbox(overrides = {}) {
     buildSingleLayer: async () => { calls.push('single'); },
     buildGrid: async () => { calls.push('grid'); },
     hideGrid: () => { calls.push('hideGrid'); },
-    $: () => ({ classList: { contains: () => false } }),
+    $: () => ({ classList: {
+      contains: () => false,
+      add: (...names) => calls.push(`cover:${names.join(',')}`),
+    } }),
     console: { warn: (...args) => calls.push(`warn:${args[1]}`) },
     ...overrides,
   };
@@ -158,7 +161,11 @@ test('Grid rebuilds the hidden canonical scene before the Grid tiles so traces s
 
   await buildLayer();
 
-  assert.deepEqual(sandbox.calls, ['canonical:pose-a.pdb,pose-b.pdb', 'grid']);
+  assert.deepEqual(sandbox.calls, [
+    'cover:on,loading-grid',
+    'canonical:pose-a.pdb,pose-b.pdb',
+    'grid',
+  ]);
 });
 
 test('a failed canonical rebuild still leaves the Grid tiles to load', async () => {
@@ -170,7 +177,7 @@ test('a failed canonical rebuild still leaves the Grid tiles to load', async () 
 
   await buildLayer();
 
-  assert.deepEqual(sandbox.calls, ['warn:pose download failed', 'grid']);
+  assert.deepEqual(sandbox.calls, ['cover:on,loading-grid', 'warn:pose download failed', 'grid']);
 });
 
 test('leaving Grid keeps rebuilding the single view before disposing Grid viewers', async () => {
@@ -350,6 +357,53 @@ test('Weekly clustered layers keep one selectable representative and ghost every
   ]);
 });
 
+test('Weekly cluster acceptance applies to every raw member while labels stay unambiguous', async () => {
+  const app = await readApp();
+  const members = [
+    { correct: false },
+    { correct: true },
+    { correct: false },
+  ];
+  const decorate = evaluateDeclaration(app, 'function decorateClusterMembers(members, label, source)', {});
+  decorate(members, 'D', 'weekly');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(members)), [
+    { correct: false, label: 'D-1', clusterAccepted: true },
+    { correct: true, label: 'D-2', clusterAccepted: true },
+    { correct: false, label: 'D-3', clusterAccepted: true },
+  ]);
+  assert.match(app, /const label = cl\.label;/,
+    'clustered choices, including Grid, should render one letter without a member suffix');
+});
+
+test('Weekly Show all starts on the shared receptor and adopts a clicked pose context', async () => {
+  const app = await readApp();
+  const exact = { afprotein_file: 'exact-protein.pdb', afpocket_file: 'exact-pocket.pdb' };
+  const sandbox = {
+    cur: {
+      item: { source: 'weekly', protein_file: 'medoid.pdb', pocket_file: 'overlay-pocket.pdb' },
+      contextChoice: null,
+      revealed: false,
+      showAnswer: false,
+    },
+    displayMode: 'all',
+    visibleChoices: () => [exact],
+    shownOne: 0,
+    proteinMode: 'crystal',
+  };
+  const protUrls = evaluateDeclaration(app, 'function protUrls()', sandbox);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(protUrls())), {
+    prot: 'medoid.pdb',
+    pocket: null,
+  });
+  sandbox.cur.contextChoice = exact;
+  assert.deepEqual(JSON.parse(JSON.stringify(protUrls())), {
+    prot: 'exact-protein.pdb',
+    pocket: 'exact-pocket.pdb',
+  });
+});
+
 test('Weekly Grid renders ghost cluster members and representative H-bonds', async () => {
   const app = await readApp();
   const poseCalls = [];
@@ -370,6 +424,7 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
     addRep: async () => {},
     addSticks: async () => {},
     addPose: async (_struct, _color, _plugin, options) => { poseCalls.push(options || null); },
+    acceptedChoiceCorrect: choice => choice.correct === true,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12,
     GHOST_POSE_ALPHA: 0.18,

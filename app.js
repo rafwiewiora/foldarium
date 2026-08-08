@@ -11,7 +11,8 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
-const GHOST_POSE_ALPHA = 0.18, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
+const GHOST_POSE_ALPHA = 0.12, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
+const ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT = false;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
 // game-able = has a <1.5 AND a >3 pose; all-wrong = EVERY pose > 3; 1.5-3 A limbo items are dropped.
 const CORRECT_THRESH = 1.5, WRONG_THRESH = 3.0;
@@ -91,6 +92,7 @@ function currentReplayableAppState() {
     active_pane_id: activePaneId,
     selected_pane_id: selectedPaneId,
     selection_kind: selectionKind,
+    context_choice_id: cur?.contextChoice?._weeklyChoiceId || null,
     viewer_busy: viewerTransitionBusy || revealRequested,
     viewport: {
       width: window.innerWidth,
@@ -163,6 +165,16 @@ async function addSticks(struct, sizeFactor, alpha, targetPlugin = plugin) {
   });
 }
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function decorateClusterMembers(members, label, source) {
+  const clusterAccepted = source === 'weekly'
+    && members.some(member => (
+      member.accepted_correct === true || member.correct === true
+    ));
+  members.forEach((member, index) => {
+    member.label = label + (members.length > 1 ? '-' + (index + 1) : '');
+    member.clusterAccepted = source === 'weekly' ? clusterAccepted : member.correct === true;
+  });
+}
 
 // ---- visible-choice logic --------------------------------------------------------------------
 function visibleChoices() {
@@ -192,7 +204,8 @@ function weeklyPoseLayers(choices) {
 }
 
 function weeklyGhostProteinUrls(choices, primaryUrl) {
-  if (!showProteinEnsemble || cur?.item?.source !== 'weekly' || !clustered
+  if (!ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT || !showProteinEnsemble
+      || cur?.item?.source !== 'weekly' || !clustered
       || cur.revealed && cur.showAnswer) return [];
   const urls = [];
   for (const choice of choices) {
@@ -236,6 +249,15 @@ function focusLigandSpheres(targetPlugin, spheres) {
   return true;
 }
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function acceptedChoiceCorrect(choice) {
+  return cur?.item?.source === 'weekly'
+    ? choice?.clusterAccepted === true
+    : choice?.correct === true;
+}
+function displayedPoseLabel(choice, asCluster = clustered) {
+  if (!choice) return '';
+  return asCluster ? (clusterForChoice(choice)?.label || choice.label) : choice.label;
+}
 function gridPageMethod() {
   const methods = cur?.gridMethods || [];
   if (!methods.length) return null;
@@ -315,8 +337,8 @@ function gridHeader(entry) {
     if (gridChoiceSelected(c)) bits.push('YOU');
     if (c.af3_sample === cur.item.plddt_pick_sample) bits.push('AI');
   }
-  const color = answer ? (c.correct ? GOOD : BAD) : c.color;
-  return `<span class="grid-dot" style="background:${hex(color)}"></span><span>Pose ${c.label}</span>`
+  const color = answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color;
+  return `<span class="grid-dot" style="background:${hex(color)}"></span><span>Pose ${displayedPoseLabel(c)}</span>`
     + (bits.length ? `<span class="grid-meta">· ${bits.join(' · ')}</span>` : '');
 }
 function disposeGridViewers() {
@@ -419,7 +441,7 @@ async function buildGridCell(cell, revision) {
     for (const layer of poseMembers) {
       const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
       await addPose(pose.struct,
-        cell.spec.answer ? (layer.choice.correct ? GOOD : BAD) : c.color,
+        cell.spec.answer ? (acceptedChoiceCorrect(layer.choice) ? GOOD : BAD) : c.color,
         cell.plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
       if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
@@ -461,7 +483,7 @@ async function buildGrid(preserveCamera = true) {
   const cells = gridEntries().map((entry, paneIndex) => {
     const paneId = `pane-${gridMethodIndex}-${paneIndex}`;
     const card = document.createElement('div');
-    card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (entry.choice.correct ? ' correct' : ' wrong') : '');
+    card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (acceptedChoiceCorrect(entry.choice) ? ' correct' : ' wrong') : '');
     card.dataset.paneId = paneId;
     for (const [eventName, reason] of [['pointerenter', 'hover'], ['focusin', 'focus'], ['wheel', 'scroll']]) {
       card.addEventListener(eventName, () => activatePane(paneId, reason), { passive: true });
@@ -501,9 +523,16 @@ function protUrls() {
   if (cur.item.source === 'weekly') {
     const vis = visibleChoices();
     const shown = vis[Math.min(shownOne, vis.length - 1)];
-    // One-at-a-time follows the exact prediction complex. Show-all/reveal uses
-    // the method-neutral receptor anchor into whose frame every pose was
-    // aligned; Grid builds each pose with its matching protein separately.
+    // Show all starts from the method-blind receptor medoid without pocket
+    // sticks. Clicking a pose keeps the overlay but swaps to that exact
+    // prediction's protein/pocket. One-at-a-time and Grid are already exact.
+    if (displayMode === 'all' && !answer) {
+      const context = cur.contextChoice;
+      return context ? {
+        prot: context.afprotein_file || cur.item.protein_file,
+        pocket: context.afpocket_file || null,
+      } : { prot: cur.item.protein_file, pocket: null };
+    }
     if (displayMode !== 'one' || answer) {
       return { prot: cur.item.protein_file, pocket: cur.item.pocket_file };
     }
@@ -584,11 +613,14 @@ async function buildCanonicalLayer(shown) {
     const c = layer.choice;
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
-    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color, plugin,
+    await addPose(s.struct, answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
       layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
   }
   // crystal reference (true pose) — only after reveal, when toggled on
-  const hbondPoses = shown.map(c => c.pose_file);
+  const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;
+  const hbondPoses = weeklyOverlayContext
+    ? (cur.contextChoice ? [cur.contextChoice.pose_file] : [])
+    : shown.map(c => c.pose_file);
   if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
     const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
     layerData.push(xl.data);
@@ -607,6 +639,9 @@ async function buildSingleLayer() {
 }
 async function buildLayer() {
   if (displayMode === 'grid') {
+    // Cover the canonical viewer before it is rebuilt with the Grid pose set;
+    // otherwise One-at-a-time briefly flashes as Show all during the transition.
+    $('#gridview').classList.add('on', 'loading-grid');
     try {
       await buildCanonicalLayer(gridEntries().map(entry => entry.choice));
     } catch (error) {
@@ -635,7 +670,10 @@ async function loadQuestion(i) {
   item.choices.forEach(c => (byCluster[c.cluster] ??= []).push({ ...c }));
   const clusters = shuffle(Object.values(byCluster)).map((members, k) => {
     const color = PALETTE[k % PALETTE.length], label = LABELS[k % LABELS.length];
-    members.forEach((m, j) => { m.color = color; m.label = label + (members.length > 1 ? '·' + (j + 1) : ''); });
+    decorateClusterMembers(members, label, item.source);
+    members.forEach(m => {
+      m.color = color;
+    });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
   await viewerRebuild.enqueue(
@@ -644,14 +682,15 @@ async function loadQuestion(i) {
       idx = i;
       const gridMethods = item.source === 'rnp'
         ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : [];
-      cur = { item, clusters, gridMethods, selected: null, selectionExact: false, answerChoices: [], revealed: false, showAnswer: false };
+      cur = { item, clusters, gridMethods, selected: null, selectionExact: false,
+        selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false };
       if (item.source === 'weekly') {
         const prior = WEEKLY_VOTES.get(item.id);
         if (prior?.picked_none) {
           const choices = clusters.flatMap(cluster => cluster.members);
           cur.selected = {
             none: true,
-            correct: !choices.some(choice => choice.correct),
+            correct: !choices.some(acceptedChoiceCorrect),
             label: 'None of these',
           };
           cur.selectionExact = true;
@@ -661,7 +700,8 @@ async function loadQuestion(i) {
             .find(member => member._weeklyChoiceId === prior.choice_id);
           if (choice) {
             cur.selected = choice;
-            cur.selectionExact = true;
+            cur.selectionExact = false;
+            cur.selectedAsCluster = true;
             cur.answerChoices = clusters.flatMap(cluster => cluster.members);
           }
         }
@@ -715,7 +755,7 @@ function renderUI() {
     let nm;
     if (clustered) {
       const cl = entry.cluster;
-      const label = displayMode === 'grid' ? c.label : cl.label;
+      const label = cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
       nm = `Pose ${label}` + (count > 1
         ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
@@ -1046,6 +1086,9 @@ async function onPick(k, exactChoice = null) {
       shownOne = k;
       if (!cur.revealed) {
         cur.selected = selected;
+        cur.selectionExact = !clustered;
+        cur.selectedAsCluster = clustered;
+        cur.contextChoice = selected;
         selectedPaneId = null;
         document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
       }
@@ -1055,21 +1098,40 @@ async function onPick(k, exactChoice = null) {
   }
   if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
   if (k === 'none') {
-    cur.selected = { none: true, correct: !answerChoices.some(c => c.correct), label: 'None of these' };
-    cur.selectionExact = displayMode === 'grid' || !clustered;
-    cur.answerChoices = answerChoices;
-    selectedPaneId = null;
+    const chooseNone = () => {
+      cur.selected = {
+        none: true,
+        correct: !answerChoices.some(acceptedChoiceCorrect),
+        label: 'None of these',
+      };
+      cur.selectionExact = displayMode === 'grid' || !clustered;
+      cur.selectedAsCluster = false;
+      cur.contextChoice = null;
+      cur.answerChoices = answerChoices;
+      selectedPaneId = null;
+    };
+    if (displayMode === 'all' && cur.item.source === 'weekly') {
+      await viewerRebuild.enqueue(chooseNone);
+    } else chooseNone();
     document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
     $('#lock').disabled = false;
     recordAppEvent('choice_selected');
     return;
   }
-  cur.selected = exactChoice || visibleChoices()[k];
-  cur.selectionExact = !!exactChoice || !clustered;
-  cur.answerChoices = answerChoices;
-  selectedPaneId = exactChoice
-    ? (gridViewers.find(cell => sameChoice(cell.entry.choice, exactChoice))?.paneId || selectedPaneId)
-    : null;
+  const choice = exactChoice || visibleChoices()[k];
+  const choosePose = () => {
+    cur.selected = choice;
+    cur.selectionExact = !clustered;
+    cur.selectedAsCluster = clustered;
+    cur.contextChoice = choice;
+    cur.answerChoices = answerChoices;
+    selectedPaneId = exactChoice
+      ? (gridViewers.find(cell => sameChoice(cell.entry.choice, exactChoice))?.paneId || selectedPaneId)
+      : null;
+  };
+  if (displayMode === 'all' && cur.item.source === 'weekly') {
+    await viewerRebuild.enqueue(choosePose);
+  } else choosePose();
   document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
   syncGridSelection();
   $('#lock').disabled = false;
@@ -1104,10 +1166,11 @@ async function finalizeReveal() {
   });
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
-  const youRight = !!picked.correct, af3Right = !!(af3 && af3.correct);
+  const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
+  const af3Right = !!(af3 && acceptedChoiceCorrect(af3));
   score.n++; score.you += youRight; score.af3 += af3Right;
   const answerChoices = cur.answerChoices.length ? cur.answerChoices : cur.clusters.map(c => c.rep);
-  const nCorrect = answerChoices.filter(c => c.correct).length;
+  const nCorrect = answerChoices.filter(acceptedChoiceCorrect).length;
   const opts = answerChoices.length + (difficulty === 'hard' ? 1 : 0);
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealList(picked, af3);
@@ -1115,11 +1178,11 @@ async function finalizeReveal() {
   const youMsg = picked.none
     ? (youRight ? `<b style="color:var(--good)">Correct — none of these were right.</b>`
                 : `<b style="color:var(--bad)">Wrong</b> — a correct pose was present.`)
-    : (youRight ? `<b style="color:var(--good)">Correct.</b> Pose ${picked.label} is ${picked.rmsd.toFixed(2)} Å from crystal.`
-                : `<b style="color:var(--bad)">Wrong.</b> Pose ${picked.label} is ${picked.rmsd.toFixed(2)} Å off.`);
+    : (youRight ? `<b style="color:var(--good)">Correct.</b> Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å from crystal.`
+                : `<b style="color:var(--bad)">Wrong.</b> Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å off.`);
   const afMethod = (cur.item.source === 'rnp' && af3 && af3._method) ? ` (${methodName(af3._method)})` : '';
   const afMsg = af3
-    ? `${oppLabel()} picked Pose ${af3.label}${afMethod} — <b style="color:${af3Right ? 'var(--good)' : 'var(--bad)'}">${af3Right ? 'right' : 'wrong'}</b>`
+    ? `${oppLabel()} picked Pose ${displayedPoseLabel(af3, false)}${afMethod} — <b style="color:${af3Right ? 'var(--good)' : 'var(--bad)'}">${af3Right ? 'right' : 'wrong'}</b>`
       + (!cur.item.has_correct ? ` (can’t answer “none”)` : '')
     : '';
   const v = $('#verdict'); v.style.display = '';
@@ -1213,8 +1276,9 @@ function renderRevealList(picked, af3) {
     box.appendChild(el);
   }
   cur.clusters.flatMap(c => c.members).sort((a, b) => a.rmsd - b.rmsd).forEach(c => {
+    const accepted = acceptedChoiceCorrect(c);
     const el = document.createElement('div');
-    el.className = 'choice ' + (c.correct ? 'correct' : 'wrong');
+    el.className = 'choice ' + (accepted ? 'correct' : 'wrong');
     // RnP only: reveal which co-folding method this pose came from (anonymised during play). Rendered as a
     // small muted, monospace-ish metadata tag so it reads as provenance, not a choice label. CAMEO = all AF3.
     const methodTag = ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method)
@@ -1223,9 +1287,9 @@ function renderRevealList(picked, af3) {
     const voteTag = cur.item.source === 'weekly'
       ? ` <span class="method" style="color:var(--faint);font-size:11px">· ${c._weeklyVoteCount || 0} votes</span>`
       : '';
-    el.innerHTML = `<span class="sw" style="background:${hex(c === picked ? (c.correct ? GOOD : BAD) : c.color)}"></span>`
+    el.innerHTML = `<span class="sw" style="background:${hex(c === picked ? (accepted ? GOOD : BAD) : c.color)}"></span>`
       + `<span class="nm">Pose ${c.label}${c === picked ? ' ← you' : ''}${c === af3 ? ' ⟨AI⟩' : ''}${methodTag}${voteTag}</span>`
-      + `<span class="rmsd" style="color:${c.correct ? 'var(--good)' : 'var(--bad)'}">${c.rmsd.toFixed(2)} Å</span>`;
+      + `<span class="rmsd" style="color:${accepted ? 'var(--good)' : 'var(--bad)'}">${c.rmsd.toFixed(2)} Å</span>`;
     box.appendChild(el);
   });
 }
@@ -1243,8 +1307,10 @@ function updateScore() {
 function logAnswer(picked, af3, viewerTrace) {
   const rec = { item_id: cur.item.id, source: cur.item.source, ligand: cur.item.ligand,
     difficulty, picked_none: !!picked.none, picked_sample: picked.none ? -1 : picked.af3_sample,
-    picked_correct: !!picked.correct, picked_rmsd: picked.none ? null : picked.rmsd,
-    af3_pick_sample: af3 ? af3.af3_sample : -1, af3_correct: !!(af3 && af3.correct),
+    picked_correct: picked.none ? !!picked.correct : acceptedChoiceCorrect(picked),
+    picked_rmsd: picked.none ? null : picked.rmsd,
+    af3_pick_sample: af3 ? af3.af3_sample : -1,
+    af3_correct: !!(af3 && acceptedChoiceCorrect(af3)),
     has_correct: !!cur.item.has_correct, n_clusters: cur.clusters.length, ts: Date.now() / 1000 };
   const log = JSON.parse(localStorage.getItem('poseQuizLog') || '[]');
   log.push(rec); localStorage.setItem('poseQuizLog', JSON.stringify(log));
@@ -1270,7 +1336,8 @@ function syncButtons() {
   hb.style.display = inPlay ? '' : 'none';
   const proteinEnsemble = $('#protein-ensemble');
   const canShowProteinEnsemble = inPlay && cur.item.source === 'weekly'
-    && clustered && cur.clusters.some(cluster => cluster.members.length > 1);
+    && ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT && clustered
+    && cur.clusters.some(cluster => cluster.members.length > 1);
   proteinEnsemble.classList.toggle('on', showProteinEnsemble);
   proteinEnsemble.textContent = showProteinEnsemble ? 'Hide ghost proteins' : 'Ghost proteins';
   proteinEnsemble.style.display = canShowProteinEnsemble ? '' : 'none';
@@ -1283,7 +1350,7 @@ function syncButtons() {
       ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per method-blind pose cluster; faint sticks show its other members' : 'One linked viewer per raw blind pose'}. Each pane uses the representative pose's exact predicted protein; drag or zoom any pane to move them together.`
       : (displayMode === 'one'
         ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? '; faint sticks show the other members of its cluster' : ''}.`
-        : `${weeklyHasClusters && clustered ? 'Cluster representatives and their faint member poses' : 'All raw blind poses'} are overlaid in one shared frame. Use One at a time for each pose's exact matching predicted protein.`))
+        : `${weeklyHasClusters && clustered ? 'Cluster representatives and their faint member poses' : 'All raw blind poses'} are overlaid on the shared receptor medoid. Select a pose to inspect its exact predicted protein and pocket.`))
     : (displayMode === 'grid'
       ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
                    : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
@@ -1487,6 +1554,8 @@ async function init() {
           afpocket_file: choice.pocket_uri || item.pocket_uri,
           rmsd: typeof reveal.rmsd === 'number' ? reveal.rmsd : null,
           correct: typeof reveal.correct === 'boolean' ? reveal.correct : null,
+          accepted_correct: typeof reveal.accepted_correct === 'boolean'
+            ? reveal.accepted_correct : null,
           _method: reveal.method || null,
           cluster: choice.cluster_id || `choice-${index}`,
           is_rep: typeof choice.is_rep === 'boolean' ? choice.is_rep : true,
@@ -1579,7 +1648,8 @@ async function init() {
     await viewerRebuild.enqueue(() => {
       displayMode = mode; if (displayMode === 'one') shownOne = 0;
       if (!cur.revealed && wasGrid !== (displayMode === 'grid')) {
-        cur.selected = null; cur.selectionExact = false; cur.answerChoices = [];
+        cur.selected = null; cur.selectionExact = false; cur.selectedAsCluster = false;
+        cur.contextChoice = null; cur.answerChoices = [];
       }
       if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
       syncButtons();
@@ -1598,7 +1668,12 @@ async function init() {
   $('#uncluster').onclick = async () => {
     if (interactionBlocked()) return;
     await viewerRebuild.enqueue(() => {
-      clustered = !clustered; if (!cur.revealed) cur.selected = null; shownOne = 0;
+      clustered = !clustered;
+      if (!cur.revealed) {
+        cur.selected = null; cur.selectionExact = false; cur.selectedAsCluster = false;
+        cur.contextChoice = null; cur.answerChoices = [];
+      }
+      shownOne = 0;
       if (!cur.revealed) rememberView();
       syncButtons();
       renderUI();
