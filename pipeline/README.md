@@ -10,15 +10,18 @@ from any external prediction service.
 - Foldarium-owned input and output adapters for upstream OpenFold3 and Boltz-2 CLIs.
 - A backend-independent worker and a no-GPU dry-run CLI.
 - A Supabase/Postgres control-plane migration with private worker tables and an atomic published view.
+- Replayable wwPDB/CAMEO Saturday intake, bounded OF3/Boltz planning, and content-addressed registration.
+- A blind Saturday-to-Wednesday quiz/vote/reveal contract and normalized public CAMEO AF3 importer.
+- A shared receptor-aligned, symmetry-aware ligand RMSD evaluator for Wednesday comparisons.
+- A portable, fail-closed public Foldseek client with batched authoritative RCSB cutoff lookups.
 - Thin deployment seams for Modal now and the same container/task contract on GCP later.
 
-This scaffold validates and plans jobs locally. A real GPU run additionally needs the pinned upstream
-runtime, durable object upload, Supabase worker credentials, and deployment of an execution wrapper.
-No inference is launched merely by installing this package.
+No inference is launched merely by installing this package or running `weekly-plan`.
 
 ## Supabase setup
 
-1. Apply `migrations/001_control_plane.sql` to a staging project.
+1. Apply `migrations/001_control_plane.sql` through `004_external_predictions.sql`, in order, to a
+   staging project.
 2. Create a private Storage bucket for prediction results; its name becomes
    `FOLDARIUM_STORAGE_BUCKET` in the worker secret.
 3. Have the coordinator insert the campaign, target package, and deterministic task row before submitting
@@ -28,9 +31,9 @@ No inference is launched merely by installing this package.
 5. The execution wrapper claims the run, calls the core worker, verifies and uploads every output, and
    invokes `finish_prediction_run` to commit the artifact rows and terminal result atomically.
 
-The storage publisher is implemented and unit-tested without network access. The prerelease intake
-coordinator that creates campaign/target/run rows is still a next implementation step; Modal's weekly
-hook is deliberately a no-op until that coordinator exists.
+The registration RPC creates the snapshot, campaign, target, and run rows in one transaction only after
+the replay inputs have been stored by SHA-256. Browser clients can read blind weekly rounds and submit
+authenticated votes, but correctness and RMSD remain private until the Wednesday reveal RPC succeeds.
 
 ## The portability contract
 
@@ -75,9 +78,19 @@ foldarium-pipeline make-task examples/target.json \
   --config-json examples/boltz2-config.json \
   --output-prefix gs://foldarium-staging/predictions > /tmp/foldarium-task.json
 foldarium-pipeline plan /tmp/foldarium-task.json
+
+# Public downloads + deterministic plan only: no Supabase or Modal writes.
+foldarium-pipeline weekly-plan \
+  --release-date 2026-08-08 \
+  --max-targets 2 \
+  --output /tmp/foldarium-week-2026-08-08.json
 ```
 
-The example sequence and ligand are synthetic packaging fixtures, not a scientific quality test.
+The example sequence and ligand are synthetic packaging fixtures, not a scientific quality test. The
+weekly planner fails if even one advertised CAMEO page is unavailable, applies the checked-in
+`cameo-drug-like/v2` filter (including the quiz's ≥15-heavy-atom rule), selects at most one ligand target
+per distinct polymer set, records unknown prerelease stoichiometry explicitly, and reports the exact GPU
+classes and maximum GPU-seconds before submission.
 
 ## Method runtimes
 
@@ -100,9 +113,10 @@ absolute persistent cache path. The starter production policy is five diffusion 
 sample, three recycles, 200 sampling steps, and fixed seeds. `msa_mode: empty` is useful only for a GPU
 packaging smoke test; production campaigns should use versioned precomputed MSAs.
 
-Both adapters retain raw complex mmCIF as the canonical scientific output. The later evaluation stage
-will align to released coordinates, split viewer assets, score ligands, cluster poses, and publish a
-redacted quiz manifest.
+Both adapters retain raw complex mmCIF as the canonical scientific output. The evaluation extra
+(`pip install -e 'pipeline[evaluation]'`) supplies Gemmi, NumPy, and RDKit for receptor alignment and
+graph-symmetry-aware ligand RMSD. On the 36IQ/DM2 calibration target, all five scores are within 0.12 Å
+of CAMEO's BiSyRMSD values and preserve the same correct/wrong classification.
 
 ## Weekly ownership
 
@@ -113,12 +127,41 @@ Foldarium owns the orchestration from end to end:
 3. The configured execution backend claims and runs pending tasks, uploads verified artifacts, then
    commits normalized results.
 4. After reference coordinates release, a separate evaluation worker aligns, scores, clusters, and
-   creates a publication batch.
-5. A privileged publisher atomically exposes the redacted batch to the browser.
+   imports public CAMEO AF3 models, and creates a reveal manifest.
+5. A privileged publisher exposes the redacted blind round on Saturday; Postgres accepts votes only
+   before the Wednesday close and exposes answers/vote totals only after the reveal transaction.
+
+## Weekly timing and safety switches
+
+wwPDB prerelease and CAMEO target selection begin Saturday at 03:00 UTC. CAMEO accepts participant
+predictions until Wednesday 00:00 UTC and evaluates after coordinates release; public AF3 outputs must be
+treated as Wednesday data. The Saturday quiz therefore uses Foldarium's own OF3/Boltz poses. Wednesday
+imports CAMEO AF3, scores all methods against the released coordinates, and reveals results.
+
+Modal uses three independent gates:
+
+- `FOLDARIUM_ENABLE_WEEKLY_CRON=1` adds the Saturday 03:00–06:45 UTC 15-minute poll schedule at deployment;
+- `FOLDARIUM_WEEKLY_REGISTER=1` permits immutable Storage/Supabase registration;
+- `FOLDARIUM_WEEKLY_SUBMIT=1` permits GPU spawning, and only after registration reports success.
+
+Set `FOLDARIUM_WEEKLY_HOOK=foldarium_pipeline.weekly:modal_weekly_hook`. A new deployment should first
+leave registration/submission off, inspect the returned budget, then test registration in the test
+project, and only then enable submission. `FOLDARIUM_WEEKLY_MAX_TARGETS` is the hard per-week target cap.
 
 Keep scheduler policy out of method adapters. A Modal cron can trigger the coordinator today; Cloud
 Scheduler can trigger the same coordinator on GCP. Supabase is the durable owner of schedules already
 materialized into work, leases, retries, and publication state.
+
+The first production deployment intentionally has only the first gate enabled. It reports
+`waiting-for-inputs` or a bounded `planned-not-submitted` budget in Modal logs without database writes or
+GPU work. Registration and submission require a separate redeploy so spend cannot be enabled accidentally.
+
+Historical novelty uses `foldarium_pipeline.foldseek` against the public Foldseek `pdb100` service,
+filters candidates to RCSB `initial_release_date < 2021-09-30`, carries ligand-bearing training structures
+into the query receptor frame, and labels a target novel only when the best in-pocket ligand volume
+overlap is below 0.25 (or there is a confirmed empty pre-cutoff result). API or parsing failures remain
+unknown. Cache the Foldseek results and downloaded PDB structures. A local cutoff-specific Foldseek
+database is a future reproducibility optimization, not a prerequisite for the first catch-up.
 
 ## Upstream projects and licenses
 

@@ -21,10 +21,11 @@ HERE = Path(__file__).resolve().parent
 SYS = HERE / "systems"
 CUTOFF = "2021-09-30"
 
-# Reuse the prior agent's validated Foldseek web-API client (submit/poll/fetch + RCSB date filter).
-FOLDSEEK_DIR = Path("/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/foldseek_test")
-sys.path.insert(0, str(FOLDSEEK_DIR))
-import foldseek_search as fs   # submit, poll, fetch_result, release_date, parse_pdbid
+# Portable public Foldseek client (submit/poll/fetch + batched authoritative
+# RCSB release-date lookup). This used to point at an uncommitted absolute path.
+REPOSITORY_ROOT = HERE.parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT / "pipeline" / "src"))
+from foldarium_pipeline import foldseek as fs
 UA = {"User-Agent": "cofold-trainsim/1.0"}
 VDW = {"C": 1.7, "N": 1.55, "O": 1.52, "S": 1.8, "P": 1.8, "F": 1.47, "CL": 1.75, "BR": 1.85, "I": 1.98, "B": 1.92}
 vdw = lambda e: VDW.get(e.upper(), 1.7)
@@ -131,15 +132,19 @@ def _parse_fs_result(res, exclude_pdb, rows):
         alns = res["results"][0]["alignments"][0]
     except (KeyError, IndexError, TypeError):
         return None
-    out, seen = [], set()
+    candidates, seen = [], set()
     for h in alns[:rows]:
         pdb = fs.parse_pdbid(h.get("target", "") or "")
         if not pdb or pdb in seen or pdb.upper() == exclude_pdb.upper():
             continue
-        dt = fs.release_date(pdb)            # RCSB initial_release_date (cached in fs)
+        seen.add(pdb)
+        candidates.append((pdb, h))
+    dates = fs.release_dates(pdb for pdb, _ in candidates)
+    out = []
+    for pdb, h in candidates:
+        dt = dates.get(pdb)
         if not dt or dt[:10] >= CUTOFF:      # keep strictly pre-cutoff (excludes co-released entries)
             continue
-        seen.add(pdb)
         seqid = h.get("seqId")
         ident = (seqid / 100.0) if seqid is not None else None   # 0-100 -> 0-1
         out.append({"pdb": pdb, "identity": ident,

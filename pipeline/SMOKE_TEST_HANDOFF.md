@@ -1,6 +1,32 @@
 # Foldarium pipeline and two-job Modal smoke-test handoff
 
-Last updated: 2026-08-06 (America/Los_Angeles)
+Last updated: 2026-08-07 (America/Los_Angeles)
+
+> **2026-08-07 laptop update.** The smoke test described below has been completed in the
+> `foldariumtest` workspace and its Supabase test project. The current checkout is
+> `/Users/bb/repos/foldarium`, branch `cofolding-pipeline`, tracking
+> `junction/cofolding-pipeline`. Modal profiles `foldariumtest` and `molspace-production` are both
+> configured; `foldariumtest` is deliberately the active default. Do not use it for production tests;
+> pass `MODAL_PROFILE=molspace-production` explicitly for an authorized production operation.
+>
+> Weekly intake is now implemented in `foldarium_pipeline.weekly`. Migrations 002–004 add atomic
+> prerelease registration, blind voting/reveal, and external CAMEO AF3 provenance. The public planner
+> decoded all 306 targets in the completed 2026-08-01 week and generated a bounded two-target/four-task
+> plan without Supabase writes or Modal calls. GPU submission has an additional explicit
+> `FOLDARIUM_WEEKLY_SUBMIT=1` gate. Treat the remainder of this document as the historical two-job smoke
+> procedure, not the current outstanding-work list.
+
+> **2026-08-08 production control-plane update.** Supabase project `wwentnogbknrbmxhfgbg` had the first
+> three quiz migrations present but no migration-ledger rows. Their objects were verified, versions
+> `20260805180000`, `20260805230000`, and `20260806040000` were marked applied, and the four additive
+> pipeline migrations `20260808010000`–`20260808010300` were then applied successfully. Private bucket
+> `foldarium-predictions` and public sanitized-assets bucket `foldarium-weekly-quiz` now exist.
+>
+> Production Modal app `molspace/main/foldarium-predictions` is deployed with a CPU-only Saturday poll
+> every 15 minutes from 03:00 through 06:45 UTC and `FOLDARIUM_WEEKLY_MAX_TARGETS=2`. Registration and
+> GPU submission are deliberately disabled in this deployment. Manual and automatically scheduled ticks
+> at 03:38 and 03:45 UTC produced structured `waiting-for-inputs` logs; no GPU ran. Enabling the two
+> mutation gates requires an explicit bounded-spend redeploy.
 
 > **Repository status change.** This pipeline work is no longer pushed to the public
 > `rafwiewiora/foldarium` remote. It now lives on the private

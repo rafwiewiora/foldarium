@@ -8,7 +8,7 @@ const PALETTE = [0x5B8FF9, 0xF6BD16, 0x9270CA, 0x5AD8A6, 0xE8964A, 0x6DC8EC,
   0xFF99C3, 0x8C6D31, 0xB5BD61, 0x17BECF, 0xBC80BD, 0xFDB462, 0x80B1D3, 0xFCCDE5, 0xB3DE69];
 const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 // Co-folding method display names — shown ONLY on the answer reveal (methods are anonymised during play).
-const METHOD_NAMES = { af3: 'AF3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
+const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
@@ -31,7 +31,9 @@ const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspec
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
-let POOLS = { cameo: [], rnp: [] }, quizSource = 'cameo', difficulty = 'easy';
+let POOLS = { cameo: [], rnp: [], weekly: [] }, quizSource = 'cameo', difficulty = 'easy';
+let WEEKLY_ROUND = null;
+let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let remoteSessionId = null;
 let viewerTraceRecorder = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
@@ -47,7 +49,7 @@ let userView = { displayMode: 'all', clustered: true, proteinMode: 'crystal', sh
 const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds }; };
 const applyUserView = () => {
   ({ displayMode, clustered, proteinMode, showHbonds } = userView);
-  if (quizSource === 'rnp') proteinMode = 'crystal';   // RnP has no per-pose AF3 protein
+  if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
 };
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
 const $ = s => document.querySelector(s);
@@ -57,7 +59,8 @@ const hex = c => '#' + c.toString(16).padStart(6, '0');
 // answer hidden) everything is interactive again, exactly as before voting.
 const locked = () => cur && cur.revealed && cur.showAnswer;
 const interactionBlocked = () => viewerTransitionBusy || revealRequested || locked();
-const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)' : 'AlphaFold3 (pLDDT-ranked)');
+const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)'
+  : (quizSource === 'weekly' ? 'Weekly benchmark' : 'AlphaFold3 (pLDDT-ranked)'));
 
 function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
@@ -197,7 +200,8 @@ function gridHeader(entry) {
   if (clustered && entry.memberCount > 1) bits.push(`${entry.memberCount} poses`);
   if (answer) {
     bits.push(`${c.rmsd.toFixed(2)} Å`);
-    if (cur.item.source === 'rnp' && c._method) bits.push(methodName(c._method));
+    if ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method) bits.push(methodName(c._method));
+    if (cur.item.source === 'weekly') bits.push(`${c._weeklyVoteCount || 0} votes`);
     if (gridChoiceSelected(c)) bits.push('YOU');
     if (c.af3_sample === cur.item.plddt_pick_sample) bits.push('AI');
   }
@@ -443,6 +447,27 @@ async function loadQuestion(i) {
       const gridMethods = item.source === 'rnp'
         ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : [];
       cur = { item, clusters, gridMethods, selected: null, selectionExact: false, answerChoices: [], revealed: false, showAnswer: false };
+      if (item.source === 'weekly') {
+        const prior = WEEKLY_VOTES.get(item.id);
+        if (prior?.picked_none) {
+          const choices = clusters.flatMap(cluster => cluster.members);
+          cur.selected = {
+            none: true,
+            correct: !choices.some(choice => choice.correct),
+            label: 'None of these',
+          };
+          cur.selectionExact = true;
+          cur.answerChoices = choices;
+        } else if (prior?.choice_id) {
+          const choice = clusters.flatMap(cluster => cluster.members)
+            .find(member => member._weeklyChoiceId === prior.choice_id);
+          if (choice) {
+            cur.selected = choice;
+            cur.selectionExact = true;
+            cur.answerChoices = clusters.flatMap(cluster => cluster.members);
+          }
+        }
+      }
       gridMethodIndex = 0;
       // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
       applyUserView();
@@ -529,6 +554,7 @@ function renderDevNav() {
 // Hard = everything: game-able + all-wrong + all-correct (all-correct excluded from Easy — a pick with
 // no wrong answer is no puzzle; it belongs in Hard as the positive control for the "none of these" call).
 function filteredPool() {
+  if (quizSource === 'weekly') return POOLS.weekly;
   return POOLS[quizSource].filter(it => difficulty === 'hard' ? true : it.bucket === 'game-able' && it.easyPlayable);
 }
 
@@ -562,6 +588,24 @@ function showIntro() {
   $('#hbonds').style.display = 'none';
   $('#myview').style.display = 'none'; $('#xtalrow').style.display = 'none';
   $('#progress').textContent = 'ready';
+  if (quizSource === 'weekly') {
+    const status = WEEKLY_ROUND?.public_status;
+    const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
+    $('#ligand').innerHTML = `${pool.length} blind weekly ensembles`;
+    $('#setuphint').innerHTML = status === 'revealed'
+      ? 'Wednesday results — methods, reference scores, and vote totals are now revealable.'
+      : (status === 'open'
+        ? `Voting is open until ${closes}. Choices stay method-anonymous and unscored until Wednesday.`
+        : 'Voting is closed while Wednesday results are being prepared.');
+    const v = $('#verdict'); v.style.display = '';
+    v.innerHTML = status === 'revealed'
+      ? 'Inspect the same anonymous choices, make or restore your pick, then reveal the released-coordinate result.'
+      : (status === 'open'
+        ? 'Choose the pose you believe is correct, or “none.” Locking records a vote but does not reveal the answer.'
+        : 'The blind manifest remains visible, but no new votes are accepted after the deadline.');
+    $('#start').style.display = pool.length && status !== 'closed' ? '' : 'none';
+    return;
+  }
   $('#ligand').innerHTML = `${pool.length} single-pocket ensembles · ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'}`;
   // AI baseline accuracy on this pool: pLDDT-pick correct (all-wrong -> always wrong; the model can't say "none")
   const aiCorrect = pool.filter(it => it.choices.find(c => c.af3_sample === it.plddt_pick_sample)?.correct).length;
@@ -596,6 +640,7 @@ function hardSessionQuotas(size, mix) {
 }
 function drawSession() {
   const pool = filteredPool();
+  if (quizSource === 'weekly') return pool.slice();
   if (DEV) return shuffle(pool.slice());
   if (difficulty !== 'hard') return shuffle(pool.slice()).slice(0, SESSION_SIZE);
   const by = { 'game-able': [], 'all-wrong': [], 'all-correct': [] };
@@ -609,16 +654,19 @@ function drawSession() {
   return shuffle(picked).slice(0, SESSION_SIZE);
 }
 function startQuiz() {
-  remoteSessionId = researchBackend()?.startSession({
+  remoteSessionId = quizSource === 'weekly' ? null : (researchBackend()?.startSession({
     source: quizSource,
     difficulty,
-  }) ?? null;
+  }) ?? null);
   ITEMS = drawSession();
-  if (quizSource === 'rnp') proteinMode = 'crystal';
+  if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#setup').style.display = 'none'; $('#start').style.display = 'none'; $('#mode').style.display = '';
-  $('#protmode').style.display = quizSource === 'rnp' ? 'none' : '';
+  $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
+  $('#lock').textContent = quizSource === 'weekly'
+    ? (WEEKLY_ROUND?.public_status === 'revealed' ? 'Show result' : 'Record vote')
+    : 'Lock in answer';
   loadQuestion(0);
 }
 
@@ -667,6 +715,10 @@ async function reveal() {
 
 async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
+  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
+    await finalizeWeeklyVote();
+    return;
+  }
   const viewerTrace = viewerTraceRecorder?.stop() ?? null;
   await viewerRebuild.enqueue(() => {
     const keepGrid = displayMode === 'grid';
@@ -702,6 +754,38 @@ async function finalizeReveal() {
   updateScore(); logAnswer(picked, af3, viewerTrace);
 }
 
+async function finalizeWeeklyVote() {
+  const picked = cur.selected;
+  const choiceId = picked.none ? null : picked._weeklyChoiceId;
+  const verdict = $('#verdict'); verdict.style.display = '';
+  verdict.textContent = 'Recording vote…';
+  try {
+    const backend = researchBackend();
+    if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
+    await backend.submitWeeklyVote(
+      WEEKLY_ROUND.round_id,
+      cur.item.id,
+      choiceId,
+      !!picked.none,
+    );
+  } catch (error) {
+    verdict.textContent = `Vote was not recorded. ${error.message}`;
+    return;
+  }
+  viewerTraceRecorder?.stop();
+  WEEKLY_VOTES.set(cur.item.id, {
+    item_id: cur.item.id,
+    choice_id: choiceId,
+    picked_none: !!picked.none,
+  });
+  cur.revealed = true;
+  cur.showAnswer = false;
+  renderUI();
+  verdict.innerHTML = '<b style="color:var(--good)">Vote recorded.</b> The answer stays blind until Wednesday results.';
+  $('#next').style.display = '';
+  $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
+}
+
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
 async function toggleAnswer() {
   if (DEV) return toggleAnswerDev();
@@ -727,10 +811,14 @@ async function toggleAnswer() {
 
 function renderRevealList(picked, af3) {
   const box = $('#choices'); box.innerHTML = '';
-  if (picked && picked.none) {
+  if ((picked && picked.none) || cur.item.source === 'weekly') {
+    const selectedNone = !!(picked && picked.none);
+    const noneCorrect = !cur.item.has_correct;
     const el = document.createElement('div');
-    el.className = 'choice ' + (picked.correct ? 'correct' : 'wrong');
-    el.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">You: “None of these” ${picked.correct ? '✓' : '✗'}</span>`;
+    el.className = 'choice ' + (noneCorrect ? 'correct' : 'wrong');
+    const voteText = cur.item.source === 'weekly'
+      ? ` · ${WEEKLY_TOTALS.get(`${cur.item.id}|none`) || 0} votes` : '';
+    el.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">${selectedNone ? 'You: ' : ''}“None of these” ${noneCorrect ? '✓' : '✗'}${voteText}</span>`;
     box.appendChild(el);
   }
   cur.clusters.flatMap(c => c.members).sort((a, b) => a.rmsd - b.rmsd).forEach(c => {
@@ -738,11 +826,14 @@ function renderRevealList(picked, af3) {
     el.className = 'choice ' + (c.correct ? 'correct' : 'wrong');
     // RnP only: reveal which co-folding method this pose came from (anonymised during play). Rendered as a
     // small muted, monospace-ish metadata tag so it reads as provenance, not a choice label. CAMEO = all AF3.
-    const methodTag = (cur.item.source === 'rnp' && c._method)
+    const methodTag = ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method)
       ? ` <span class="method" style="color:var(--faint);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">· ${methodName(c._method)}</span>`
       : '';
+    const voteTag = cur.item.source === 'weekly'
+      ? ` <span class="method" style="color:var(--faint);font-size:11px">· ${c._weeklyVoteCount || 0} votes</span>`
+      : '';
     el.innerHTML = `<span class="sw" style="background:${hex(c === picked ? (c.correct ? GOOD : BAD) : c.color)}"></span>`
-      + `<span class="nm">Pose ${c.label}${c === picked ? ' ← you' : ''}${c === af3 ? ' ⟨AI⟩' : ''}${methodTag}</span>`
+      + `<span class="nm">Pose ${c.label}${c === picked ? ' ← you' : ''}${c === af3 ? ' ⟨AI⟩' : ''}${methodTag}${voteTag}</span>`
       + `<span class="rmsd" style="color:${c.correct ? 'var(--good)' : 'var(--bad)'}">${c.rmsd.toFixed(2)} Å</span>`;
     box.appendChild(el);
   });
@@ -775,8 +866,8 @@ function syncButtons() {
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
   const inPlay = !!cur;
-  if (quizSource === 'rnp') proteinMode = 'crystal';
-  $('#protmode').style.display = (inPlay && quizSource !== 'rnp') ? '' : 'none';
+  if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
+  $('#protmode').style.display = (inPlay && quizSource !== 'rnp' && quizSource !== 'weekly') ? '' : 'none';
   document.querySelectorAll('#protmode button').forEach(b => b.classList.toggle('on', b.dataset.p === proteinMode));
   const uc = $('#uncluster');
   uc.textContent = clustered ? 'Uncluster poses' : 'Re-cluster';
@@ -836,6 +927,12 @@ function finish() {
   $('#hbonds').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
+  if (quizSource === 'weekly') {
+    $('#verdict').innerHTML = WEEKLY_ROUND?.public_status === 'revealed'
+      ? '<b>Weekly results complete.</b> These scores use the Wednesday released coordinates.'
+      : '<b>Your weekly votes are saved.</b> Return Wednesday for released-coordinate results.';
+    return;
+  }
   $('#verdict').innerHTML =
     `<b>You: ${pct(score.you, score.n)}%</b> · ${oppLabel()}: ${pct(score.af3, score.n)}% · random: ${pct(score.randExp, score.n)}%`
     + `<br><span style="color:var(--muted)">over ${score.n} ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'} single-pocket ensembles (${difficulty})</span>`
@@ -955,6 +1052,53 @@ async function init() {
     return { ...it, source, choices: ch, has_correct: hasC, bucket,
       easyPlayable: easyPlayable(ch, source) };
   };
+  const normalizeWeekly = round => {
+    const blindItems = round?.blind_manifest?.items;
+    if (!Array.isArray(blindItems)) return [];
+    const revealItems = new Map((round?.reveal_manifest?.items || []).map(item => [item.id, item]));
+    return blindItems.map(item => {
+      const revealChoices = new Map(
+        (revealItems.get(item.id)?.choices || []).map(choice => [choice.id, choice]),
+      );
+      const choices = item.choices.map((choice, index) => {
+        const reveal = revealChoices.get(choice.id) || {};
+        return {
+          ...choice,
+          _weeklyChoiceId: choice.id,
+          _weeklyVoteCount: Number(WEEKLY_TOTALS.get(`${item.id}|${choice.id}`) || 0),
+          af3_sample: index + 1,
+          pose_file: choice.pose_uri,
+          afprotein_file: choice.protein_uri || item.protein_uri,
+          afpocket_file: choice.pocket_uri || item.pocket_uri,
+          rmsd: typeof reveal.rmsd === 'number' ? reveal.rmsd : null,
+          correct: typeof reveal.correct === 'boolean' ? reveal.correct : null,
+          _method: reveal.method || null,
+          cluster: index,
+          is_rep: true,
+          plddt: 0,
+        };
+      });
+      const ligand = typeof item.ligand === 'string'
+        ? item.ligand : (item.ligand?.component_id || item.ligand?.name || 'ligand');
+      return {
+        id: item.id,
+        ligand,
+        week: item.week,
+        protein_file: item.protein_uri || choices[0]?.afprotein_file,
+        pocket_file: item.pocket_uri || choices[0]?.afpocket_file,
+        afprotein_ref: choices[0]?.afprotein_file,
+        afpocket_union: item.pocket_uri || choices[0]?.afpocket_file,
+        choices,
+        n_clusters: choices.length,
+        plddt_pick_sample: -1,
+        n_heavy: item.ligand?.heavy_atoms || HEAVY_MIN,
+        source: 'weekly',
+        bucket: 'weekly',
+        has_correct: choices.some(choice => choice.correct === true),
+        easyPlayable: true,
+      };
+    }).filter(item => item.choices.length && item.protein_file);
+  };
   // CAMEO: game-able + all-wrong + all-correct(positive control).  RnP: single file already carries all three buckets.
   const [cg, ca, cx, rn] = await Promise.all([fetchItems('quiz_items.json'), fetchItems('quiz_items_allwrong.json'),
     fetchItems('quiz_items_allcorrect.json'), fetchItems('quiz_items_rnp.json')]);
@@ -967,8 +1111,39 @@ async function init() {
   };
   POOLS.cameo = capAllCorrect([...cg, ...ca, ...cx].map(it => norm(it, 'cameo')).filter(keep));
   POOLS.rnp = capAllCorrect(rn.map(it => norm(it, 'rnp')).filter(keep));
+  try {
+    const backend = researchBackend();
+    WEEKLY_ROUND = await backend?.getWeeklyRound() || null;
+    if (WEEKLY_ROUND && backend) {
+      const [votes, totals] = await Promise.all([
+        backend.getWeeklyVotes(WEEKLY_ROUND.round_id).catch(error => {
+          console.warn('Weekly vote restoration unavailable:', error.message); return [];
+        }),
+        WEEKLY_ROUND.public_status === 'revealed'
+          ? backend.getWeeklyVoteTotals(WEEKLY_ROUND.round_id).catch(error => {
+            console.warn('Weekly vote totals unavailable:', error.message); return [];
+          })
+          : Promise.resolve([]),
+      ]);
+      WEEKLY_VOTES = new Map(votes.map(vote => [vote.item_id, vote]));
+      WEEKLY_TOTALS = new Map(totals.map(total => [
+        `${total.item_id}|${total.picked_none ? 'none' : total.choice_id}`,
+        Number(total.vote_count) || 0,
+      ]));
+    }
+    POOLS.weekly = normalizeWeekly(WEEKLY_ROUND);
+  } catch (error) {
+    console.warn('Weekly quiz unavailable:', error.message);
+  }
+  const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
+  if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
   document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
-    quizSource = b.dataset.q; document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+    if (b.disabled) return;
+    quizSource = b.dataset.q;
+    if (quizSource === 'weekly') difficulty = 'hard';
+    $('#diff').style.display = quizSource === 'weekly' ? 'none' : '';
+    document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x.dataset.d === difficulty));
+    document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
   });
   document.querySelectorAll('#diff button').forEach(b => b.onclick = () => {
     difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();

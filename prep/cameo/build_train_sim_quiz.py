@@ -31,11 +31,13 @@ import json, sys, time, argparse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-VIEWER = HERE.parent / "viewer"
+REPOSITORY_ROOT = HERE.parents[1]
+VIEWER = REPOSITORY_ROOT / "benchmark" / "prep"
 sys.path.insert(0, str(VIEWER))
+sys.path.insert(0, str(REPOSITORY_ROOT / "pipeline" / "src"))
 import numpy as np
 import build_training_similarity as bts   # reuse the validated pipeline verbatim
-import foldseek_search as fs              # release-date / id verification
+from foldarium_pipeline import foldseek as fs
 
 XTAL = HERE / "_xtal_cache"
 OUT = HERE / "train_sim.json"

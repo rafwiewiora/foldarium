@@ -87,10 +87,23 @@ OPENFOLD_CACHE_ROOT = "/cache/openfold"
 BOLTZ_CACHE_ROOT = "/cache/boltz"
 
 # Saturday intake follows the lifecycle documented at the repository root. The
-# cron belongs to this adapter, not to the provider-neutral pipeline core.
-WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "0 6 * * 6")
+# cron belongs to this adapter, not to the provider-neutral pipeline core. CAMEO
+# publication can lag the nominal 03:00 UTC boundary, so the deployed poller
+# checks every 15 minutes through 06:45. Once a campaign exists in Supabase the
+# hook exits before touching the public feeds or spawning any work.
+WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "*/15 3-6 * * 6")
 WEEKLY_HOOK_ENV = "FOLDARIUM_WEEKLY_HOOK"
 WEEKLY_CRON_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEEKLY_CRON") == "1"
+WEEKLY_RUNTIME_ENV = {
+    key: os.environ[key]
+    for key in (
+        WEEKLY_HOOK_ENV,
+        "FOLDARIUM_WEEKLY_REGISTER",
+        "FOLDARIUM_WEEKLY_SUBMIT",
+        "FOLDARIUM_WEEKLY_MAX_TARGETS",
+    )
+    if key in os.environ
+}
 
 _PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 _CORE_SOURCE = _PIPELINE_ROOT / "src" / "foldarium_pipeline"
@@ -257,8 +270,15 @@ if modal is not None:
     # its entrypoint (``source /opt/activate.sh && exec "$@"``). Neither Python
     # nor ``setup_openfold`` is on PATH until that runs, so the entrypoint must be
     # preserved: it is what places Modal's own command inside the environment.
+    # The legacy Modal image builder used by some workspaces installs its runtime
+    # before later ``Image.env`` layers are applied, so publish PATH as an initial
+    # Dockerfile command as well. This lets that builder find the image's existing
+    # Pixi Python without installing a second, dependency-incompatible runtime.
     openfold3_image = _add_core(
-        modal.Image.from_registry(OPENFOLD3_IMAGE_REF).env(
+        modal.Image.from_registry(
+            OPENFOLD3_IMAGE_REF,
+            setup_dockerfile_commands=[f"ENV PATH={OPENFOLD3_IMAGE_PATH}"],
+        ).env(
             {
                 "OPENFOLD_CACHE": OPENFOLD_CACHE_ROOT,
                 "PATH": OPENFOLD3_IMAGE_PATH,
@@ -276,7 +296,9 @@ if modal is not None:
         .env({"BOLTZ_CACHE": BOLTZ_CACHE_ROOT})
     )
 
-    control_image = _add_core(modal.Image.debian_slim(python_version="3.12"))
+    control_image = _add_core(modal.Image.debian_slim(python_version="3.12")).env(
+        WEEKLY_RUNTIME_ENV
+    )
 
     @app.function(
         image=openfold3_image,
@@ -407,13 +429,51 @@ if modal is not None:
 
         reference = os.environ.get(WEEKLY_HOOK_ENV)
         if not reference:
-            return {
+            outcome = {
                 "status": "disabled",
                 "reason": f"{WEEKLY_HOOK_ENV} is not configured",
             }
-        tasks = list(_load_weekly_hook(reference)())
+            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
+            return outcome
+        produced = _load_weekly_hook(reference)()
+        if isinstance(produced, Mapping):
+            raw_tasks = produced.get("tasks")
+            if not isinstance(raw_tasks, list):
+                raise TypeError("weekly hook mapping must contain a tasks list")
+            tasks = raw_tasks
+            report = {key: value for key, value in produced.items() if key != "tasks"}
+        else:
+            tasks = list(produced)
+            report = {}
+        if not tasks:
+            outcome = {"status": report.pop("status", "no-work"), "count": 0, **report}
+            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
+            return outcome
+        # Scheduling, registration, and GPU submission are deliberately three
+        # independent switches. A newly deployed cron can prove tomorrow's
+        # intake and cost plan without spending a single GPU second.
+        if os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") != "1":
+            outcome = {
+                "status": "planned-not-submitted",
+                "count": len(tasks),
+                **report,
+            }
+            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
+            return outcome
+        registration = report.get("registration")
+        if not isinstance(registration, Mapping) or registration.get("status") != "registered":
+            raise RuntimeError(
+                "weekly GPU submission requires an atomically registered Supabase plan"
+            )
         call_ids = [_spawn_task(task) for task in tasks]
-        return {"status": "submitted", "count": len(call_ids), "call_ids": call_ids}
+        outcome = {
+            "status": "submitted",
+            "count": len(call_ids),
+            "call_ids": call_ids,
+            **report,
+        }
+        print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
+        return outcome
 
     @app.local_entrypoint()
     def submit(task_json: str) -> None:

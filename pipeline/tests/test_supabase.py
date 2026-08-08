@@ -4,11 +4,13 @@ import hashlib
 import json
 import tempfile
 import unittest
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 
 from foldarium_pipeline.supabase import (
     SupabaseConfigurationError,
+    SupabaseCoordinator,
     SupabasePublicationError,
     SupabasePublisher,
 )
@@ -39,6 +41,8 @@ class RecordingOpener:
             return FakeResponse(self.claim_body)
         if url.endswith("/rest/v1/rpc/finish_prediction_run"):
             return FakeResponse(b'{"status":"succeeded"}')
+        if url.endswith("/rest/v1/rpc/register_weekly_prediction_plan"):
+            return FakeResponse(b'{"status":"registered","target_count":1,"run_count":2}')
         return FakeResponse(b'{"Key":"stored"}')
 
 
@@ -288,6 +292,243 @@ class SupabasePublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(SupabasePublicationError, "credential"):
                 publisher.publish_result(result, model.parent, "worker-1")
         self.assertEqual(len(opener.calls), 0)
+
+
+class SupabaseCoordinatorTests(unittest.TestCase):
+    @staticmethod
+    def weekly_plan() -> dict:
+        from foldarium_pipeline.intake import build_weekly_plan, parse_wwpdb_snapshot
+
+        sequence = (
+            b"PDB_ID\tSequence_Count\tSequence\n"
+            b"36IQ\t1\tMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        )
+        ligand = (
+            b"PDB_ID\tComponent_ID\tInChI\tSMILES string\n"
+            b"36IQ\tDRG\tInChI=fixture\tCCCCCCCCCCCCCCCC\n"
+        )
+        payload = {
+            "target": {
+                "id": "2026-06-20_00000082",
+                "week_id": "2026-06-20",
+                "labels_submission_3d": "hard",
+            },
+            "entities": [
+                {
+                    "id": "polymer",
+                    "entity_type": "protein",
+                    "canonical_sequence": "M" + "A" * 39,
+                },
+                {
+                    "id": "ligand",
+                    "entity_type": "non_polymer",
+                    "component_id": "DRG",
+                    "smiles": "CCCCCCCCCCCCCCCC",
+                    "inchi": "InChI=fixture",
+                },
+            ],
+            "biounits": [],
+            "predictions": [],
+        }
+        return build_weekly_plan(
+            release_date=date(2026, 6, 20),
+            ww_pdb_snapshot=parse_wwpdb_snapshot(sequence, ligand),
+            cameo_payloads=[payload],
+            output_prefix="supabase://results/runs",
+            generated_at=datetime(2026, 6, 20, 6, tzinfo=timezone.utc),
+        )
+
+    def test_uploads_sources_and_target_before_atomic_registration(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        response = coordinator.register_weekly_plan(
+            self.weekly_plan(),
+            {
+                "wwpdb_sequence": (b"sequence source", "text/tab-separated-values"),
+                "wwpdb_nonpolymer": (b"ligand source", "text/tab-separated-values"),
+            },
+            adapter_version="foldarium-pipeline/0.2",
+        )
+        self.assertEqual(response["status"], "registered")
+        self.assertEqual(len(opener.calls), 4)  # two sources, one target package, one RPC
+        register = opener.calls[-1][0]
+        self.assertTrue(register.full_url.endswith("/rpc/register_weekly_prediction_plan"))
+        payload = json.loads(register.data)
+        self.assertEqual(len(payload["p_targets"]), 1)
+        self.assertEqual(len(payload["p_runs"]), 2)
+        target = payload["p_targets"][0]
+        self.assertEqual(target["package_sha256"], payload["p_runs"][0]["input_sha256"])
+        self.assertEqual(target["package_uri"], payload["p_runs"][0]["input_uri"])
+        self.assertNotIn(b"service-role-key", register.data)
+
+    def test_weekly_campaign_preflight_stops_after_first_matching_row(self) -> None:
+        class CampaignPreflightOpener(RecordingOpener):
+            def __init__(self, body: bytes) -> None:
+                super().__init__()
+                self.body = body
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                self.assert_get(request)
+                return FakeResponse(self.body)
+
+            @staticmethod
+            def assert_get(request: object) -> None:
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("preflight must be read-only")
+
+        for body, expected in ((b"[]", False), (b'[{"campaign_id":"wwpdb-2026-08-08"}]', True)):
+            with self.subTest(expected=expected):
+                opener = CampaignPreflightOpener(body)
+                coordinator = SupabaseCoordinator(
+                    "https://project.supabase.co", "service-role-key", "results", opener=opener
+                )
+                self.assertEqual(
+                    coordinator.weekly_campaign_exists("wwpdb-2026-08-08"), expected
+                )
+                self.assertEqual(len(opener.calls), 1)
+                self.assertIn("campaign_id=eq.wwpdb-2026-08-08", opener.calls[0][0].full_url)
+
+    def test_tampered_plan_is_rejected_before_upload(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        plan = self.weekly_plan()
+        plan["campaign"]["name"] = "tampered"
+        with self.assertRaisesRegex(SupabasePublicationError, "does not match"):
+            coordinator.register_weekly_plan(
+                plan,
+                {"source": (b"data", "application/octet-stream")},
+                adapter_version="adapter/v1",
+            )
+        self.assertEqual(opener.calls, [])
+
+    def test_registers_external_cameo_models_with_private_provenance(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        response = coordinator.register_external_prediction_set(
+            target_id="2026-06-20_00000082",
+            import_manifest={
+                "provider": "cameo",
+                "method": "alphafold3",
+                "provider_server_id": "993",
+                "provider_target_id": "2026-06-20_00000082",
+                "source_page": "https://cameo3d.org/target/2026-06-20_00000082",
+                "license": "CC-BY-SA-4.0",
+            },
+            source_page=b"<html>public target</html>",
+            artifacts=[
+                {
+                    "role": "prediction",
+                    "model_index": 1,
+                    "content": b"data_model\n",
+                    "source_uri": "https://cameo3d.org/api/coords/t/993/1/model-1.cif",
+                },
+                {
+                    "role": "reference",
+                    "assembly_id": 1,
+                    "content": b"reference\n",
+                    "media_type": "application/gzip",
+                    "source_uri": "https://cameo3d.org/api/coords/t/biounit/01/reference.cif.gz",
+                },
+            ],
+        )
+        self.assertEqual(response, {"Key": "stored"})
+        self.assertEqual(len(opener.calls), 4)  # page, model, reference, RPC
+        rpc = opener.calls[-1][0]
+        self.assertTrue(rpc.full_url.endswith("/rpc/register_external_prediction_set"))
+        payload = json.loads(rpc.data)
+        self.assertEqual(len(payload["p_artifacts"]), 3)
+        self.assertEqual(payload["p_set"]["license"], "CC-BY-SA-4.0")
+        self.assertNotIn("content", str(payload))
+
+    def test_invalid_external_artifact_makes_no_requests(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaises(SupabasePublicationError):
+            coordinator.register_external_prediction_set(
+                target_id="target",
+                import_manifest={
+                    "provider": "cameo",
+                    "method": "alphafold3",
+                    "provider_target_id": "target",
+                    "source_page": "https://cameo3d.org/target/target",
+                    "license": "CC-BY-SA-4.0",
+                },
+                source_page=b"page",
+                artifacts=[
+                    {
+                        "role": "prediction",
+                        "model_index": 9,
+                        "content": b"model",
+                        "source_uri": "https://cameo3d.org/model",
+                    }
+                ],
+            )
+        self.assertEqual(opener.calls, [])
+
+    def test_reads_succeeded_campaign_outputs_and_verifies_private_bytes(self) -> None:
+        content = b"data_blind_fixture\n#\n"
+        digest = hashlib.sha256(content).hexdigest()
+        run = {
+            "run_id": "run_test123",
+            "target_id": "target-test",
+            "method": "boltz2",
+            "method_version": "2.2.1",
+            "status": "succeeded",
+            "task_payload": {"target": {"target_id": "target-test", "entities": []}},
+            "result": {"samples": [{"sample_id": "seed-7-rank-0", "sample_index": 0}]},
+        }
+        artifact = {
+            "run_id": "run_test123",
+            "sample_id": "seed-7-rank-0",
+            "role": "predicted_complex",
+            "object_uri": f"supabase://results/sha256/{digest[:2]}/{digest}",
+            "sha256": digest,
+            "media_type": "chemical/x-mmcif",
+        }
+
+        class CampaignOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/prediction_runs?" in url:
+                    return FakeResponse(json.dumps([run]).encode())
+                if "/prediction_artifacts?" in url:
+                    return FakeResponse(json.dumps([artifact]).encode())
+                if "/storage/v1/object/authenticated/results/" in url:
+                    return FakeResponse(content)
+                raise AssertionError(url)
+
+        opener = CampaignOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        rows = coordinator.campaign_prediction_outputs("campaign-test")
+        self.assertEqual(rows[0]["samples"][0]["predicted_complex"], artifact)
+        self.assertEqual(
+            coordinator.download_content_object(artifact["object_uri"], expected_sha256=digest),
+            content,
+        )
+        self.assertTrue(all(call[0].get_method() == "GET" for call in opener.calls))
+
+    def test_private_object_download_rejects_wrong_bucket_without_request(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "this bucket"):
+            coordinator.download_content_object(
+                "supabase://public/sha256/aa/" + "a" * 64
+            )
+        self.assertEqual(opener.calls, [])
 
 
 if __name__ == "__main__":

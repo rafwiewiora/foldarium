@@ -60,12 +60,34 @@ mounted Boltz cache and still follows the normal durable publication path. Do
 not use an unpublished throwaway run merely to warm the cache.
 
 The weekly schedule is completely absent unless `FOLDARIUM_ENABLE_WEEKLY_CRON=1`
-is set when the app is deployed. Once enabled, the default is Saturday 06:00 UTC
-and the function remains a no-op until `FOLDARIUM_WEEKLY_HOOK=module:function`
-is supplied. The hook returns planned task JSON values; it must use deterministic
-task IDs so retries and duplicate scheduler events remain idempotent. Change
+is set when the app is deployed. Once enabled, the default polls every 15 minutes
+from Saturday 03:00 through 06:45 UTC. Expected CAMEO publication lag is returned
+and logged as `waiting-for-inputs`, not treated as a failed task.
+Use `FOLDARIUM_WEEKLY_HOOK=foldarium_pipeline.weekly:modal_weekly_hook`. Planning,
+registration, and GPU spend remain independently gated: registration requires
+`FOLDARIUM_WEEKLY_REGISTER=1`, and calls are spawned only with
+`FOLDARIUM_WEEKLY_SUBMIT=1` after the registration RPC reports success. With the
+submit flag absent, the scheduled function returns the target count, accelerator
+mix, and maximum GPU-seconds as `planned-not-submitted`. Change
 `FOLDARIUM_WEEKLY_CRON` in the environment used by `modal deploy` to move the
 schedule without changing core code.
+
+The deployment adapter embeds only those non-secret weekly switches into the
+CPU control image. Supabase credentials are supplied separately by the
+`foldarium-control-plane` Secret. Search logs with:
+
+```bash
+modal app logs foldarium-predictions --env main --timestamps --search foldarium.weekly
+```
+
+Once a registered campaign exists, later ticks exit before crawling CAMEO or
+submitting work. Therefore enable registration and GPU submission together only
+after approving the displayed bounded budget; a registration-only deployment is
+an intentional operator hold point, not an automatic future-submit queue.
+
+Keep the laptop's default Modal profile on `foldariumtest`. The separately
+configured `molspace-production` profile is for Brian's final deployment only;
+always pass/verify a profile explicitly before any production command.
 
 ## Portability rules
 

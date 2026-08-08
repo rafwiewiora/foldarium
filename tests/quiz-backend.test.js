@@ -159,6 +159,8 @@ test('empty configuration disables remote persistence without loading Supabase',
     backend.getLeaderboard(),
     /leaderboard persistence is unavailable/i,
   );
+  assert.deepEqual(await backend.getWeeklyVotes('round-1'), []);
+  assert.deepEqual(await backend.getWeeklyVoteTotals('round-1'), []);
 });
 
 test('claims a username and loads shared leaderboard rows through Supabase RPCs', async () => {
@@ -183,6 +185,52 @@ test('claims a username and loads shared leaderboard rows through Supabase RPCs'
       args: { p_username: 'player_one' },
     },
     { name: 'get_leaderboard', args: undefined },
+  ]);
+});
+
+test('loads the current blind round and submits one server-validated weekly vote', async () => {
+  const { client, rpcs, setRpcResult } = fakeSupabase();
+  const round = { round_id: '2026-08-08', public_status: 'open', blind_manifest: { items: [] } };
+  setRpcResult('get_current_weekly_quiz_round', { data: [round], error: null });
+  setRpcResult('get_my_weekly_quiz_votes', {
+    data: [{ item_id: 'item-1', choice_id: 'choice-2', picked_none: false }], error: null,
+  });
+  setRpcResult('get_weekly_quiz_vote_totals', {
+    data: [{ item_id: 'item-1', choice_id: 'choice-2', picked_none: false, vote_count: 3 }],
+    error: null,
+  });
+  setRpcResult('submit_weekly_quiz_vote', { data: { vote_id: 'vote-id' }, error: null });
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('vote-id'),
+  });
+
+  assert.deepEqual(await backend.getWeeklyRound(), round);
+  assert.deepEqual(await backend.getWeeklyVotes('2026-08-08'), [
+    { item_id: 'item-1', choice_id: 'choice-2', picked_none: false },
+  ]);
+  assert.deepEqual(await backend.getWeeklyVoteTotals('2026-08-08'), [
+    { item_id: 'item-1', choice_id: 'choice-2', picked_none: false, vote_count: 3 },
+  ]);
+  assert.deepEqual(
+    await backend.submitWeeklyVote('2026-08-08', 'item-1', 'choice-2', false),
+    { vote_id: 'vote-id' },
+  );
+  assert.deepEqual(rpcs, [
+    { name: 'get_current_weekly_quiz_round', args: undefined },
+    { name: 'get_my_weekly_quiz_votes', args: { p_round_id: '2026-08-08' } },
+    { name: 'get_weekly_quiz_vote_totals', args: { p_round_id: '2026-08-08' } },
+    {
+      name: 'submit_weekly_quiz_vote',
+      args: {
+        p_vote_id: 'vote-id',
+        p_round_id: '2026-08-08',
+        p_item_id: 'item-1',
+        p_choice_id: 'choice-2',
+        p_picked_none: false,
+      },
+    },
   ]);
 });
 

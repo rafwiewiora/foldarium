@@ -59,7 +59,7 @@ GPU_LADDER: tuple[GpuClass, ...] = (
 GPU_CLASS_NAMES = frozenset(gpu.name for gpu in GPU_LADDER)
 
 
-def _count_smiles_heavy_atoms(smiles: str) -> int:
+def count_smiles_heavy_atoms(smiles: str) -> int:
     """Approximate heavy-atom count without a chemistry dependency.
 
     The core is deliberately dependency-free, and sizing only needs an
@@ -93,7 +93,7 @@ def _entity_tokens(entity: Mapping[str, Any]) -> int:
     if entity["type"] in POLYMER_TYPES:
         return len(entity["sequence"]) * copies
     if entity.get("smiles"):
-        return max(1, _count_smiles_heavy_atoms(entity["smiles"])) * copies
+        return max(1, count_smiles_heavy_atoms(entity["smiles"])) * copies
     return len(entity.get("ccd_codes", [])) * CCD_ATOM_ESTIMATE * copies
 
 
@@ -168,6 +168,7 @@ __all__ = [
     "GPU_LADDER",
     "GpuClass",
     "SizingError",
+    "count_smiles_heavy_atoms",
     "count_tokens",
     "derive_gpu_class",
     "effective_tokens",

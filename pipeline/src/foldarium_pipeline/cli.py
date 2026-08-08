@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from datetime import date
 from pathlib import Path
 from typing import Sequence
 
 from .contracts import make_prediction_task, validate_prediction_task, validate_target
+from .backfill import build_backfill_plan
 from .sizing import GPU_CLASS_NAMES, resolve_gpu_class
 from .staging import (
     DEFAULT_EXECUTION_BACKEND,
@@ -16,6 +19,10 @@ from .staging import (
     render_staging_sql,
 )
 from .worker import execute_task_json
+from .intake import WeeklyPolicy
+from .weekly import build_public_weekly_plan
+from .weekly_quiz import publish_staged_weekly_quiz, stage_weekly_quiz
+from .supabase import SupabaseConfigurationError, SupabaseCoordinator
 
 
 def _read(path: str) -> dict:
@@ -80,6 +87,61 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="run one task in the current environment")
     run.add_argument("task_json")
     run.add_argument("--work-root", default=".foldarium-work")
+
+    weekly = commands.add_parser(
+        "weekly-plan",
+        help="download public prerelease inputs and write a no-submit weekly plan",
+    )
+    weekly.add_argument("--release-date", required=True, help="Saturday date in YYYY-MM-DD")
+    weekly.add_argument("--output", required=True, help="destination JSON file")
+    weekly.add_argument("--max-targets", type=int, default=8)
+    weekly.add_argument("--heavy-atom-minimum", type=int, default=15)
+    weekly.add_argument("--diffusion-samples", type=int, default=5)
+    weekly.add_argument("--timeout-seconds", type=int, default=20 * 60)
+    weekly.add_argument("--msa-mode", choices=("server", "none", "empty"), default="server")
+    weekly.add_argument(
+        "--output-prefix", default="supabase://foldarium-predictions/runs"
+    )
+
+    backfill = commands.add_parser(
+        "backfill-plan",
+        help="write a bounded no-submit OF3/Boltz plan from a CAMEO scan report",
+    )
+    backfill.add_argument("--input", required=True, help="public_catchup --scan-only report")
+    backfill.add_argument("--output", required=True)
+    backfill.add_argument("--start-week", required=True)
+    backfill.add_argument("--end-week", required=True)
+    backfill.add_argument("--max-targets-per-week", type=int, default=2)
+    backfill.add_argument(
+        "--methods", nargs="+", choices=("openfold3", "boltz2"), default=["openfold3", "boltz2"]
+    )
+    backfill.add_argument("--diffusion-samples", type=int, default=5)
+    backfill.add_argument("--timeout-seconds", type=int, default=20 * 60)
+    backfill.add_argument("--msa-mode", choices=("server", "none", "empty"), default="server")
+    backfill.add_argument(
+        "--output-prefix", default="supabase://foldarium-predictions/runs"
+    )
+
+    quiz_stage = commands.add_parser(
+        "weekly-quiz-stage",
+        help="download completed private runs and build an aligned local blind-quiz stage",
+    )
+    quiz_stage.add_argument("--campaign", required=True)
+    quiz_stage.add_argument("--round-id", required=True)
+    quiz_stage.add_argument("--output-dir", required=True)
+
+    quiz_publish = commands.add_parser(
+        "weekly-quiz-publish",
+        help="upload sanitized staged assets and optionally open the voting round",
+    )
+    quiz_publish.add_argument("--stage-dir", required=True)
+    quiz_publish.add_argument("--opens-at", required=True)
+    quiz_publish.add_argument("--closes-at", required=True)
+    quiz_publish.add_argument(
+        "--open-round",
+        action="store_true",
+        help="after upload, invoke the privileged RPC that makes the blind round visible",
+    )
     return parser
 
 
@@ -134,6 +196,101 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _read(args.task_json),
                 args.work_root,
                 dry_run=args.command == "plan",
+            )
+        )
+    elif args.command == "weekly-plan":
+        release = date.fromisoformat(args.release_date)
+        plan, inputs = build_public_weekly_plan(
+            release,
+            policy=WeeklyPolicy(
+                heavy_atom_minimum=args.heavy_atom_minimum,
+                max_targets=args.max_targets,
+                diffusion_samples=args.diffusion_samples,
+                timeout_seconds=args.timeout_seconds,
+                msa_mode=args.msa_mode,
+            ),
+            output_prefix=args.output_prefix,
+        )
+        destination = Path(args.output)
+        destination.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _print(
+            {
+                "status": "planned-not-submitted",
+                "output": str(destination),
+                "plan_sha256": plan["plan_sha256"],
+                "budget": plan["budget"],
+                "availability": inputs["availability"],
+            }
+        )
+    elif args.command == "backfill-plan":
+        source = _read(args.input)
+        snapshot = source.get("snapshot")
+        candidates = source.get("candidate_manifest")
+        if not isinstance(snapshot, dict) or not isinstance(candidates, list):
+            raise ValueError("backfill input must be a public_catchup --scan-only report")
+        plan = build_backfill_plan(
+            candidates,
+            start_week=date.fromisoformat(args.start_week),
+            end_week=date.fromisoformat(args.end_week),
+            source_snapshot_sha256=snapshot["sitemap_sha256"],
+            output_prefix=args.output_prefix,
+            max_targets_per_week=args.max_targets_per_week,
+            methods=args.methods,
+            diffusion_samples=args.diffusion_samples,
+            timeout_seconds=args.timeout_seconds,
+            msa_mode=args.msa_mode,
+        )
+        destination = Path(args.output)
+        destination.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _print(
+            {
+                "status": "planned-not-submitted",
+                "output": str(destination),
+                "plan_sha256": plan["plan_sha256"],
+                "budget": plan["budget"],
+            }
+        )
+    elif args.command == "weekly-quiz-stage":
+        coordinator = SupabaseCoordinator.from_env()
+        outputs = coordinator.campaign_prediction_outputs(args.campaign)
+        stage = stage_weekly_quiz(
+            outputs,
+            args.output_dir,
+            round_id=args.round_id,
+            campaign_id=args.campaign,
+            downloader=coordinator.download_content_object,
+        )
+        _print(
+            {
+                "status": "staged-not-published",
+                "stage": str(Path(args.output_dir).resolve() / "stage.json"),
+                "stage_sha256": stage["stage_sha256"],
+                "items": len(stage["items"]),
+                "choices": sum(len(item["choices"]) for item in stage["items"]),
+            }
+        )
+    elif args.command == "weekly-quiz-publish":
+        private = SupabaseCoordinator.from_env()
+        public_bucket = os.environ.get("FOLDARIUM_PUBLIC_QUIZ_BUCKET")
+        if not public_bucket:
+            raise SupabaseConfigurationError(
+                "missing required environment variable: FOLDARIUM_PUBLIC_QUIZ_BUCKET"
+            )
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == private.storage_bucket:
+            raise SupabaseConfigurationError(
+                "FOLDARIUM_PUBLIC_QUIZ_BUCKET must differ from the private prediction bucket"
+            )
+        _print(
+            publish_staged_weekly_quiz(
+                args.stage_dir,
+                private_coordinator=private,
+                public_coordinator=public,
+                opens_at=args.opens_at,
+                closes_at=args.closes_at,
+                open_round=args.open_round,
             )
         )
     return 0

@@ -19,10 +19,11 @@ from copy import deepcopy
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-from .contracts import stable_id
+from .contracts import canonical_json, stable_id
+from .staging import build_run_row
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -463,8 +464,494 @@ class SupabasePublisher:
         return data
 
 
+class SupabaseCoordinator(SupabasePublisher):
+    """Register immutable weekly inputs before an execution backend may claim them.
+
+    The coordinator uses the same explicit service-role boundary as publication,
+    but it never executes a model.  Source snapshots and normalized target
+    packages are uploaded first; one Postgres RPC then records the snapshot,
+    campaign, targets, and runs transactionally.
+    """
+
+    __slots__ = ()
+
+    def _get_json_rows(self, endpoint: str, operation: str) -> list[dict[str, Any]]:
+        body = self._request(endpoint, None, operation=operation, method="GET")
+        try:
+            value = json.loads((body or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(f"{operation} returned invalid JSON") from exc
+        if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
+            raise SupabasePublicationError(f"{operation} returned an invalid row set")
+        return [deepcopy(dict(row)) for row in value]
+
+    def weekly_campaign_exists(self, campaign_id: str) -> bool:
+        """Return whether an immutable weekly campaign is already registered.
+
+        Scheduled intake checks call this before downloading the public source
+        bundle.  Once one tick has registered a week, later ticks therefore do
+        not re-crawl CAMEO or submit the same GPU work again.
+        """
+
+        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        query = urlencode(
+            {
+                "select": "campaign_id",
+                "campaign_id": f"eq.{campaign_id}",
+                "limit": "1",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/campaigns?{query}", "weekly campaign preflight"
+        )
+        if len(rows) > 1:
+            raise SupabasePublicationError(
+                "weekly campaign preflight returned duplicate campaign rows"
+            )
+        return bool(rows)
+
+    def campaign_prediction_outputs(self, campaign_id: str) -> list[dict[str, Any]]:
+        """Return succeeded run/sample rows with their private complex artifacts."""
+
+        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        run_query = urlencode(
+            {
+                "select": "run_id,target_id,method,method_version,task_payload,result,status",
+                "campaign_id": f"eq.{campaign_id}",
+                "status": "eq.succeeded",
+                "order": "target_id.asc,method.asc,run_id.asc",
+            }
+        )
+        runs = self._get_json_rows(
+            f"/rest/v1/prediction_runs?{run_query}", "campaign prediction query"
+        )
+        if not runs:
+            return []
+        run_ids = [_safe_identifier(row.get("run_id"), "prediction run_id") for row in runs]
+        run_filter = "in.(" + ",".join(run_ids) + ")"
+        artifact_query = urlencode(
+            {
+                "select": "run_id,sample_id,role,object_uri,sha256,media_type",
+                "run_id": run_filter,
+                "role": "eq.predicted_complex",
+                "order": "run_id.asc,sample_id.asc",
+            }
+        )
+        artifacts = self._get_json_rows(
+            f"/rest/v1/prediction_artifacts?{artifact_query}",
+            "campaign artifact query",
+        )
+        by_sample: dict[tuple[str, str], dict[str, Any]] = {}
+        for artifact in artifacts:
+            run_id = _safe_identifier(artifact.get("run_id"), "artifact.run_id")
+            sample_id = _safe_identifier(artifact.get("sample_id"), "artifact.sample_id")
+            digest = artifact.get("sha256")
+            if artifact.get("role") != "predicted_complex" or not isinstance(
+                digest, str
+            ) or not _SHA256.fullmatch(digest):
+                raise SupabasePublicationError("campaign artifact metadata is invalid")
+            key = (run_id, sample_id)
+            if key in by_sample:
+                raise SupabasePublicationError("a prediction sample has multiple complex artifacts")
+            by_sample[key] = artifact
+
+        normalized: list[dict[str, Any]] = []
+        for row in runs:
+            run_id = _safe_identifier(row.get("run_id"), "prediction run_id")
+            task = _json_object(row.get("task_payload"), "prediction task_payload")
+            result = _json_object(row.get("result"), "prediction result")
+            samples = result.get("samples")
+            if not isinstance(samples, list) or not samples:
+                raise SupabasePublicationError("succeeded prediction result has no samples")
+            output_samples: list[dict[str, Any]] = []
+            for raw_sample in samples:
+                sample = _json_object(raw_sample, "prediction sample")
+                sample_id = _safe_identifier(sample.get("sample_id"), "prediction sample_id")
+                artifact = by_sample.pop((run_id, sample_id), None)
+                if artifact is None:
+                    raise SupabasePublicationError(
+                        "succeeded prediction sample has no complex artifact"
+                    )
+                sample["predicted_complex"] = artifact
+                output_samples.append(sample)
+            normalized.append({**row, "task_payload": task, "result": result, "samples": output_samples})
+        if by_sample:
+            raise SupabasePublicationError("complex artifacts reference unknown result samples")
+        return normalized
+
+    def download_content_object(
+        self, object_uri: str, *, expected_sha256: str | None = None
+    ) -> bytes:
+        """Download and verify one private content-addressed object from this bucket."""
+
+        if not isinstance(object_uri, str):
+            raise SupabasePublicationError("object_uri must be a Supabase object URI")
+        parsed = urlsplit(object_uri)
+        object_path = parsed.path.lstrip("/")
+        match = re.fullmatch(r"sha256/([0-9a-f]{2})/([0-9a-f]{64})", object_path)
+        if (
+            parsed.scheme != "supabase"
+            or parsed.netloc != self.storage_bucket
+            or parsed.query
+            or parsed.fragment
+            or match is None
+            or match.group(1) != match.group(2)[:2]
+        ):
+            raise SupabasePublicationError("object_uri is not a valid object in this bucket")
+        digest = match.group(2)
+        if expected_sha256 is not None and expected_sha256 != digest:
+            raise SupabasePublicationError("object_uri digest does not match expected_sha256")
+        endpoint = (
+            "/storage/v1/object/authenticated/"
+            + quote(self.storage_bucket, safe="")
+            + "/"
+            + quote(object_path, safe="/")
+        )
+        body = self._request(endpoint, None, operation="artifact download", method="GET")
+        if body is None or hashlib.sha256(body).hexdigest() != digest:
+            raise SupabasePublicationError("downloaded artifact does not match its object digest")
+        return body
+
+    def store_bytes(self, content: bytes, media_type: str) -> dict[str, Any]:
+        """Store bytes by digest without overwriting an existing object."""
+
+        if not isinstance(content, bytes) or not content:
+            raise SupabasePublicationError("stored content must be non-empty bytes")
+        if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
+            raise SupabasePublicationError("media_type must be a short string")
+        digest = hashlib.sha256(content).hexdigest()
+        object_path = self._object_path(digest)
+        endpoint = (
+            "/storage/v1/object/"
+            + quote(self.storage_bucket, safe="")
+            + "/"
+            + quote(object_path, safe="/")
+        )
+        response = self._request(
+            endpoint,
+            content,
+            operation="source snapshot upload",
+            content_type=media_type,
+            extra_headers={"x-upsert": "false"},
+            allow_conflict=True,
+        )
+        if response is None:
+            self._verify_existing_object(digest)
+        return {
+            "object_uri": f"supabase://{self.storage_bucket}/{object_path}",
+            "sha256": digest,
+            "size_bytes": len(content),
+            "media_type": media_type,
+        }
+
+    def register_weekly_plan(
+        self,
+        plan: Mapping[str, Any],
+        source_files: Mapping[str, tuple[bytes, str]],
+        *,
+        adapter_version: str,
+        execution_backend: str = "modal",
+        max_attempts: int = 2,
+    ) -> Any:
+        """Upload replay inputs and atomically register a non-empty weekly plan."""
+
+        normalized = _json_object(plan, "plan")
+        campaign = _json_object(normalized.get("campaign"), "plan.campaign")
+        targets = normalized.get("targets")
+        tasks = normalized.get("tasks")
+        plan_digest = normalized.get("plan_sha256")
+        if not isinstance(targets, list) or not targets or not all(
+            isinstance(target, Mapping) for target in targets
+        ):
+            raise SupabasePublicationError("plan.targets must be a non-empty array")
+        if not isinstance(tasks, list) or not tasks or not all(
+            isinstance(task, Mapping) for task in tasks
+        ):
+            raise SupabasePublicationError("plan.tasks must be a non-empty array")
+        if not isinstance(plan_digest, str) or not _SHA256.fullmatch(plan_digest):
+            raise SupabasePublicationError("plan.plan_sha256 must be a lowercase SHA-256")
+        unhashed = {
+            key: value
+            for key, value in normalized.items()
+            if key not in {"plan_sha256", "generated_at"}
+        }
+        actual_plan_digest = hashlib.sha256(canonical_json(unhashed).encode("utf-8")).hexdigest()
+        if actual_plan_digest != plan_digest:
+            raise SupabasePublicationError("plan.plan_sha256 does not match the plan")
+        if not isinstance(adapter_version, str) or not adapter_version.strip():
+            raise SupabasePublicationError("adapter_version must be a non-empty string")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+            raise SupabasePublicationError("max_attempts must be a positive integer")
+
+        stored_sources: dict[str, dict[str, Any]] = {}
+        for name, item in sorted(source_files.items()):
+            _safe_identifier(name, "source file name")
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise SupabasePublicationError("source files must map to (bytes, media_type)")
+            stored_sources[name] = self.store_bytes(item[0], item[1])
+
+        packages: dict[str, dict[str, Any]] = {}
+        target_rows: list[dict[str, Any]] = []
+        campaign_id = _safe_identifier(campaign.get("campaign_id"), "campaign_id")
+        release_date = campaign.get("release_date")
+        for raw_target in targets:
+            target = deepcopy(dict(raw_target))
+            target_id = _safe_identifier(target.get("target_id"), "target_id")
+            encoded = canonical_json(target).encode("utf-8")
+            package = self.store_bytes(encoded, "application/json")
+            packages[target_id] = package
+            target_rows.append(
+                {
+                    "target_id": target_id,
+                    "campaign_id": campaign_id,
+                    "source_id": target_id,
+                    "source_release_date": release_date,
+                    "package_uri": package["object_uri"],
+                    "package_sha256": package["sha256"],
+                    "package_schema_version": 1,
+                    "input_summary": {
+                        "schema_version": target.get("schema_version"),
+                        "entities": [
+                            {
+                                "type": entity.get("type"),
+                                "chain_ids": entity.get("chain_ids"),
+                            }
+                            for entity in target.get("entities", [])
+                        ],
+                    },
+                    "metadata": target.get("metadata", {}),
+                }
+            )
+
+        run_rows: list[dict[str, Any]] = []
+        for task in tasks:
+            target_id = str(task.get("target", {}).get("target_id", ""))
+            package = packages.get(target_id)
+            if package is None:
+                raise SupabasePublicationError("every task target must be present in plan.targets")
+            row = build_run_row(
+                task,
+                adapter_version=adapter_version,
+                execution_backend=execution_backend,
+                input_uri=package["object_uri"],
+                max_attempts=max_attempts,
+            )
+            if row["input_sha256"] != package["sha256"]:
+                raise SupabasePublicationError("target package digest does not match staged input")
+            run_rows.append(row)
+
+        campaign_row = {
+            "campaign_id": campaign_id,
+            "name": campaign.get("name"),
+            "source": campaign.get("source"),
+            "release_date": release_date,
+            "selection_policy_version": campaign.get("selection_policy_version"),
+            "configuration": campaign.get("configuration", {}),
+            "status": "predicting",
+            "metadata": {
+                "weekly_plan_sha256": plan_digest,
+                "generated_at": normalized.get("generated_at"),
+                "budget": normalized.get("budget", {}),
+            },
+        }
+        snapshot = {
+            "snapshot_id": stable_id("snapshot", {"plan_sha256": plan_digest}),
+            "campaign_id": campaign_id,
+            "release_date": release_date,
+            "plan_sha256": plan_digest,
+            "files": stored_sources,
+            "metadata": normalized.get("snapshot", {}),
+        }
+        payload = {
+            "p_snapshot": snapshot,
+            "p_campaign": campaign_row,
+            "p_targets": target_rows,
+            "p_runs": run_rows,
+        }
+        self._encode_json(payload)
+        return self._rpc("register_weekly_prediction_plan", payload)
+
+    def open_weekly_quiz_round(
+        self,
+        *,
+        round_id: str,
+        campaign_id: str,
+        opens_at: str,
+        closes_at: str,
+        blind_manifest: Mapping[str, Any],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Atomically expose a pre-redacted blind manifest for its voting window."""
+
+        from .quiz import manifest_sha256
+
+        payload = {
+            "p_round_id": _safe_identifier(round_id, "round_id"),
+            "p_campaign_id": _safe_identifier(campaign_id, "campaign_id"),
+            "p_opens_at": opens_at,
+            "p_closes_at": closes_at,
+            "p_blind_manifest": _json_object(blind_manifest, "blind_manifest"),
+            "p_blind_manifest_sha256": manifest_sha256(blind_manifest),
+            "p_metadata": _json_object(metadata or {}, "metadata"),
+        }
+        return self._rpc("open_weekly_quiz_round", payload)
+
+    def reveal_weekly_quiz_round(
+        self,
+        *,
+        round_id: str,
+        reveal_manifest: Mapping[str, Any],
+    ) -> Any:
+        """Publish answers only after Postgres verifies that voting is closed."""
+
+        from .quiz import manifest_sha256
+
+        payload = {
+            "p_round_id": _safe_identifier(round_id, "round_id"),
+            "p_reveal_manifest": _json_object(reveal_manifest, "reveal_manifest"),
+            "p_reveal_manifest_sha256": manifest_sha256(reveal_manifest),
+        }
+        return self._rpc("reveal_weekly_quiz_round", payload)
+
+    def register_external_prediction_set(
+        self,
+        *,
+        target_id: str,
+        import_manifest: Mapping[str, Any],
+        source_page: bytes,
+        artifacts: list[Mapping[str, Any]],
+    ) -> Any:
+        """Store downloaded CAMEO files and register their public provenance."""
+
+        manifest = _json_object(import_manifest, "import_manifest")
+        provider = _safe_identifier(manifest.get("provider"), "provider")
+        method = _safe_identifier(manifest.get("method"), "method")
+        provider_target = _safe_identifier(
+            manifest.get("provider_target_id"), "provider_target_id"
+        )
+        source_uri = manifest.get("source_page")
+        license_name = manifest.get("license")
+        if not isinstance(source_uri, str) or not source_uri.startswith("https://cameo3d.org/"):
+            raise SupabasePublicationError("external source page must be a CAMEO HTTPS URL")
+        if not isinstance(license_name, str) or not license_name:
+            raise SupabasePublicationError("external import license is required")
+        prepared_artifacts: list[dict[str, Any]] = []
+        for index, raw in enumerate(artifacts):
+            if not isinstance(raw, Mapping):
+                raise SupabasePublicationError(f"artifacts[{index}] must be an object")
+            # ``content`` is deliberately bytes and therefore not JSON. Validate
+            # every serializable sub-field below, then omit content from the RPC.
+            artifact = deepcopy(dict(raw))
+            role = artifact.get("role")
+            if role not in {"prediction", "reference"}:
+                raise SupabasePublicationError("external artifact role must be prediction/reference")
+            content = artifact.get("content")
+            media_type = artifact.get("media_type", "chemical/x-mmcif")
+            source = artifact.get("source_uri")
+            if not isinstance(content, bytes) or not content:
+                raise SupabasePublicationError("external artifact content must be non-empty bytes")
+            if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
+                raise SupabasePublicationError("external artifact media_type must be a short string")
+            if not isinstance(source, str) or not source.startswith("https://cameo3d.org/"):
+                raise SupabasePublicationError("external artifact source must be a CAMEO HTTPS URL")
+            model_index = artifact.get("model_index") if role == "prediction" else None
+            assembly_id = artifact.get("assembly_id") if role == "reference" else None
+            if role == "prediction" and (
+                isinstance(model_index, bool)
+                or not isinstance(model_index, int)
+                or not 1 <= model_index <= 5
+            ):
+                raise SupabasePublicationError("prediction model_index must be from 1 to 5")
+            if role == "reference" and (
+                isinstance(assembly_id, bool)
+                or not isinstance(assembly_id, int)
+                or assembly_id < 1
+            ):
+                raise SupabasePublicationError("reference assembly_id must be positive")
+            prepared_artifacts.append(
+                {
+                    **artifact,
+                    "role": role,
+                    "content": content,
+                    "media_type": media_type,
+                    "source_uri": source,
+                    "model_index": model_index,
+                    "assembly_id": assembly_id,
+                    "metadata": _json_object(artifact.get("metadata", {}), "artifact.metadata"),
+                }
+            )
+
+        page_object = self.store_bytes(source_page, "text/html")
+        set_id = stable_id(
+            "external",
+            {
+                "target_id": target_id,
+                "provider": provider,
+                "method": method,
+                "provider_target_id": provider_target,
+                "source_page_sha256": page_object["sha256"],
+            },
+        )
+        rows: list[dict[str, Any]] = [
+            {
+                "artifact_id": stable_id(
+                    "external_artifact", {"external_set_id": set_id, "role": "source_page"}
+                ),
+                "external_set_id": set_id,
+                "role": "source_page",
+                "model_index": None,
+                "assembly_id": None,
+                **page_object,
+                "source_uri": source_uri,
+                "metadata": {},
+            }
+        ]
+        for artifact in prepared_artifacts:
+            role = artifact["role"]
+            stored = self.store_bytes(artifact["content"], artifact["media_type"])
+            model_index = artifact["model_index"]
+            assembly_id = artifact["assembly_id"]
+            identity = {
+                "external_set_id": set_id,
+                "role": role,
+                "model_index": model_index,
+                "assembly_id": assembly_id,
+                "sha256": stored["sha256"],
+            }
+            rows.append(
+                {
+                    "artifact_id": stable_id("external_artifact", identity),
+                    "external_set_id": set_id,
+                    "role": role,
+                    "model_index": model_index,
+                    "assembly_id": assembly_id,
+                    **stored,
+                    "source_uri": artifact["source_uri"],
+                    "metadata": artifact["metadata"],
+                }
+            )
+        set_row = {
+            "external_set_id": set_id,
+            "target_id": _safe_identifier(target_id, "target_id"),
+            "provider": provider,
+            "method": method,
+            "provider_server_id": manifest.get("provider_server_id"),
+            "provider_target_id": provider_target,
+            "source_page_uri": page_object["object_uri"],
+            "source_page_sha256": page_object["sha256"],
+            "license": license_name,
+            "import_manifest": manifest,
+            "status": "imported",
+        }
+        return self._rpc(
+            "register_external_prediction_set",
+            {"p_set": set_row, "p_artifacts": rows},
+        )
+
+
 __all__ = [
     "SupabaseConfigurationError",
+    "SupabaseCoordinator",
     "SupabasePublicationError",
     "SupabasePublisher",
 ]

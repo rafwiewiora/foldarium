@@ -1,0 +1,186 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from foldarium_pipeline.contracts import make_prediction_task
+from foldarium_pipeline.weekly_quiz import (
+    publish_staged_weekly_quiz,
+    stage_weekly_quiz,
+)
+
+try:
+    import gemmi  # noqa: F401
+    import numpy  # noqa: F401
+
+    HAS_ASSEMBLY_DEPS = True
+except (ImportError, ModuleNotFoundError):
+    HAS_ASSEMBLY_DEPS = False
+
+
+def pdb_fixture(shift: float) -> bytes:
+    lines: list[str] = []
+    serial = 0
+    for residue in range(1, 7):
+        for name, offset, element in (("N", 0.0, "N"), ("CA", 1.2, "C"), ("C", 2.4, "C")):
+            serial += 1
+            x = shift + residue * 3.8 + offset
+            lines.append(
+                f"ATOM  {serial:5d} {name:<4s} ALA A{residue:4d}    "
+                f"{x:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00 50.00          {element:>2s}"
+            )
+    for atom_index in range(15):
+        serial += 1
+        x = shift + 10.0 + atom_index * 0.2
+        lines.append(
+            f"HETATM{serial:5d} C{atom_index + 1:<3d} LIG B{1:4d}    "
+            f"{x:8.3f}{2.0:8.3f}{0.0:8.3f}  1.00 70.00           C"
+        )
+    return ("\n".join(lines) + "\nEND\n").encode()
+
+
+def target() -> dict:
+    return {
+        "target_id": "2026-08-08_00000001",
+        "entities": [
+            {"type": "protein", "chain_ids": ["A"], "sequence": "AAAAAA"},
+            {"type": "ligand", "chain_ids": ["B"], "smiles": "CCCCCCCCCCCCCCC"},
+        ],
+        "source": {"kind": "cameo-prerelease", "week": "2026-08-08"},
+        "metadata": {
+            "selected_ligand": {"component_id": "DRG", "heavy_atoms": 15}
+        },
+    }
+
+
+def run_row(method: str, content: bytes) -> tuple[dict, str]:
+    version = "0.4.4" if method == "openfold3" else "2.2.1"
+    task = make_prediction_task(
+        campaign_id="weekly-2026-08-08",
+        target=target(),
+        method=method,
+        method_version=version,
+        container_image=f"registry.example/{method}@sha256:" + "a" * 64,
+        config={"diffusion_samples": 1},
+        output_uri_prefix="supabase://private/runs",
+    )
+    digest = hashlib.sha256(content).hexdigest()
+    uri = f"supabase://private/sha256/{digest[:2]}/{digest}"
+    sample_id = f"{method}-sample-1"
+    return (
+        {
+            "run_id": task["task_id"],
+            "target_id": task["target"]["target_id"],
+            "method": method,
+            "method_version": version,
+            "task_payload": task,
+            "status": "succeeded",
+            "result": {"samples": [{"sample_id": sample_id}]},
+            "samples": [
+                {
+                    "sample_id": sample_id,
+                    "sample_index": 1,
+                    "predicted_complex": {
+                        "object_uri": uri,
+                        "sha256": digest,
+                        "media_type": "chemical/x-pdb",
+                    },
+                }
+            ],
+        },
+        uri,
+    )
+
+
+class FakeCoordinator:
+    def __init__(self, bucket: str) -> None:
+        self.storage_bucket = bucket
+        self.stored: list[tuple[bytes, str]] = []
+        self.opened: dict | None = None
+
+    def store_bytes(self, content: bytes, media_type: str) -> dict:
+        self.stored.append((content, media_type))
+        digest = hashlib.sha256(content).hexdigest()
+        return {
+            "object_uri": f"supabase://{self.storage_bucket}/sha256/{digest[:2]}/{digest}",
+            "sha256": digest,
+            "size_bytes": len(content),
+            "media_type": media_type,
+        }
+
+    def open_weekly_quiz_round(self, **kwargs):
+        self.opened = kwargs
+        return {"status": "open", "round_id": kwargs["round_id"]}
+
+
+@unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
+class WeeklyQuizAssemblyTests(unittest.TestCase):
+    def test_aligns_cross_method_poses_and_publishes_only_sanitized_assets(self) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        def download(uri: str, *, expected_sha256: str) -> bytes:
+            content = downloads[uri]
+            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_sha256)
+            return content
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-2026-08-08",
+                campaign_id="weekly-2026-08-08",
+                downloader=download,
+            )
+            self.assertEqual(len(stage["items"]), 1)
+            self.assertEqual(len(stage["items"][0]["choices"]), 2)
+            poses = [
+                Path(temporary, choice["pose_path"]).read_text()
+                for choice in stage["items"][0]["choices"]
+            ]
+            self.assertNotIn("openfold", "".join(poses).lower())
+            self.assertNotIn("boltz", "".join(poses).lower())
+            xyz = []
+            for pose in poses:
+                rows = [line for line in pose.splitlines() if line.startswith("HETATM")]
+                xyz.append([[float(line[30:38]), float(line[38:46]), float(line[46:54])] for line in rows])
+            self.assertLess(
+                max(abs(left - right) for a, b in zip(xyz[0], xyz[1]) for left, right in zip(a, b)),
+                0.01,
+            )
+
+            private = FakeCoordinator("private")
+            public = FakeCoordinator("quiz-public")
+            summary = publish_staged_weekly_quiz(
+                temporary,
+                private_coordinator=private,
+                public_coordinator=public,
+                opens_at="2026-08-08T03:00:00Z",
+                closes_at="2026-08-12T00:00:00Z",
+                open_round=True,
+            )
+            self.assertEqual(summary["status"], "opened")
+            self.assertEqual(summary["choice_count"], 2)
+            blind = private.opened["blind_manifest"]
+            self.assertNotIn("method", json.dumps(blind))
+            self.assertTrue(
+                blind["items"][0]["choices"][0]["pose_uri"].startswith(
+                    "supabase://quiz-public/"
+                )
+            )
+            private_index = json.loads(private.stored[0][0])
+            self.assertEqual(
+                {choice["method"] for choice in private_index["items"][0]["choices"]},
+                {"openfold3", "boltz2"},
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
