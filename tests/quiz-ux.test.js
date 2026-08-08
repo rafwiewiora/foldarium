@@ -107,3 +107,11 @@ test('Submit answer matches the bottom viewer controls', async () => {
 
   assert.match(html, /#view-options button,#lock\{[\s\S]*?background:#fff;[\s\S]*?color:var\(--muted\);[\s\S]*?border:1px solid var\(--line\);[\s\S]*?font-size:12\.5px/);
 });
+
+test('Grid mode does not expose the hidden canonical viewer', async () => {
+  const [html, app] = await Promise.all([readHtml(), readApp()]);
+
+  assert.match(html, /#stage\.grid-active #app\{visibility:hidden\}/);
+  assert.match(app, /\$\('#stage'\)\.classList\.add\('grid-active'\)/);
+  assert.match(app, /\$\('#stage'\)\.classList\.remove\('grid-active'\)/);
+});

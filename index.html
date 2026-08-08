@@ -40,6 +40,7 @@
     padding:26px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
   #stage{flex:1;position:relative;min-width:0;background:#fff}
   #app{position:absolute;inset:0}
+  #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
   #stage.loading-system canvas{opacity:0;transition:none}
   #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
@@ -312,7 +313,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080806');
+      await loadScript('app.js?v=2026080807');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

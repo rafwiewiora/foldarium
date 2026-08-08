@@ -233,7 +233,8 @@ function startGridLayout() {
   stopGridLayout = () => observer.disconnect();
 }
 function hideGrid() {
-  gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid'); renderGridPages();
+  gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid');
+  $('#stage').classList.remove('grid-active'); renderGridPages();
 }
 function syncGridCameras(cells) {
   const cameraSnapshot = cell => cell.plugin?.canvas3d?.camera?.getSnapshot?.();
@@ -294,7 +295,7 @@ async function buildGrid(preserveCamera = true) {
   const revision = ++gridBuildRevision;
   disposeGridViewers();
   const view = $('#gridview'), cellsBox = $('#gridcells');
-  view.classList.add('on', 'loading-grid'); renderGridPages();
+  view.classList.add('on', 'loading-grid'); $('#stage').classList.add('grid-active'); renderGridPages();
   const cells = gridEntries().map(entry => {
     const card = document.createElement('div');
     card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (entry.choice.correct ? ' correct' : ' wrong') : '');
