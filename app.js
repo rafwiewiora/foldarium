@@ -12,6 +12,7 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const METHOD_NAMES = { af3: 'AF3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
+const GHOST_POSE_ALPHA = 0.18, GHOST_POSE_SIZE = 0.14;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
 // game-able = has a <1.5 AND a >3 pose; all-wrong = EVERY pose > 3; 1.5-3 A limbo items are dropped.
 const CORRECT_THRESH = 1.5, WRONG_THRESH = 3.0;
@@ -79,12 +80,15 @@ async function addRep(struct, selector, type, color, alpha = 1, targetPlugin = p
     type, typeParams: { alpha }, color: 'uniform', colorParams: { value: color },
   });
 }
-async function addPose(struct, carbon, targetPlugin = plugin) {
+async function addPose(struct, carbon, targetPlugin = plugin, {
+  alpha = 1,
+  sizeFactor = 0.24,
+} = {}) {
   let comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'ligand');
   if (!comp) comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return null;
   return targetPlugin.builders.structure.representation.addRepresentation(comp, {
-    type: 'ball-and-stick', typeParams: { sizeFactor: 0.24 },
+    type: 'ball-and-stick', typeParams: { sizeFactor, alpha },
     color: 'element-symbol', colorParams: { carbonColor: { name: 'uniform', params: { value: carbon } } },
   });
 }
@@ -112,6 +116,42 @@ function configurePlugin(targetPlugin) {
     });
   } catch (e) {}
 }
+function cameraChanges(targetPlugin) {
+  return targetPlugin?.canvas3d?.camera?.changed || targetPlugin?.canvas3d?.camera?.stateChanged;
+}
+function pinCameraAfterSettled(targetPlugin, snapshot, settleMs = 300) {
+  if (!targetPlugin?.canvas3d?.camera || !snapshot) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer = null, subscription = null, finished = false;
+    const setSnapshot = () => targetPlugin.canvas3d?.camera?.setState?.(snapshot, 0);
+    const cleanup = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      subscription?.unsubscribe();
+      subscription = null;
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      try { setSnapshot(); resolve(); } catch (error) { reject(error); }
+    };
+    const schedule = () => {
+      if (finished) return;
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(finish, settleMs);
+    };
+    try {
+      subscription = cameraChanges(targetPlugin)?.subscribe(schedule) || null;
+      setSnapshot();
+      schedule();
+    } catch (error) {
+      finished = true;
+      cleanup();
+      reject(error);
+    }
+  });
+}
 const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
 function focusLigandSpheres(targetPlugin, spheres) {
   const valid = spheres.filter(Boolean);
@@ -122,6 +162,24 @@ function focusLigandSpheres(targetPlugin, spheres) {
   return true;
 }
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function clusteredPoseLayers(choices, methodScoped = false) {
+  if (!clustered || cur.revealed && cur.showAnswer) {
+    return choices.map(choice => ({ choice, ghost: false }));
+  }
+  return choices.flatMap(choice => {
+    const cluster = cur.clusters.find(candidate => candidate.members.includes(choice));
+    let members = cluster?.members || [choice];
+    if (methodScoped && choice._method) {
+      members = members.filter(member => member._method === choice._method);
+    }
+    if (members.length < 2) return [{ choice, ghost: false }];
+    return [
+      ...members.filter(member => !sameChoice(member, choice))
+        .map(member => ({ choice: member, ghost: true })),
+      { choice, ghost: false },
+    ];
+  });
+}
 function gridPageMethod() {
   const methods = cur?.gridMethods || [];
   if (!methods.length) return null;
@@ -302,9 +360,14 @@ async function buildGridCell(cell, revision) {
       const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin);
       await addSticks(ps.struct, 0.16, 0.95, cell.plugin);
     }
-    const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
-    await addPose(pose.struct, spec.answer ? (c.correct ? GOOD : BAD) : c.color, cell.plugin);
-    cell.poseSphere = structureSphere(pose.struct);
+    for (const layer of clusteredPoseLayers([c], true)) {
+      const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
+      await addPose(pose.struct,
+        spec.answer ? (layer.choice.correct ? GOOD : BAD) : c.color,
+        cell.plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
+    }
     const hbondPoses = [c.pose_file];
     if (spec.revealed && spec.showXtal && spec.item.xtal_lig_file) {
       const xtal = await loadStruct(spec.item.xtal_lig_file, 'pdb', cell.plugin);
@@ -358,7 +421,7 @@ async function buildGrid(preserveCamera = true) {
       if (revision !== gridBuildRevision) return;
     }
     const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
-    for (const cell of active) cell.plugin.canvas3d.camera.setState(snapshot, 0);
+    await Promise.all(active.map(cell => pinCameraAfterSettled(cell.plugin, snapshot)));
     stopGridCameraSync = syncGridCameras(active);
   }
   view.classList.remove('loading-grid');
@@ -425,17 +488,21 @@ async function buildHbonds(poseUrls) {
   if (pocket) await addHbondsFor(plugin, pocket, poseUrls, hbondData);
 }
 async function buildSingleLayer() {     // only the moving ligand poses (+ crystal truth on reveal)
+  let preservedCamera = null;
+  try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
   await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
   const ligandSpheres = [];
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
   const vis = visibleChoices();
   const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
-  for (const c of shown) {
+  for (const layer of clusteredPoseLayers(shown)) {
+    const c = layer.choice;
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
-    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color);
-    ligandSpheres.push(structureSphere(s.struct));
+    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color, plugin,
+      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+    if (!layer.ghost) ligandSpheres.push(structureSphere(s.struct));
   }
   // crystal reference (true pose) — only after reveal, when toggled on
   const hbondPoses = shown.map(c => c.pose_file);
@@ -447,6 +514,7 @@ async function buildSingleLayer() {     // only the moving ligand poses (+ cryst
     hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
+  await pinCameraAfterSettled(plugin, preservedCamera);
   return ligandSpheres;
 }
 async function buildLayer() {
@@ -772,9 +840,9 @@ function syncButtons() {
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
   $('#modehint').textContent = displayMode === 'grid'
-    ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
+    ? (clustered ? 'One linked viewer per distinct cluster; faint sticks show its other members. Uncluster to inspect every raw pose on this page.'
                  : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
-    : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.';
+    : 'Near-identical poses are grouped into clusters: the representative is solid and its other members are faint sticks. Pick the cluster you believe is correct. Nearby pocket residues are shown as sticks; the crystal answer is hidden.';
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
 }
 
