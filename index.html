@@ -220,6 +220,7 @@
           <button data-p="af3" aria-pressed="false">AF3 protein</button>
         </div>
         <div class="view-actions">
+          <button class="ghost mini" id="surface" style="display:none">Surface</button>
           <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
           <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
         </div>
@@ -287,7 +288,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=20260808');
+      await loadScript('app.js?v=2026080802');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

@@ -38,15 +38,16 @@ let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
 let displayMode = 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
+let showSurface = false;
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let stopGridCameraSync = null, stopGridLayout = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
-let userView = { displayMode: 'all', clustered: true, proteinMode: 'crystal', showHbonds: false };
-const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds }; };
+let userView = { displayMode: 'all', clustered: true, proteinMode: 'crystal', showHbonds: false, showSurface: false };
+const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds, showSurface }; };
 const applyUserView = () => {
-  ({ displayMode, clustered, proteinMode, showHbonds } = userView);
+  ({ displayMode, clustered, proteinMode, showHbonds, showSurface } = userView);
   if (quizSource === 'rnp') proteinMode = 'crystal';   // RnP has no per-pose AF3 protein
 };
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
@@ -62,7 +63,7 @@ const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDD
 function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
-    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #lock, '
+    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #surface, #lock, '
     + '#next, #prev, #myview, #showXtal, #start, #gridpages button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
@@ -264,9 +265,12 @@ async function buildGridCell(cell, revision) {
     const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+    if (cell.spec.showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', urls.color, 0.3, cell.plugin);
     if (urls.pocket) { const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin); await addSticks(ps.struct, 0.16, 0.95, cell.plugin); }
     const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
-    await addPose(pose.struct, cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color, cell.plugin);
+    const poseColor = cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color;
+    await addPose(pose.struct, poseColor, cell.plugin);
+    if (cell.spec.showSurface) await addRep(pose.struct, 'all', 'molecular-surface', poseColor, 0.7, cell.plugin);
     cell.poseSphere = structureSphere(pose.struct);
     if (revision === gridBuildRevision && !cell.disposed) { cell.viewer.handleResize?.(); cell.plugin.canvas3d.requestCameraReset(); }
   } catch (e) {
@@ -298,7 +302,7 @@ async function buildGrid(preserveCamera = true) {
     head.onclick = () => { if (!locked()) onPick(entry.choiceIndex, entry.choice); };
     const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
     return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
-      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer } };
+      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer, showSurface } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
@@ -320,7 +324,7 @@ function restoreCam() { try { if (savedCam) plugin.canvas3d.camera.setState(save
 
 // ---- two layers: a FIXED reference (crystal protein cartoon + crystal pocket sticks, built once per
 //      question so the backbone never moves) and the rebuilt POSE layer (ligands + crystal-reveal). -----
-let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null;
+let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null, currentProteinSurface = false;
 function protUrls() {
   const answer = cur.revealed && cur.showAnswer;
   if (proteinMode === 'af3' && cur.item.afprotein_ref) {   // CAMEO only; RnP has no per-pose AF3 protein
@@ -334,17 +338,19 @@ function protUrls() {
 }
 async function buildProtein() {         // rebuilds ONLY when the target protein changes (no flicker)
   const { prot, pocket } = protUrls();
-  if (prot === currentProtUrl) return;
+  if (prot === currentProtUrl && showSurface === currentProteinSurface) return;
   if (proteinData.length) { const b = plugin.build(); for (const x of proteinData) b.delete(x.ref || x); await b.commit(); proteinData = []; }
   const pr = await loadStruct(prot, 'pdb');
   proteinData.push(pr.data);
-  await addRep(pr.struct, 'polymer', 'cartoon', proteinMode === 'af3' ? AF3PROT : PROT, 0.5);
+  const proteinColor = proteinMode === 'af3' ? AF3PROT : PROT;
+  await addRep(pr.struct, 'polymer', 'cartoon', proteinColor, 0.5);
+  if (showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', proteinColor, 0.3);
   if (pocket) {
     const ps = await loadStruct(pocket, 'pdb');
     proteinData.push(ps.data);
     await addSticks(ps.struct, 0.16, 0.95);
   }
-  currentProtUrl = prot;
+  currentProtUrl = prot; currentProteinSurface = showSurface;
 }
 async function clearLayer() {
   if (!layerData.length && !hbondData.length) return;
@@ -383,7 +389,9 @@ async function buildCanonicalLayer(shown) {
   for (const c of shown) {
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
-    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color);
+    const poseColor = answer ? (c.correct ? GOOD : BAD) : c.color;
+    await addPose(s.struct, poseColor);
+    if (showSurface) await addRep(s.struct, 'all', 'molecular-surface', poseColor, 0.7);
   }
   // crystal reference (true pose) — only after reveal, when toggled on
   const hbondPoses = shown.map(c => c.pose_file);
@@ -391,6 +399,7 @@ async function buildCanonicalLayer(shown) {
     const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
     layerData.push(xl.data);
     await addPose(xl.struct, XTAL);
+    if (showSurface) await addRep(xl.struct, 'all', 'molecular-surface', XTAL, 0.7);
     hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
@@ -569,7 +578,7 @@ function showIntro() {
   $('#setup').style.display = '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
-  $('#hbonds').style.display = 'none';
+  $('#hbonds').style.display = 'none'; $('#surface').style.display = 'none';
   $('#myview').style.display = 'none'; $('#xtalrow').style.display = 'none';
   $('#question-head').style.display = 'none'; $('#ligand').style.display = 'none';
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true;
@@ -809,6 +818,9 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
+  const surface = $('#surface');
+  surface.classList.toggle('on', showSurface);
+  surface.style.display = inPlay ? '' : 'none';
   $('#modehint').textContent = displayMode === 'grid'
     ? (clustered ? 'Linked viewers, one per pose cluster.' : 'Linked viewers, one per raw pose.')
     : 'Pose colours identify choices; they do not indicate correctness.';
@@ -857,7 +869,7 @@ function finish() {
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
-  $('#hbonds').style.display = 'none';
+  $('#hbonds').style.display = 'none'; $('#surface').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   $('#verdict').innerHTML =
@@ -1041,6 +1053,14 @@ async function init() {
     await viewerRebuild.enqueue(() => {
       showHbonds = !showHbonds;
       if (!cur.revealed) rememberView();       // persist across questions like the other view choices
+      syncButtons();
+    });
+  };
+  $('#surface').onclick = async () => {
+    if (interactionBlocked()) return;
+    await viewerRebuild.enqueue(() => {
+      showSurface = !showSurface;
+      if (!cur.revealed) rememberView();
       syncButtons();
     });
   };

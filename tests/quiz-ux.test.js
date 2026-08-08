@@ -14,6 +14,7 @@ test('quiz exposes a minimal primary flow and hides technical controls', async (
   assert.match(html, /<div id="view-options"/);
   assert.match(html, /<details id="answer-details"/);
   assert.match(html, />Submit answer</);
+  assert.match(html, /<button[^>]+id="surface"[^>]*>Surface<\/button>/);
   assert.match(html, /loadScript\('app\.js\?v=\d+'\)/);
 });
 

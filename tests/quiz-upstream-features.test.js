@@ -322,6 +322,86 @@ test('a failed Grid tile is disabled, marked failed, and renders the error as te
   assert.deepEqual(cell.host.htmlAssignments, [], 'exception text must not be injected as HTML');
 });
 
+test('Surface mode adds protein and ligand surfaces in Grid at the requested opacities', async () => {
+  const app = await readApp();
+  const reps = [];
+  const plugin = { canvas3d: { requestCameraReset() {} } };
+  const sandbox = {
+    molstar: { Viewer: { create: async () => ({ plugin, handleResize() {}, dispose() {} }) } },
+    OPTS: {},
+    gridBuildRevision: 2,
+    configurePlugin: () => {},
+    gridProteinUrls: () => ({ prot: 'protein.pdb', pocket: null, color: 0x9aa6b2 }),
+    loadStruct: async url => ({ struct: { url } }),
+    addRep: async (struct, selector, type, color, alpha) => {
+      reps.push({ url: struct.url, selector, type, color, alpha });
+    },
+    addSticks: async () => {},
+    addPose: async () => {},
+    structureSphere: () => null,
+    GOOD: 0x2BA84A,
+    BAD: 0xE23B2E,
+  };
+  const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
+  const cell = {
+    entry: { choice: { pose_file: 'pose.pdb', color: 0x5B8FF9, label: 'A' } },
+    card: fakeElement(),
+    head: fakeElement('button'),
+    host: fakeElement(),
+    viewer: null,
+    plugin: null,
+    disposed: false,
+    spec: { item: {}, proteinMode: 'crystal', answer: false, showSurface: true },
+  };
+
+  await buildGridCell(cell, 2);
+
+  assert.deepEqual(reps, [
+    { url: 'protein.pdb', selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+    { url: 'protein.pdb', selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.3 },
+    { url: 'pose.pdb', selector: 'all', type: 'molecular-surface', color: 0x5B8FF9, alpha: 0.7 },
+  ]);
+});
+
+test('Surface toggle rebuilds the canonical protein and removes its surface when disabled', async () => {
+  const app = await readApp();
+  const reps = [];
+  const deleted = [];
+  const sandbox = {
+    showSurface: true,
+    currentProteinSurface: false,
+    currentProtUrl: null,
+    proteinData: [],
+    proteinMode: 'crystal',
+    PROT: 0x9aa6b2,
+    AF3PROT: 0x8FA8CC,
+    protUrls: () => ({ prot: 'protein.pdb', pocket: null }),
+    loadStruct: async () => ({ data: { ref: 'protein-data' }, struct: {} }),
+    addRep: async (_struct, selector, type, color, alpha) => {
+      reps.push({ selector, type, color, alpha });
+    },
+    addSticks: async () => {},
+    plugin: {
+      build: () => ({
+        delete(ref) { deleted.push(ref); },
+        async commit() {},
+      }),
+    },
+  };
+  const buildProtein = evaluateDeclaration(app, 'async function buildProtein()', sandbox);
+
+  await buildProtein();
+  sandbox.showSurface = false;
+  await buildProtein();
+
+  assert.deepEqual(reps, [
+    { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+    { selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.3 },
+    { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+  ]);
+  assert.deepEqual(deleted, ['protein-data']);
+});
+
 test('Easy eligibility keeps reachable pick puzzles and drops sets whose clusters hide an option', async () => {
   const app = await readApp();
   const thresholds = /const CORRECT_THRESH = ([\d.]+), WRONG_THRESH = ([\d.]+);/.exec(app);
