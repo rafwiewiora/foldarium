@@ -405,14 +405,20 @@ let savedCam = null;
 function saveCam() { try { savedCam = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) { savedCam = null; } }
 function restoreCam() { try { if (savedCam) plugin.canvas3d.camera.setState(savedCam, 0); } catch (e) {} }
 
-// ---- two layers: a FIXED reference (crystal protein cartoon + crystal pocket sticks, built once per
-//      question so the backbone never moves) and the rebuilt POSE layer (ligands + crystal-reveal). -----
+// ---- two layers: a protein/pocket context (fixed for classic questions; pose-specific for Weekly
+//      one-at-a-time) and the rebuilt POSE layer (ligands + crystal-reveal). -----
 let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null, currentPocketUrl = null;
 function protUrls() {
   const answer = cur.revealed && cur.showAnswer;
   if (cur.item.source === 'weekly') {
     const vis = visibleChoices();
     const shown = vis[Math.min(shownOne, vis.length - 1)];
+    // One-at-a-time follows the exact prediction complex. Show-all/reveal uses
+    // the method-neutral receptor anchor into whose frame every pose was
+    // aligned; Grid builds each pose with its matching protein separately.
+    if (displayMode !== 'one' || answer) {
+      return { prot: cur.item.protein_file, pocket: cur.item.pocket_file };
+    }
     return {
       prot: shown?.afprotein_file || cur.item.protein_file,
       pocket: shown?.afpocket_file || cur.item.pocket_file,

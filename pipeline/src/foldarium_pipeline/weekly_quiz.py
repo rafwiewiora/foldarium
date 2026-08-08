@@ -20,9 +20,7 @@ from .clustering import (
 from .contracts import canonical_json, validate_prediction_task
 from .evaluation import (
     EvaluationError,
-    _connectivity_molecule,
     _mapped_rmsd,
-    _symmetry_mappings,
     best_receptor_superposition,
 )
 from .quiz import build_blind_manifest, manifest_sha256
@@ -30,23 +28,28 @@ from .quiz import build_blind_manifest, manifest_sha256
 WEEKLY_QUIZ_STAGE_VERSION = 2
 POCKET_RADIUS_ANGSTROM = 5.0
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
+LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
+SUPPORTED_LEGACY_LIGAND_ORDER = {
+    "openfold3": "0.4.4",
+    "boltz2": "2.2.1",
+}
+LIGAND_AUTOMORPHISM_CAP = 100_000
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
     """Raised when completed predictions cannot form a safe blind round."""
 
 
-def _dependencies() -> tuple[Any, Any, Any, Any]:
+def _dependencies() -> tuple[Any, Any, Any]:
     try:
         import gemmi
         import numpy
         from rdkit import Chem
-        from rdkit.Chem import rdDetermineBonds
     except (ImportError, ModuleNotFoundError) as exc:
         raise WeeklyQuizAssemblyError(
             "weekly quiz assembly requires Gemmi, NumPy, and RDKit"
         ) from exc
-    return gemmi, numpy, Chem, rdDetermineBonds
+    return gemmi, numpy, Chem
 
 
 def _safe_path(root: Path, relative: Any, field: str) -> Path:
@@ -67,7 +70,7 @@ def _heavy_atoms(residue: Any) -> list[Any]:
     return [atom for atom in residue if atom.element.name != "H"]
 
 
-def _selected_ligand(target: Mapping[str, Any]) -> tuple[str, int, set[str]]:
+def _selected_ligand(target: Mapping[str, Any]) -> tuple[str, int, set[str], str]:
     metadata = target.get("metadata")
     selected = metadata.get("selected_ligand") if isinstance(metadata, Mapping) else None
     if not isinstance(selected, Mapping):
@@ -78,14 +81,27 @@ def _selected_ligand(target: Mapping[str, Any]) -> tuple[str, int, set[str]]:
         raise WeeklyQuizAssemblyError("selected ligand component_id is invalid")
     if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
         raise WeeklyQuizAssemblyError("selected ligand heavy_atoms is invalid")
-    chain_ids = {
-        chain_id
+    ligand_entities = [
+        entity
         for entity in target.get("entities", [])
         if isinstance(entity, Mapping) and entity.get("type") == "ligand"
-        for chain_id in entity.get("chain_ids", [])
+    ]
+    if len(ligand_entities) != 1:
+        raise WeeklyQuizAssemblyError(
+            "weekly clustering requires exactly one selected ligand entity"
+        )
+    ligand_entity = ligand_entities[0]
+    smiles = ligand_entity.get("smiles")
+    if not isinstance(smiles, str) or not smiles.strip():
+        raise WeeklyQuizAssemblyError(
+            "selected ligand requires task SMILES for weekly clustering"
+        )
+    chain_ids = {
+        chain_id
+        for chain_id in ligand_entity.get("chain_ids", [])
         if isinstance(chain_id, str)
     }
-    return component, heavy_atoms, chain_ids
+    return component, heavy_atoms, chain_ids, smiles.strip()
 
 
 def _prediction_ligand(model: Any, heavy_atoms: int, preferred_chains: set[str]) -> Any:
@@ -225,31 +241,107 @@ def _pairwise_pose_distances(
     ligands: list[Any],
     pose_coordinates: list[list[list[float]]],
     *,
+    ligand_smiles: str,
     numpy: Any,
     Chem: Any,
-    rdDetermineBonds: Any,
-) -> list[list[float]]:
-    """Return graph-symmetry RMSDs in the shared receptor frame.
+) -> tuple[list[list[float]], dict[str, Any]]:
+    """Return canonical-graph-symmetry RMSDs in the shared receptor frame.
 
-    The ligand coordinates have already received their receptor transform.  No
-    ligand Kabsch fit is performed here.  Mutual graph matching makes a
-    connectivity disagreement a hard assembly failure rather than quietly
-    comparing atom order or producing a partial substructure score.
+    The task SMILES is the authoritative graph. Both pinned adapters preserve
+    its RDKit heavy-atom order in their output coordinates, although they use
+    different atom names. Validating the ordered element sequence prevents a
+    changed adapter/output contract from silently producing a partial score.
+    The ligand coordinates have already received their receptor transform; no
+    ligand Kabsch fit is performed here.
     """
 
+    if not isinstance(ligand_smiles, str) or not ligand_smiles.strip():
+        raise WeeklyQuizAssemblyError(
+            "selected ligand requires canonical task SMILES for clustering"
+        )
+    source_molecule = Chem.MolFromSmiles(ligand_smiles)
+    if source_molecule is None:
+        raise WeeklyQuizAssemblyError(
+            "selected ligand task SMILES could not be parsed for clustering"
+        )
+    source_molecule = Chem.RemoveHs(source_molecule)
+    expected_elements = [atom.GetAtomicNum() for atom in source_molecule.GetAtoms()]
+    if not expected_elements:
+        raise WeeklyQuizAssemblyError("selected ligand task SMILES has no heavy atoms")
+    for index, ligand in enumerate(ligands):
+        atoms = _heavy_atoms(ligand)
+        observed_elements = [atom.element.atomic_number for atom in atoms]
+        if observed_elements != expected_elements:
+            raise WeeklyQuizAssemblyError(
+                "prediction ligand does not preserve task-SMILES "
+                f"heavy-atom order for blind choice {index + 1}"
+            )
+        atom_names = [atom.name.strip() for atom in atoms]
+        if any(not name for name in atom_names) or len(set(atom_names)) != len(atom_names):
+            raise WeeklyQuizAssemblyError(
+                f"prediction ligand atom names are not unique for blind choice {index + 1}"
+            )
+
+    # Construct an element-labelled connectivity graph from the task SMILES.
+    # Bond order is deliberately collapsed so aromatic/resonance annotation
+    # cannot differ across method writers, while adjacency remains exact.
+    topology_builder = Chem.RWMol()
+    for atomic_number in expected_elements:
+        atom = Chem.Atom(int(atomic_number))
+        atom.SetNoImplicit(True)
+        topology_builder.AddAtom(atom)
+    topology_edges: list[list[int]] = []
+    for bond in source_molecule.GetBonds():
+        left, right = sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+        topology_builder.AddBond(left, right, Chem.BondType.SINGLE)
+        topology_edges.append([int(left), int(right)])
+    topology_edges.sort()
+    topology = topology_builder.GetMol()
+    mappings = topology.GetSubstructMatches(
+        topology,
+        uniquify=False,
+        useChirality=False,
+        maxMatches=LIGAND_AUTOMORPHISM_CAP + 1,
+    )
+    if not mappings:
+        raise WeeklyQuizAssemblyError(
+            "canonical ligand graph has no self mapping for clustering"
+        )
+    if len(mappings) > LIGAND_AUTOMORPHISM_CAP:
+        raise WeeklyQuizAssemblyError(
+            "canonical ligand graph exceeds the clustering automorphism limit"
+        )
+
+    topology_payload = {
+        "atomic_numbers": expected_elements,
+        "edges": topology_edges,
+    }
+    mapping_audit = {
+        "policy": LEGACY_LIGAND_ORDER_POLICY,
+        "source_smiles_sha256": hashlib.sha256(
+            ligand_smiles.encode("utf-8")
+        ).hexdigest(),
+        "source_topology_sha256": hashlib.sha256(
+            canonical_json(topology_payload).encode("utf-8")
+        ).hexdigest(),
+        "heavy_atom_count": len(expected_elements),
+        "automorphism_count": len(mappings),
+        "automorphism_cap": LIGAND_AUTOMORPHISM_CAP,
+        "rdkit_version": str(Chem.rdBase.rdkitVersion),
+    }
     try:
-        molecules = [
-            _connectivity_molecule(ligand, Chem, rdDetermineBonds)
-            for ligand in ligands
-        ]
         coordinates = [numpy.array(pose, dtype=float) for pose in pose_coordinates]
+        expected_shape = (len(expected_elements), 3)
+        for index, coordinate_array in enumerate(coordinates):
+            if coordinate_array.shape != expected_shape or not bool(
+                numpy.all(numpy.isfinite(coordinate_array))
+            ):
+                raise WeeklyQuizAssemblyError(
+                    f"prediction ligand coordinates are invalid for blind choice {index + 1}"
+                )
         matrix = [[0.0 for _ in ligands] for _ in ligands]
         for left in range(len(ligands)):
             for right in range(left + 1, len(ligands)):
-                mappings = _symmetry_mappings(molecules[left], molecules[right])
-                # A same-sized query can still match a graph with additional
-                # edges. Requiring the reverse match rejects that mismatch.
-                _symmetry_mappings(molecules[right], molecules[left])
                 distance, _mapping = _mapped_rmsd(
                     coordinates[left], coordinates[right], mappings, numpy
                 )
@@ -257,10 +349,10 @@ def _pairwise_pose_distances(
                     raise EvaluationError("ligand pair RMSD is not finite")
                 matrix[left][right] = distance
                 matrix[right][left] = distance
-        return matrix
+        return matrix, mapping_audit
     except EvaluationError as exc:
         raise WeeklyQuizAssemblyError(
-            "prediction ligand connectivity does not support unambiguous clustering"
+            "canonical ligand graph does not support unambiguous clustering"
         ) from exc
 
 
@@ -275,7 +367,11 @@ def _normalized_runs(
         task = validate_prediction_task(row.get("task_payload"))
         if row.get("status") != "succeeded" or row.get("run_id") != task["task_id"]:
             raise WeeklyQuizAssemblyError("campaign output does not match a succeeded task")
-        if row.get("method") != task["method"] or row.get("target_id") != task["target"]["target_id"]:
+        if (
+            row.get("method") != task["method"]
+            or row.get("method_version") != task["method_version"]
+            or row.get("target_id") != task["target"]["target_id"]
+        ):
             raise WeeklyQuizAssemblyError("campaign output identity disagrees with its task")
         samples = row.get("samples")
         if not isinstance(samples, list) or not samples:
@@ -360,7 +456,7 @@ def stage_weekly_quiz(
     if (root / "stage.json").exists():
         raise WeeklyQuizAssemblyError("stage destination already contains stage.json")
     root.mkdir(parents=True, exist_ok=True)
-    gemmi, numpy, Chem, rdDetermineBonds = _dependencies()
+    gemmi, numpy, Chem = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
     staged_items: list[dict[str, Any]] = []
 
@@ -372,7 +468,14 @@ def stage_weekly_quiz(
         target = ordered_runs[0]["task_payload"]["target"]
         if any(row["task_payload"]["target"] != target for row in ordered_runs[1:]):
             raise WeeklyQuizAssemblyError(f"target {target_id} differs across method tasks")
-        component_id, heavy_atom_count, ligand_chains = _selected_ligand(target)
+        component_id, heavy_atom_count, ligand_chains, ligand_smiles = _selected_ligand(target)
+        for row in ordered_runs:
+            expected_version = SUPPORTED_LEGACY_LIGAND_ORDER.get(row["method"])
+            if row.get("method_version") != expected_version:
+                raise WeeklyQuizAssemblyError(
+                    "weekly clustering has no verified ligand atom-order mapping for "
+                    f"{row['method']} {row.get('method_version')}"
+                )
         raw_choices: list[dict[str, Any]] = []
         for row in ordered_runs:
             for sample in sorted(
@@ -487,13 +590,18 @@ def stage_weekly_quiz(
         atom_counts = {len(coordinates) for coordinates in pose_coordinates}
         if atom_counts != {heavy_atom_count}:
             raise WeeklyQuizAssemblyError(f"target {target_id} ligand atom counts are inconsistent")
-        distance_matrix = _pairwise_pose_distances(
-            ligands,
-            pose_coordinates,
-            numpy=numpy,
-            Chem=Chem,
-            rdDetermineBonds=rdDetermineBonds,
-        )
+        try:
+            distance_matrix, mapping_audit = _pairwise_pose_distances(
+                ligands,
+                pose_coordinates,
+                ligand_smiles=ligand_smiles,
+                numpy=numpy,
+                Chem=Chem,
+            )
+        except WeeklyQuizAssemblyError as exc:
+            raise WeeklyQuizAssemblyError(
+                f"could not cluster target {target_id}: {exc}"
+            ) from exc
         identities = [
             {
                 "run_id": choice["run_id"],
@@ -513,6 +621,24 @@ def stage_weekly_quiz(
             raise WeeklyQuizAssemblyError(
                 f"could not cluster blind poses for {target_id}"
             ) from exc
+        mapping_audit["choices"] = [
+            {
+                "choice_digest": choice_order_digest(
+                    round_id,
+                    target_id,
+                    {
+                        "run_id": choice["run_id"],
+                        "sample_id": choice["sample_id"],
+                        "artifact_sha256": choice["artifact_sha256"],
+                    },
+                ),
+                "method": choice["method"],
+                "method_version": choice["method_version"],
+                "mapping_mode": "source-heavy-atom-index-order",
+            }
+            for choice in choice_rows
+        ]
+        clustering["ligand_atom_mapping"] = mapping_audit
         for choice, assignment in zip(choice_rows, assignments):
             choice["cluster_id"] = assignment["cluster_id"]
             choice["is_rep"] = assignment["is_rep"]

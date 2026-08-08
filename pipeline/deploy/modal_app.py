@@ -735,12 +735,40 @@ if modal is not None:
                 closes_at=closes_at,
                 open_round=open_round,
             )
-        return {
+        cluster_counts = [
+            int(item["clustering"]["cluster_count"])
+            for item in stage["items"]
+        ]
+        summary = {
             **published,
             "complete_target_count": len(stage["items"]),
+            "cluster_count_total": sum(cluster_counts),
+            "cluster_count_min": min(cluster_counts),
+            "cluster_count_max": max(cluster_counts),
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
         }
+        print(
+            "foldarium.weekly_quiz_assembly "
+            + json.dumps(
+                {
+                    key: summary[key]
+                    for key in (
+                        "status",
+                        "round_id",
+                        "complete_target_count",
+                        "item_count",
+                        "choice_count",
+                        "cluster_count_total",
+                        "cluster_count_min",
+                        "cluster_count_max",
+                        "blind_manifest_sha256",
+                    )
+                },
+                sort_keys=True,
+            )
+        )
+        return summary
 
     @app.function(
         image=quiz_assembly_image,

@@ -16,7 +16,9 @@ from typing import Any, Mapping, Sequence
 from .contracts import canonical_json, stable_id
 
 CLUSTER_RMSD_ANGSTROM = 2.0
-CLUSTERING_VERSION = "foldarium-weekly-receptor-aligned-graph-symmetry-greedy/v1"
+CLUSTERING_VERSION = (
+    "foldarium-weekly-receptor-aligned-canonical-smiles-symmetry-greedy/v1"
+)
 DISTANCE_DIGEST_DECIMALS = 6
 
 
@@ -166,8 +168,9 @@ def cluster_distance_matrix(
         "threshold_angstrom": threshold,
         "threshold_comparison": "<",
         "distance_metric": (
-            "heavy-atom graph-symmetry-aware RMSD after shared receptor alignment; "
-            "no ligand superposition"
+            "canonical-SMILES graph-symmetry-aware heavy-atom RMSD after shared "
+            "receptor alignment; adapter-preserved input atom order; no ligand "
+            "superposition"
         ),
         "ordering": "sha256(round/item/run/sample/artifact identity); method label excluded",
         "anchor_choice_digest": digests[order[0]],

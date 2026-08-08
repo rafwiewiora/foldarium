@@ -49,7 +49,7 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {
   const app = await read('app.js');
   assert.match(app, /if \(item\.source === 'weekly'\) \{[\s\S]*?choice\.afprotein_file/);
-  assert.match(app, /if \(cur\.item\.source === 'weekly'\) \{[\s\S]*?shown\.afprotein_file/);
+  assert.match(app, /if \(cur\.item\.source === 'weekly'\) \{[\s\S]*?displayMode !== 'one'[\s\S]*?shown\?\.afprotein_file/);
   assert.match(app, /cluster: choice\.cluster_id \|\| `choice-\$\{index\}`/);
   assert.match(app, /clustering_available: clusteringAvailable/);
 });

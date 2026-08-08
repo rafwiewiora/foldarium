@@ -5,10 +5,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
 
 from foldarium_pipeline.contracts import make_prediction_task
-from foldarium_pipeline.evaluation import EvaluationError
 from foldarium_pipeline import weekly_quiz as weekly_quiz_module
 from foldarium_pipeline.weekly_quiz import (
     publish_staged_weekly_quiz,
@@ -155,62 +154,95 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
         )
 
 
+def fake_ligand(atomic_numbers: list[int]) -> list[SimpleNamespace]:
+    from rdkit import Chem
+
+    periodic_table = Chem.GetPeriodicTable()
+    return [
+        SimpleNamespace(
+            name=f"{periodic_table.GetElementSymbol(number)}{index + 1}",
+            element=SimpleNamespace(
+                atomic_number=number,
+                name=periodic_table.GetElementSymbol(number),
+            ),
+        )
+        for index, number in enumerate(atomic_numbers)
+    ]
+
+
+@unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class PairwisePoseDistanceTests(unittest.TestCase):
     def test_uses_shared_receptor_frame_without_ligand_kabsch(self) -> None:
         import numpy
+        from rdkit import Chem
 
         coordinates = [
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
             [[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
         ]
-        with (
-            patch.object(
-                weekly_quiz_module,
-                "_connectivity_molecule",
-                side_effect=lambda ligand, _chem, _bonds: ligand,
-            ),
-            patch.object(
-                weekly_quiz_module,
-                "_symmetry_mappings",
-                return_value=((0, 1),),
-            ),
-        ):
-            matrix = weekly_quiz_module._pairwise_pose_distances(
-                ["left", "right"],
-                coordinates,
-                numpy=numpy,
-                Chem=object(),
-                rdDetermineBonds=object(),
-            )
+        matrix, audit = weekly_quiz_module._pairwise_pose_distances(
+            [fake_ligand([6, 6]), fake_ligand([6, 6])],
+            coordinates,
+            ligand_smiles="CC",
+            numpy=numpy,
+            Chem=Chem,
+        )
         # A ligand-only fit would collapse this translation to zero.
         self.assertAlmostEqual(matrix[0][1], 1.0)
+        self.assertEqual(audit["policy"], weekly_quiz_module.LEGACY_LIGAND_ORDER_POLICY)
+        self.assertEqual(audit["heavy_atom_count"], 2)
 
-    def test_connectivity_mismatch_fails_closed(self) -> None:
+    def test_uses_smiles_topology_even_when_coordinates_are_distorted(self) -> None:
         import numpy
+        from rdkit import Chem
 
-        with (
-            patch.object(
-                weekly_quiz_module,
-                "_connectivity_molecule",
-                side_effect=lambda ligand, _chem, _bonds: ligand,
-            ),
-            patch.object(
-                weekly_quiz_module,
-                "_symmetry_mappings",
-                side_effect=EvaluationError("connectivity mismatch"),
-            ),
+        matrix, _audit = weekly_quiz_module._pairwise_pose_distances(
+            [fake_ligand([6, 6]), fake_ligand([6, 6])],
+            [
+                [[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]],
+                [[0.0, 0.0, 0.0], [50.0, 0.0, 0.0]],
+            ],
+            ligand_smiles="CC",
+            numpy=numpy,
+            Chem=Chem,
+        )
+        self.assertGreater(matrix[0][1], 30.0)
+
+    def test_scores_symmetric_source_atom_permutation_as_equivalent(self) -> None:
+        import numpy
+        from rdkit import Chem
+
+        matrix, audit = weekly_quiz_module._pairwise_pose_distances(
+            [fake_ligand([6, 8, 6]), fake_ligand([6, 8, 6])],
+            [
+                [[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
+            ],
+            ligand_smiles="COC",
+            numpy=numpy,
+            Chem=Chem,
+        )
+        self.assertAlmostEqual(matrix[0][1], 0.0)
+        self.assertGreaterEqual(audit["automorphism_count"], 2)
+
+    def test_wrong_output_element_order_fails_closed(self) -> None:
+        import numpy
+        from rdkit import Chem
+
+        with self.assertRaisesRegex(
+            weekly_quiz_module.WeeklyQuizAssemblyError,
+            "does not preserve task-SMILES heavy-atom order",
         ):
-            with self.assertRaisesRegex(
-                weekly_quiz_module.WeeklyQuizAssemblyError,
-                "connectivity",
-            ):
-                weekly_quiz_module._pairwise_pose_distances(
-                    ["left", "right"],
-                    [[[0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]],
-                    numpy=numpy,
-                    Chem=object(),
-                    rdDetermineBonds=object(),
-                )
+            weekly_quiz_module._pairwise_pose_distances(
+                [fake_ligand([6, 7]), fake_ligand([6, 6])],
+                [
+                    [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                    [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                ],
+                ligand_smiles="CN",
+                numpy=numpy,
+                Chem=Chem,
+            )
 
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
@@ -300,6 +332,16 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertIn("distance_matrix_sha256", clustering)
             self.assertEqual(clustering["threshold_angstrom"], 2.0)
             self.assertIn("no ligand superposition", clustering["distance_metric"])
+            mapping = clustering["ligand_atom_mapping"]
+            self.assertEqual(
+                mapping["policy"],
+                weekly_quiz_module.LEGACY_LIGAND_ORDER_POLICY,
+            )
+            self.assertEqual(mapping["heavy_atom_count"], 15)
+            self.assertEqual(
+                {(row["method"], row["method_version"]) for row in mapping["choices"]},
+                {("openfold3", "0.4.4"), ("boltz2", "2.2.1")},
+            )
 
 
 if __name__ == "__main__":
