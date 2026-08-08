@@ -53,3 +53,15 @@ test('viewer controls form an always-visible bottom toolbar', async () => {
   assert.doesNotMatch(html, /<summary>View options<\/summary>/);
   assert.match(html, /#view-options \.seg\{display:contents/);
 });
+
+test('question context is arranged at the top of the viewer', async () => {
+  const html = await readHtml();
+  const stage = html.indexOf('<div id="stage">');
+  const context = html.indexOf('<div id="viewer-question">');
+  const ligand = html.indexOf('id="ligand"', context);
+  const instruction = html.indexOf('id="instruction"', context);
+
+  assert.ok(stage < context && context < ligand && ligand < instruction);
+  assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
+  assert.match(html, /\.badge\{[\s\S]*?right:16px/);
+});
