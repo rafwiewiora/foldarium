@@ -45,3 +45,12 @@ test('view options are anchored to the bottom of the viewer', async () => {
   assert.ok(viewOptions > stageStart && viewOptions < stageEnd);
   assert.match(html, /#view-options\{position:absolute;[\s\S]*?bottom:16px/);
 });
+
+test('viewer controls are unbundled behind a compact caret', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /#view-options\{[\s\S]*?background:transparent;[\s\S]*?border:0/);
+  assert.match(html, /#view-options summary::after\{content:"⌃"/);
+  assert.match(html, /#view-options\[open\] summary::after\{content:"⌄"/);
+  assert.match(html, /#view-options \.seg\{display:contents/);
+});
