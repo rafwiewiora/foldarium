@@ -36,6 +36,8 @@ def source_items() -> list[dict]:
                     "method": "openfold3",
                     "method_version": "0.4.4",
                     "pose_uri": "supabase://quiz/pose-a.pdb",
+                    "cluster_id": "cluster-a",
+                    "is_rep": True,
                 },
                 {
                     "run_id": "run-boltz",
@@ -43,6 +45,8 @@ def source_items() -> list[dict]:
                     "method": "boltz2",
                     "method_version": "2.2.1",
                     "pose_uri": "supabase://quiz/pose-b.pdb",
+                    "cluster_id": "cluster-a",
+                    "is_rep": False,
                 },
             ],
         }
@@ -209,6 +213,8 @@ class WednesdayRevealServiceTests(unittest.TestCase):
         }
         self.assertTrue(reveal_choices["run-of3"]["correct"])
         self.assertFalse(reveal_choices["run-boltz"]["correct"])
+        self.assertTrue(reveal_choices["run-of3"]["accepted_correct"])
+        self.assertTrue(reveal_choices["run-boltz"]["accepted_correct"])
         self.assertEqual(reveal_choices["run-of3"]["method"], "openfold3")
         self.assertEqual(reveal_choices["run-boltz"]["method"], "boltz2")
         self.assertEqual(reveal_choices["run-of3"]["id"], choice_ids["run-of3"])

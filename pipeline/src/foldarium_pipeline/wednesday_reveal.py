@@ -29,6 +29,7 @@ from .quiz import QUIZ_SCHEMA_VERSION, build_reveal_manifest, manifest_sha256
 
 RCSB_DOWNLOAD_ORIGIN = "https://files.rcsb.org/download"
 REVEAL_POLICY_VERSION = "foldarium-weekly-reveal/v1"
+ACCEPTANCE_POLICY_VERSION = "foldarium-weekly-cluster-any-member/v1"
 # This is the strict correctness boundary rendered by the current Foldarium
 # viewer.  A value exactly at the boundary is not correct.
 CORRECT_RMSD_ANGSTROM = 1.5
@@ -489,6 +490,29 @@ def run_wednesday_reveal(
                     **_evaluation_fields(score),
                 }
             )
+        raw_correct_by_id = {
+            choice["id"]: bool(choice["correct"])
+            for choice in scored_choices
+        }
+        cluster_by_id = {
+            choice["id"]: choice.get("cluster_id")
+            for choice in item["choices"]
+        }
+        accepted_by_cluster: dict[str, bool] = {}
+        for choice_id, cluster_id in cluster_by_id.items():
+            if isinstance(cluster_id, str) and cluster_id:
+                accepted_by_cluster[cluster_id] = (
+                    accepted_by_cluster.get(cluster_id, False)
+                    or raw_correct_by_id[choice_id]
+                )
+        for choice in scored_choices:
+            cluster_id = cluster_by_id.get(choice["id"])
+            choice["accepted_correct"] = (
+                accepted_by_cluster[cluster_id]
+                if isinstance(cluster_id, str) and cluster_id
+                else bool(choice["correct"])
+            )
+            choice["acceptance_policy_version"] = ACCEPTANCE_POLICY_VERSION
         scored_items.append({"id": item["id"], "choices": scored_choices})
 
     reveal = build_reveal_manifest(blind, scored_items)
