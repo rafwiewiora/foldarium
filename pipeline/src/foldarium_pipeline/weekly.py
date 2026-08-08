@@ -328,6 +328,7 @@ def modal_weekly_hook() -> Mapping[str, Any]:
             plan,
             inputs["source_files"],
             adapter_version=ADAPTER_VERSION,
+            max_attempts=1,
         )
     target_summaries = []
     for target in plan["targets"]:

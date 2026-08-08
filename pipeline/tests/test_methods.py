@@ -23,8 +23,20 @@ class MethodAdapterTests(unittest.TestCase):
             self.assertEqual(query["chains"][0]["molecule_type"], "protein")
             self.assertEqual(plan.argv[:2], ("/bin/bash", "-lc"))
             self.assertEqual(plan.argv[3:5], ("foldarium-openfold3", "run_openfold"))
-            self.assertIn("--use-msa-server", plan.argv)
+            self.assertIn("--query_json", plan.argv)
+            self.assertIn("--output_dir", plan.argv)
+            self.assertIn("--inference_ckpt_name", plan.argv)
+            self.assertIn("--num_model_seeds", plan.argv)
+            self.assertIn("--num_diffusion_samples", plan.argv)
+            self.assertIn("--use_msa_server=True", plan.argv)
+            self.assertNotIn("--query-json", plan.argv)
             self.assertNotIn("shell=True", plan.argv)
+
+    def test_openfold3_plan_can_disable_msa_server(self) -> None:
+        task = make_task("openfold3", {"msa_mode": "none"})
+        with tempfile.TemporaryDirectory() as temporary:
+            plan = OpenFold3Adapter().plan(task, Path(temporary))
+            self.assertIn("--use_msa_server=False", plan.argv)
 
     def test_boltz2_plan_uses_json_compatible_yaml(self) -> None:
         task = make_task(

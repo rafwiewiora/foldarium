@@ -69,24 +69,26 @@ class OpenFold3Adapter(MethodAdapter):
             "foldarium-openfold3",
             "run_openfold",
             "predict",
-            "--query-json",
+            "--query_json",
             str(input_path),
-            "--output-dir",
+            "--output_dir",
             str(output_dir),
-            "--inference-ckpt-name",
+            "--inference_ckpt_name",
             checkpoint,
-            "--num-model-seeds",
+            "--num_model_seeds",
             str(seeds),
-            "--num-diffusion-samples",
+            "--num_diffusion_samples",
             str(samples),
         ]
         if msa_mode == "server":
-            argv.append("--use-msa-server")
+            argv.append("--use_msa_server=True")
+        elif msa_mode == "none":
+            argv.append("--use_msa_server=False")
         runner_yaml = config.get("runner_yaml")
         if runner_yaml:
             if not isinstance(runner_yaml, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,256}", runner_yaml):
                 raise ContractError("runner_yaml must be a safe path supplied by the runtime image")
-            argv.extend(["--runner-yaml", runner_yaml])
+            argv.extend(["--runner_yaml", runner_yaml])
         return CommandPlan(tuple(argv), input_path, output_dir)
 
     def collect(self, task: Mapping[str, Any], output_dir: Path) -> list[dict[str, Any]]:

@@ -29,7 +29,7 @@ from .sizing import SizingError, count_tokens, resolve_gpu_class, validate_gpu_c
 WWPDB_SEQUENCE_URL = "https://www.wwpdb.org/files/new_release_structure_sequence_canonical.tsv"
 WWPDB_NONPOLYMER_URL = "https://www.wwpdb.org/files/new_release_structure_nonpolymer.tsv"
 INTAKE_SCHEMA_VERSION = "foldarium.weekly-intake/v1"
-ADAPTER_VERSION = "foldarium-pipeline/0.2"
+ADAPTER_VERSION = "foldarium-pipeline/0.3"
 
 POLYMER_TYPES = {"protein": "protein", "peptide": "protein", "dna": "dna", "rna": "rna"}
 NUCLEIC_ACID_CANONICAL_ALPHABET = frozenset("ACGTUIN")

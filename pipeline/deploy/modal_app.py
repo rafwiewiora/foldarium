@@ -182,6 +182,25 @@ def _execute(task_json: str | Mapping[str, Any]) -> dict[str, Any]:
     result = execute_task_json(task, work_root=WORK_ROOT, dry_run=False)
     if not isinstance(result, dict):
         raise TypeError("execute_task_json must return a dict")
+    if result.get("status") == "failed":
+        # The core result remains deliberately terse. Preserve a bounded tail in
+        # private Modal logs so an operator can distinguish a CLI/configuration
+        # error from a model/runtime failure without launching a diagnostic GPU
+        # retry. Method stderr must never be copied into a public quiz payload.
+        stderr_path = Path(WORK_ROOT) / task["task_id"] / "logs" / "stderr.log"
+        if stderr_path.is_file():
+            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-8_000:]
+            print(
+                "foldarium.worker.stderr "
+                + json.dumps(
+                    {
+                        "task_id": task["task_id"],
+                        "method": task["method"],
+                        "stderr_tail": stderr_tail,
+                    },
+                    sort_keys=True,
+                )
+            )
     publisher.publish_result(
         result,
         Path(WORK_ROOT) / task["task_id"] / "output",
@@ -332,6 +351,48 @@ if modal is not None:
             "status": "ready",
             "cache": OPENFOLD_CACHE_ROOT,
             "parameters": f"{OPENFOLD_CACHE_ROOT}/parameters",
+        }
+
+    @app.function(
+        image=openfold3_image,
+        cpu=2.0,
+        memory=8192,
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def validate_openfold3_cli() -> dict[str, Any]:
+        """Validate our pinned command-line contract without reserving a GPU."""
+
+        completed = subprocess.run(
+            [
+                "/bin/bash",
+                "-lc",
+                f"source {OPENFOLD3_ACTIVATE} && exec \"$@\"",
+                "foldarium-openfold3",
+                "run_openfold",
+                "predict",
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2 * 60,
+        )
+        output = completed.stdout + "\n" + completed.stderr
+        expected = (
+            "--query_json",
+            "--output_dir",
+            "--inference_ckpt_name",
+            "--num_model_seeds",
+            "--num_diffusion_samples",
+            "--use_msa_server",
+        )
+        present = {option: option in output for option in expected}
+        return {
+            "status": "ready" if completed.returncode == 0 and all(present.values()) else "invalid",
+            "returncode": completed.returncode,
+            "expected_options": present,
+            "diagnostic_tail": "" if completed.returncode == 0 else output[-4_000:],
         }
 
     @app.function(
