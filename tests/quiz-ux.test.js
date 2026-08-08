@@ -14,6 +14,7 @@ test('quiz exposes a minimal primary flow and hides technical controls', async (
   assert.match(html, /<details id="view-options"/);
   assert.match(html, /<details id="answer-details"/);
   assert.match(html, />Submit answer</);
+  assert.match(html, /loadScript\('app\.js\?v=\d+'\)/);
 });
 
 test('quiz has responsive and accessible state cues', async () => {

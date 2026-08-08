@@ -266,7 +266,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js');
+      await loadScript('app.js?v=20260808');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

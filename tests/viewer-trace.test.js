@@ -318,7 +318,7 @@ test('recorder import failure does not block quiz application startup', async ()
   const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
   const recorderImport = html.indexOf("await import('./viewer-trace.js')");
   const warning = html.indexOf("console.warn('Viewer recording disabled:'", recorderImport);
-  const appLoad = html.indexOf("await loadScript('app.js')", recorderImport);
+  const appLoad = html.indexOf("await loadScript('app.js?v=", recorderImport);
 
   assert.notEqual(recorderImport, -1);
   assert.ok(warning > recorderImport);
