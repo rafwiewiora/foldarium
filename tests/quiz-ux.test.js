@@ -66,3 +66,11 @@ test('question context is arranged at the top of the viewer', async () => {
   assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
   assert.match(html, /\.badge\{[\s\S]*?right:16px/);
 });
+
+test('quiz chrome uses Geist Sans without changing the molecular viewer', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /@font-face\{font-family:"Geist Sans";[\s\S]*?geist:vf@5\.3\.0/);
+  assert.match(html, /#side,#viewer-question,#view-options,\.badge\{font-family:"Geist Sans"/);
+  assert.doesNotMatch(html, /html,body\{[^}]*font-family:"Geist Sans"/);
+});

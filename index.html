@@ -6,6 +6,8 @@
 <title>Pose Quiz · which predicted pose is correct?</title>
 <link rel="icon" href="data:,"/>
 <style>
+  @font-face{font-family:"Geist Sans";font-style:normal;font-display:swap;font-weight:100 900;
+    src:url("https://cdn.jsdelivr.net/fontsource/fonts/geist:vf@5.3.0/latin-wght-normal.woff2") format("woff2-variations")}
   :root{
     --bg:#f3f5f7; --panel:#fff; --line:#dce1e7; --ink:#101418; --muted:#59636f;
     --faint:#737e8c; --accent:#1687b8; --good:#167c36; --bad:#c93128; --gold:#b77900;
@@ -13,6 +15,8 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  #side,#viewer-question,#view-options,.badge{font-family:"Geist Sans",ui-sans-serif,system-ui,sans-serif}
+  button,input,summary{font-family:inherit}
   #gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
   #gate[hidden],#wrap[hidden]{display:none!important}
   #gate .card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);
