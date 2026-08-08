@@ -35,3 +35,13 @@ test('quiz panel uses a spacious high-contrast light theme', async () => {
   assert.match(html, /h1\{font-size:19px/);
   assert.match(html, /\.choice\{[\s\S]*?min-height:44px;[\s\S]*?font-size:14px/);
 });
+
+test('view options are anchored to the bottom of the viewer', async () => {
+  const html = await readHtml();
+  const stageStart = html.indexOf('<div id="stage">');
+  const stageEnd = html.indexOf('</div>\n</div>', stageStart);
+  const viewOptions = html.indexOf('<details id="view-options"');
+
+  assert.ok(viewOptions > stageStart && viewOptions < stageEnd);
+  assert.match(html, /#view-options\{position:absolute;[\s\S]*?bottom:16px/);
+});
