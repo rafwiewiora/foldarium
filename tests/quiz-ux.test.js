@@ -90,11 +90,13 @@ test('left pose selections use stacked menu rows with arrows', async () => {
 
   assert.match(html, /#choices\{gap:0;[\s\S]*?border-top:1px solid #cfd4d8/);
   assert.match(html, /#choices \.choice\{min-height:58px;[\s\S]*?border-radius:0/);
-  assert.match(html, /linear-gradient\(90deg,#f4f5f2 0%,#f4f5f2 36%,var\(--choice-color\) 100%\)/);
+  assert.match(html, /#choices \.choice\{[\s\S]*?background:var\(--choice-color\);[\s\S]*?color:#fff/);
+  assert.doesNotMatch(html, /#choices \.choice\{[^}]*linear-gradient/);
   assert.match(html, /#choices \.sw\{display:none\}/);
   assert.match(html, /#choices \.choice \.tag\{[\s\S]*?color:#fff/);
   assert.match(html, /#choices \.choice \.tag::after\{content:"→"/);
   assert.match(app, /b\.style\.setProperty\('--choice-color', hex\(c\.color\)\)/);
   assert.match(app, /nb\.style\.setProperty\('--choice-color', '#5a6675'\)/);
+  assert.match(app, /color:rgba\(255,255,255,.82\)/);
   assert.match(app, /None of these are correct<\/span><span class="tag" data-tag><\/span>/);
 });

@@ -498,7 +498,7 @@ function renderUI() {
       const label = displayMode === 'grid' ? c.label : cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
       nm = `Pose ${label}` + (count > 1
-        ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
+        ? ` <span style="color:rgba(255,255,255,.82)">(${count} poses)</span>` : '');
     } else nm = `Pose ${c.label}`;
     b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
     b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
