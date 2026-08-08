@@ -16,6 +16,19 @@ from .methods import ADAPTERS
 GPU_SAMPLE_INTERVAL_SECONDS = 2.0
 
 
+def _prediction_failure_code(stderr: str) -> str:
+    """Classify only actionable accelerator exhaustion without exposing logs."""
+
+    lowered = stderr.casefold()
+    markers = (
+        "cuda out of memory",
+        "cuda_error_out_of_memory",
+        "outofmemoryerror",
+        "failed to allocate memory on device",
+    )
+    return "gpu_out_of_memory" if any(marker in lowered for marker in markers) else "prediction_failed"
+
+
 class _GpuMemorySampler:
     """Record peak device memory while a prediction subprocess runs.
 
@@ -168,6 +181,7 @@ def execute_task_json(
             "status": "failed",
             "duration_seconds": duration,
             "exit_code": completed.returncode,
+            "error_code": _prediction_failure_code(completed.stderr),
             "error": "prediction command failed; inspect worker logs",
         }
     try:

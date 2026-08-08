@@ -46,6 +46,22 @@ PublicFetcher = Callable[[str], bytes]
 class WeeklyNotReady(RuntimeError):
     """Raised when the complete public Saturday input set is not available yet."""
 
+    def __init__(self, message: str, *, availability: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.availability = dict(availability or {})
+
+
+def _wwpdb_availability(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Return log-safe evidence that both official prerelease files were decoded."""
+
+    return {
+        "wwpdb_sequence_rows": snapshot["sequence_rows"],
+        "wwpdb_sequence_sha256": snapshot["sequence_sha256"],
+        "wwpdb_nonpolymer_rows": snapshot["nonpolymer_rows"],
+        "wwpdb_nonpolymer_sha256": snapshot["nonpolymer_sha256"],
+        "wwpdb_entry_count": snapshot["entry_count"],
+    }
+
 
 def fetch_public(url: str, *, timeout_seconds: float = 60.0) -> bytes:
     """Fetch only an allow-listed wwPDB/CAMEO public URL with a size ceiling."""
@@ -74,6 +90,35 @@ def fetch_public(url: str, *, timeout_seconds: float = 60.0) -> bytes:
     return data
 
 
+def collect_wwpdb_inputs(
+    release_date: date,
+    *,
+    fetcher: PublicFetcher = fetch_public,
+) -> dict[str, Any]:
+    """Fetch the two authoritative Saturday prerelease files without CAMEO."""
+
+    if not isinstance(release_date, date):
+        raise WeeklyNotReady("release_date must be a date")
+    sequence = fetcher(WWPDB_SEQUENCE_URL)
+    nonpolymer = fetcher(WWPDB_NONPOLYMER_URL)
+    try:
+        snapshot = parse_wwpdb_snapshot(sequence, nonpolymer)
+    except ValueError as exc:
+        raise WeeklyNotReady("wwPDB prerelease files could not be decoded") from exc
+    readiness = _wwpdb_availability(snapshot)
+    return {
+        "snapshot": snapshot,
+        "source_files": {
+            "wwpdb_sequence": (sequence, "text/tab-separated-values"),
+            "wwpdb_nonpolymer": (nonpolymer, "text/tab-separated-values"),
+        },
+        "availability": {
+            "release_date": release_date.isoformat(),
+            **readiness,
+        },
+    }
+
+
 def collect_public_inputs(
     release_date: date,
     *,
@@ -90,12 +135,20 @@ def collect_public_inputs(
     nonpolymer = fetcher(WWPDB_NONPOLYMER_URL)
     sitemap = fetcher(CAMEO_SITEMAP_URL)
     try:
+        snapshot = parse_wwpdb_snapshot(sequence, nonpolymer)
+    except ValueError as exc:
+        raise WeeklyNotReady("wwPDB prerelease files could not be decoded") from exc
+    readiness = _wwpdb_availability(snapshot)
+    try:
         target_ids = parse_sitemap_targets(sitemap.decode("utf-8"), release_date)
     except (UnicodeDecodeError, ValueError) as exc:
-        raise WeeklyNotReady("CAMEO sitemap could not be decoded") from exc
+        raise WeeklyNotReady(
+            "CAMEO sitemap could not be decoded", availability=readiness
+        ) from exc
     if not target_ids:
         raise WeeklyNotReady(
-            f"CAMEO has not advertised targets for {release_date.isoformat()} yet"
+            f"CAMEO has not advertised targets for {release_date.isoformat()} yet",
+            availability={**readiness, "cameo_target_pages": 0},
         )
 
     pages: dict[str, bytes] = {}
@@ -142,10 +195,14 @@ def collect_public_inputs(
         sample = ", ".join(sorted(failures)[:5])
         raise WeeklyNotReady(
             f"CAMEO target pages are incomplete ({len(payloads)}/{len(target_ids)} decoded; "
-            f"failures: {sample or 'unknown'})"
+            f"failures: {sample or 'unknown'})",
+            availability={
+                **readiness,
+                "cameo_advertised_targets": len(target_ids),
+                "cameo_target_pages": len(payloads),
+            },
         )
 
-    snapshot = parse_wwpdb_snapshot(sequence, nonpolymer)
     snapshot.update(
         {
             "cameo_sitemap_url": CAMEO_SITEMAP_URL,
@@ -195,13 +252,12 @@ def build_public_weekly_plan(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fetch public sources and return ``(plan, replay_inputs)`` without writes."""
 
-    inputs = collect_public_inputs(
-        release_date, fetcher=fetcher, fetch_workers=fetch_workers
-    )
+    if isinstance(fetch_workers, bool) or not isinstance(fetch_workers, int) or fetch_workers < 1:
+        raise WeeklyNotReady("fetch_workers must be a positive integer")
+    inputs = collect_wwpdb_inputs(release_date, fetcher=fetcher)
     plan = build_weekly_plan(
         release_date=release_date,
         ww_pdb_snapshot=inputs["snapshot"],
-        cameo_payloads=inputs["payloads"],
         output_prefix=output_prefix,
         policy=policy,
     )
@@ -232,6 +288,7 @@ def modal_weekly_hook() -> Mapping[str, Any]:
     except ValueError as exc:
         raise WeeklyNotReady("FOLDARIUM_WEEKLY_MAX_TARGETS must be an integer") from exc
     bucket = os.environ.get("FOLDARIUM_STORAGE_BUCKET", "foldarium-predictions")
+    gpu_class = os.environ.get("FOLDARIUM_WEEKLY_GPU_CLASS") or None
     coordinator: SupabaseCoordinator | None = None
     register = os.environ.get("FOLDARIUM_WEEKLY_REGISTER") == "1"
     campaign_id = f"wwpdb-{release_date.isoformat()}"
@@ -248,7 +305,7 @@ def modal_weekly_hook() -> Mapping[str, Any]:
     try:
         plan, inputs = build_public_weekly_plan(
             release_date,
-            policy=WeeklyPolicy(max_targets=max_targets),
+            policy=WeeklyPolicy(max_targets=max_targets, gpu_class=gpu_class),
             output_prefix=f"supabase://{bucket}/runs",
         )
     except WeeklyNotReady as exc:
@@ -258,6 +315,7 @@ def modal_weekly_hook() -> Mapping[str, Any]:
             "release_date": release_date.isoformat(),
             "campaign_id": campaign_id,
             "reason": str(exc),
+            "availability": exc.availability,
             "registration": {"status": "not-requested"},
         }
     if not plan["tasks"]:
@@ -271,10 +329,35 @@ def modal_weekly_hook() -> Mapping[str, Any]:
             inputs["source_files"],
             adapter_version=ADAPTER_VERSION,
         )
+    target_summaries = []
+    for target in plan["targets"]:
+        ligand = target.get("metadata", {}).get("selected_ligand", {})
+        target_tasks = [
+            task for task in plan["tasks"] if task["target"]["target_id"] == target["target_id"]
+        ]
+        target_summaries.append(
+            {
+                "target_id": target["target_id"],
+                "ligand": ligand.get("component_id"),
+                "ligand_heavy_atoms": ligand.get("heavy_atoms"),
+                "polymer_entities": sum(
+                    entity["type"] != "ligand" for entity in target["entities"]
+                ),
+                "polymer_residues": sum(
+                    len(entity.get("sequence", ""))
+                    for entity in target["entities"]
+                    if entity["type"] != "ligand"
+                ),
+                "gpu_classes": {
+                    task["method"]: task["resources"]["gpu_class"] for task in target_tasks
+                },
+            }
+        )
     return {
         "tasks": plan["tasks"],
         "plan_sha256": plan["plan_sha256"],
         "budget": plan["budget"],
+        "selected_targets": target_summaries,
         "availability": inputs["availability"],
         "registration": registration,
     }
@@ -287,6 +370,7 @@ __all__ = [
     "WeeklyNotReady",
     "build_public_weekly_plan",
     "collect_public_inputs",
+    "collect_wwpdb_inputs",
     "fetch_public",
     "modal_weekly_hook",
 ]

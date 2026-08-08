@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Mapping
@@ -23,7 +24,7 @@ from .methods.openfold3 import (
     OPENFOLD3_VERSION,
 )
 from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand
-from .sizing import SizingError, count_tokens, resolve_gpu_class
+from .sizing import SizingError, count_tokens, resolve_gpu_class, validate_gpu_class
 
 WWPDB_SEQUENCE_URL = "https://www.wwpdb.org/files/new_release_structure_sequence_canonical.tsv"
 WWPDB_NONPOLYMER_URL = "https://www.wwpdb.org/files/new_release_structure_nonpolymer.tsv"
@@ -31,6 +32,7 @@ INTAKE_SCHEMA_VERSION = "foldarium.weekly-intake/v1"
 ADAPTER_VERSION = "foldarium-pipeline/0.2"
 
 POLYMER_TYPES = {"protein": "protein", "peptide": "protein", "dna": "dna", "rna": "rna"}
+NUCLEIC_ACID_CANONICAL_ALPHABET = frozenset("ACGTUIN")
 
 
 class IntakeError(ValueError):
@@ -47,6 +49,7 @@ class WeeklyPolicy:
     timeout_seconds: int = 20 * 60
     msa_mode: str = "server"
     protein_only: bool = True
+    gpu_class: str | None = None
 
     def validate(self) -> "WeeklyPolicy":
         for name in ("heavy_atom_minimum", "max_targets", "diffusion_samples", "timeout_seconds"):
@@ -59,6 +62,8 @@ class WeeklyPolicy:
             raise IntakeError("msa_mode must be server, none, or empty")
         if not isinstance(self.protein_only, bool):
             raise IntakeError("protein_only must be boolean")
+        if self.gpu_class is not None:
+            validate_gpu_class(self.gpu_class)
         return self
 
 
@@ -222,6 +227,82 @@ def target_from_cameo(payload: Mapping[str, Any], policy: WeeklyPolicy) -> dict[
     return validate_target(target)
 
 
+def target_from_wwpdb(
+    pdb_id: str,
+    entry: Mapping[str, Any],
+    release_date: date,
+    policy: WeeklyPolicy,
+) -> dict[str, Any] | None:
+    """Build a conservative protein/ligand target from the Saturday files alone.
+
+    The canonical sequence prerelease intentionally omits polymer type and
+    stoichiometry. For the initial protein-only campaign, sequences made entirely
+    from the nucleic-acid alphabet are rejected rather than guessed. One copy of
+    each distinct remaining sequence is the same explicit unknown-stoichiometry
+    policy used for CAMEO intake.
+    """
+
+    policy.validate()
+    if not policy.protein_only:
+        raise IntakeError("wwPDB-only intake currently requires protein_only=true")
+    if not isinstance(pdb_id, str) or not re.fullmatch(r"[0-9A-Z]{4}", pdb_id):
+        raise IntakeError("wwPDB entry has an invalid PDB ID")
+    sequences = entry.get("sequences")
+    ligands = entry.get("ligands")
+    if not isinstance(sequences, list) or not isinstance(ligands, list):
+        raise IntakeError(f"wwPDB entry {pdb_id} has invalid sequence/ligand rows")
+    selected = select_ligand(ligands, heavy_atom_minimum=policy.heavy_atom_minimum)
+    if selected is None:
+        return None
+
+    distinct_sequences: list[str] = []
+    seen: set[str] = set()
+    for raw in sequences:
+        sequence = "".join(str(raw).split()).upper()
+        if not sequence or not sequence.isalpha():
+            raise IntakeError(f"wwPDB entry {pdb_id} has an invalid canonical sequence")
+        if set(sequence) <= NUCLEIC_ACID_CANONICAL_ALPHABET:
+            raise IntakeError("ambiguous-or-nucleic-acid-polymer")
+        if sequence not in seen:
+            seen.add(sequence)
+            distinct_sequences.append(sequence)
+    if not distinct_sequences:
+        raise IntakeError("no-protein-like-polymer-sequence")
+
+    entities: list[dict[str, Any]] = [
+        {"type": "protein", "chain_ids": [_chain_id(index)], "sequence": sequence}
+        for index, sequence in enumerate(distinct_sequences)
+    ]
+    entities.append(
+        {
+            "type": "ligand",
+            "chain_ids": [_chain_id(len(entities))],
+            "smiles": selected["smiles"],
+        }
+    )
+    return validate_target(
+        {
+            "target_id": pdb_id,
+            "entities": entities,
+            "source": {
+                "kind": "wwpdb-prerelease",
+                "week": release_date.isoformat(),
+                "pdb_id": pdb_id,
+            },
+            "metadata": {
+                "selected_ligand": {
+                    "component_id": selected["component_id"],
+                    "heavy_atoms": selected["heavy_atoms"],
+                    "inchi": selected.get("inchi"),
+                },
+                "stoichiometry_policy": "one-copy-per-distinct-prerelease-sequence/v1",
+                "polymer_type_policy": "reject-nucleic-alphabet-otherwise-protein/v1",
+                "selection_policy_version": SELECTION_POLICY_VERSION,
+            },
+        }
+    )
+
+
 def _priority(target: Mapping[str, Any], release_date: date) -> tuple[int, str]:
     label = str(target.get("metadata", {}).get("cameo_label") or "").lower()
     label_priority = {"ligand": 0, "hard": 1, "medium": 2, "easy": 3}.get(label, 4)
@@ -285,7 +366,7 @@ def build_method_tasks(
     tasks: list[dict[str, Any]] = []
     for method in selected_methods:
         _, version, image, config = available[method]
-        gpu_class = resolve_gpu_class(target, config)
+        gpu_class = resolve_gpu_class(target, config, explicit=policy.gpu_class)
         tasks.append(
             make_prediction_task(
                 campaign_id=campaign_id,
@@ -308,7 +389,7 @@ def build_weekly_plan(
     *,
     release_date: date,
     ww_pdb_snapshot: Mapping[str, Any],
-    cameo_payloads: Iterable[Mapping[str, Any]],
+    cameo_payloads: Iterable[Mapping[str, Any]] | None = None,
     output_prefix: str,
     policy: WeeklyPolicy | None = None,
     generated_at: datetime | None = None,
@@ -323,31 +404,56 @@ def build_weekly_plan(
     campaign_id = f"wwpdb-{release_date.isoformat()}"
     accepted: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for payload in cameo_payloads:
-        source = payload.get("target") if isinstance(payload, Mapping) else None
-        source_id = str(source.get("id", "unknown")) if isinstance(source, Mapping) else "unknown"
-        try:
-            target = target_from_cameo(payload, policy)
-            if target is None:
-                skipped.append({"target_id": source_id, "reason": "no-eligible-drug-like-ligand"})
-                continue
-            if target["source"]["week"] != release_date.isoformat():
-                skipped.append({"target_id": source_id, "reason": "wrong-release-week"})
-                continue
-            polymer_types = {
-                entity["type"] for entity in target["entities"] if entity["type"] != "ligand"
-            }
-            if policy.protein_only and polymer_types != {"protein"}:
-                skipped.append(
-                    {"target_id": source_id, "reason": "unsupported-nonprotein-polymer"}
-                )
-                continue
-            # Fail before task creation if neither configured backend class can
-            # safely hold the target under the current conservative estimator.
-            resolve_gpu_class(target, {"msa_mode": policy.msa_mode})
-            accepted.append(target)
-        except (IntakeError, SizingError, ValueError) as exc:
-            skipped.append({"target_id": source_id, "reason": str(exc)})
+    intake_source = "cameo-prerelease" if cameo_payloads is not None else "wwpdb-prerelease"
+    if cameo_payloads is None:
+        entries = ww_pdb_snapshot.get("entries")
+        if not isinstance(entries, Mapping):
+            raise IntakeError("ww_pdb_snapshot entries are missing")
+        source_rows: Iterable[tuple[str, Any]] = sorted(entries.items())
+        for source_id, entry in source_rows:
+            try:
+                if not isinstance(entry, Mapping):
+                    raise IntakeError("invalid wwPDB prerelease entry")
+                target = target_from_wwpdb(source_id, entry, release_date, policy)
+                if target is None:
+                    skipped.append(
+                        {"target_id": source_id, "reason": "no-eligible-drug-like-ligand"}
+                    )
+                    continue
+                resolve_gpu_class(target, {"msa_mode": policy.msa_mode})
+                accepted.append(target)
+            except (IntakeError, SizingError, ValueError) as exc:
+                skipped.append({"target_id": source_id, "reason": str(exc)})
+    else:
+        for payload in cameo_payloads:
+            source = payload.get("target") if isinstance(payload, Mapping) else None
+            source_id = (
+                str(source.get("id", "unknown")) if isinstance(source, Mapping) else "unknown"
+            )
+            try:
+                target = target_from_cameo(payload, policy)
+                if target is None:
+                    skipped.append(
+                        {"target_id": source_id, "reason": "no-eligible-drug-like-ligand"}
+                    )
+                    continue
+                if target["source"]["week"] != release_date.isoformat():
+                    skipped.append({"target_id": source_id, "reason": "wrong-release-week"})
+                    continue
+                polymer_types = {
+                    entity["type"]
+                    for entity in target["entities"]
+                    if entity["type"] != "ligand"
+                }
+                if policy.protein_only and polymer_types != {"protein"}:
+                    skipped.append(
+                        {"target_id": source_id, "reason": "unsupported-nonprotein-polymer"}
+                    )
+                    continue
+                resolve_gpu_class(target, {"msa_mode": policy.msa_mode})
+                accepted.append(target)
+            except (IntakeError, SizingError, ValueError) as exc:
+                skipped.append({"target_id": source_id, "reason": str(exc)})
 
     accepted.sort(key=lambda target: _priority(target, release_date))
     diversified: list[dict[str, Any]] = []
@@ -380,7 +486,11 @@ def build_weekly_plan(
         "campaign": {
             "campaign_id": campaign_id,
             "name": f"Foldarium blind week {release_date.isoformat()}",
-            "source": "wwPDB prerelease + CAMEO selected targets",
+            "source": (
+                "wwPDB Saturday prerelease"
+                if intake_source == "wwpdb-prerelease"
+                else "wwPDB prerelease + CAMEO selected targets"
+            ),
             "release_date": release_date.isoformat(),
             "selection_policy_version": SELECTION_POLICY_VERSION,
             "status": "intake",
@@ -390,7 +500,9 @@ def build_weekly_plan(
                 "diffusion_samples": policy.diffusion_samples,
                 "msa_mode": policy.msa_mode,
                 "protein_only": policy.protein_only,
+                "gpu_class_override": policy.gpu_class,
                 "methods": ["openfold3", "boltz2"],
+                "intake_source": intake_source,
             },
         },
         "snapshot": {key: value for key, value in ww_pdb_snapshot.items() if key != "entries"},
@@ -429,4 +541,5 @@ __all__ = [
     "build_method_tasks",
     "parse_wwpdb_snapshot",
     "target_from_cameo",
+    "target_from_wwpdb",
 ]

@@ -42,6 +42,33 @@ class StageNoveltyReportTests(unittest.TestCase):
         self.assertIsNone(report["items"][1]["novel"])
         self.assertEqual(report["novelty_pending_items"], 1)
 
+    def test_completed_result_becomes_content_addressed_curation_row(self) -> None:
+        result = {
+            "item_id": "1ABC",
+            "week": "2026.07.11",
+            "ligand": "DRG",
+            "protein_sha256": "a" * 64,
+            "xtal_ligand_sha256": "b" * 64,
+            "cutoff": "2021-09-30",
+            "novel_threshold": 0.25,
+            "scorer_version": "test/v1",
+            "foldseek_database": "pdb100",
+            "train_pdb": "2XYZ",
+            "train_het": "LIG",
+            "train_identity": 0.4,
+            "train_max_protein_identity": 0.8,
+            "train_align_rmsd": 1.2,
+            "train_shape_overlap": 0.55,
+            "evaluated_at": "2026-08-08T00:00:00+00:00",
+            "novel": False,
+        }
+        rows = MODULE.curation_rows({"1ABC": result})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision"], "familiar")
+        self.assertEqual(rows[0]["release_week"], "2026-07-11")
+        self.assertEqual(rows[0]["metrics"]["train_shape_overlap"], 0.55)
+        self.assertRegex(rows[0]["decision_id"], r"^curation_[0-9a-f]+$")
+
 
 if __name__ == "__main__":
     unittest.main()

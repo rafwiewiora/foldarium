@@ -34,6 +34,9 @@ and [scheduled functions](https://modal.com/docs/guide/cron) before production d
 
 OpenFold3 uses the official 0.4-pixi / OpenFold3 0.4.4 OCI index pinned by
 immutable digest.
+Modal runs under an injected Python 3.12 control interpreter. The upstream OF3 Pixi
+environment is activated only around `setup_openfold` and `run_openfold` subprocesses so
+its Python and runtime packages cannot shadow Modal's own dependencies.
 The initial function requests an A100-40GB, matching upstream's commonly tested
 baseline; route genuinely larger targets to a separately costed A100-80GB policy
 instead of silently changing the standard campaign runtime.
@@ -71,6 +74,12 @@ submit flag absent, the scheduled function returns the target count, accelerator
 mix, and maximum GPU-seconds as `planned-not-submitted`. Change
 `FOLDARIUM_WEEKLY_CRON` in the environment used by `modal deploy` to move the
 schedule without changing core code.
+
+`FOLDARIUM_WEEKLY_GPU_CLASS` is an explicit operator calibration override. The
+first production round pins both methods to `l4` and records sampled
+`peak_gpu_memory_mib`; a CUDA OOM is stored as `gpu_out_of_memory` and is never
+retried automatically. Remove the override only after replacing the provisional
+generic sizing ladder with measured, method-specific thresholds.
 
 The deployment adapter embeds only those non-secret weekly switches into the
 CPU control image. Supabase credentials are supplied separately by the

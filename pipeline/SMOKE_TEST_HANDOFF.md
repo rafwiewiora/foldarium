@@ -581,11 +581,14 @@ CPU-only bootstrap runs before any GPU work.
 
 1. The Modal GPU functions still carried a six-hour outer timeout while the task budget was
    900 s. Capped at 20 minutes (`GPU_FUNCTION_TIMEOUT_SECONDS`).
-2. `_add_core` cleared the image entrypoint. The official OpenFold3 image activates its
-   pixi environment there, so clearing it hid both the interpreter and the OF3 CLI.
-3. Preserving the entrypoint was not enough: Modal inspects an image for a Python
-   interpreter without going through `ENTRYPOINT`. The environment's `bin` directory is now
-   published on `PATH` as well, read from the image's own `/opt/activate.sh`.
+2. The original smoke environment needed the official OpenFold3 entrypoint to expose its
+   Pixi interpreter and CLI. The current upstream image now contains Python 3.14, which is
+   incompatible with the legacy Modal builder's injected `grpclib` runtime. Production now
+   injects a standalone Python 3.12 for Modal and clears the upstream entrypoint.
+3. OpenFold3 activation is scoped to the method subprocess instead: both `setup_openfold`
+   and `run_openfold` execute through `/bin/bash -lc`, source `/opt/activate.sh`, and pass all
+   command arguments through `"$@"`. This retains the pinned CUDA/Triton/libtorch/Pixi
+   environment without letting it replace Modal's control interpreter.
 4. With `include_source=False`, `modal_app.py` was never shipped into the image, so every
    container failed with `ModuleNotFoundError: No module named 'modal_app'` and crash-looped.
    The file is now added explicitly, and this module's local-path logic is guarded by
@@ -598,6 +601,25 @@ The OpenFold3 bootstrap downloads `components.bcif` (63 MB) into
 so it is not persisted by the cache Volume and is re-fetched on every OpenFold3 container
 start. It costs a couple of seconds and did not affect this test, but the cache bootstrap
 does not cover it.
+
+### Production weekly readiness verified (2026-08-08 UTC)
+
+The `molspace/main` deployment polls Saturdays every 15 minutes from 03:00 through 06:45
+UTC. A manual production tick after the 03:00 boundary decoded both official wwPDB files:
+381 entries, 1,543 canonical-sequence rows, and 834 nonpolymer rows. CAMEO had not yet
+advertised target pages, so the tick returned `waiting-for-inputs` and neither registered a
+campaign nor spawned GPU work. The log record includes independent row counts and SHA-256
+digests for both prerelease files.
+
+The CPU-only OpenFold3 cache bootstrap then completed with `status: ready`. Production is
+bounded to two selected targets, one concurrent container per method, and at most four GPU
+jobs across OpenFold3 and Boltz-2 once the wwPDB files are ready and the plan is atomically
+registered in Supabase. CAMEO availability is an independent later AF3-import concern and
+does not gate Foldarium's own predictions.
+
+For the first production calibration, both methods are explicitly pinned to L4 rather than
+using the unmeasured generic token ladder. Every result samples peak device memory; CUDA OOM
+is a durable `gpu_out_of_memory` failure with no automatic retry or silent A100 escalation.
 
 ### Control-plane state verified
 

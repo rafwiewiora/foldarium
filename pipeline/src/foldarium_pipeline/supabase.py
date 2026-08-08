@@ -510,6 +510,35 @@ class SupabaseCoordinator(SupabasePublisher):
             )
         return bool(rows)
 
+    def record_curation_decisions(
+        self, decisions: list[Mapping[str, Any]]
+    ) -> Any:
+        """Record private, immutable selection or rejection decisions."""
+
+        if not isinstance(decisions, list) or not decisions:
+            raise SupabasePublicationError("curation decisions must be a non-empty list")
+        normalized = [
+            _json_object(decision, f"curation decisions[{index}]")
+            for index, decision in enumerate(decisions)
+        ]
+        for index, decision in enumerate(normalized):
+            for field in ("decision_id", "source", "stage", "target_id"):
+                _safe_identifier(decision.get(field), f"curation decisions[{index}].{field}")
+            outcome = decision.get("decision")
+            reason = decision.get("reason")
+            if not isinstance(outcome, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", outcome):
+                raise SupabasePublicationError("curation decision outcome is invalid")
+            if not isinstance(reason, str) or not 1 <= len(reason) <= 500:
+                raise SupabasePublicationError("curation decision reason is invalid")
+            digest = decision.get("input_sha256")
+            if digest is not None and (
+                not isinstance(digest, str) or not _SHA256.fullmatch(digest)
+            ):
+                raise SupabasePublicationError("curation decision input_sha256 is invalid")
+            _json_object(decision.get("metrics", {}), "curation decision metrics")
+            _json_object(decision.get("provenance", {}), "curation decision provenance")
+        return self._rpc("record_curation_decisions", {"p_decisions": normalized})
+
     def campaign_prediction_outputs(self, campaign_id: str) -> list[dict[str, Any]]:
         """Return succeeded run/sample rows with their private complex artifacts."""
 
@@ -740,13 +769,20 @@ class SupabaseCoordinator(SupabasePublisher):
                 raise SupabasePublicationError("target package digest does not match staged input")
             run_rows.append(row)
 
+        campaign_configuration = _json_object(
+            campaign.get("configuration", {}), "campaign.configuration"
+        )
+        intake_source = _safe_identifier(
+            campaign_configuration.get("intake_source", "cameo-prerelease"),
+            "campaign.configuration.intake_source",
+        )
         campaign_row = {
             "campaign_id": campaign_id,
             "name": campaign.get("name"),
             "source": campaign.get("source"),
             "release_date": release_date,
             "selection_policy_version": campaign.get("selection_policy_version"),
-            "configuration": campaign.get("configuration", {}),
+            "configuration": campaign_configuration,
             "status": "predicting",
             "metadata": {
                 "weekly_plan_sha256": plan_digest,
@@ -754,13 +790,83 @@ class SupabaseCoordinator(SupabasePublisher):
                 "budget": normalized.get("budget", {}),
             },
         }
+        decisions: list[dict[str, Any]] = []
+        decision_provenance = {
+            "plan_sha256": plan_digest,
+            "selection_policy_version": campaign.get("selection_policy_version"),
+            "adapter_version": adapter_version,
+        }
+        for target in targets:
+            target_id = _safe_identifier(target.get("target_id"), "target_id")
+            decisions.append(
+                {
+                    "decision_id": stable_id(
+                        "curation",
+                        {
+                            "source": intake_source,
+                            "stage": "weekly-intake",
+                            "target_id": target_id,
+                            "plan_sha256": plan_digest,
+                        },
+                    ),
+                    "source": intake_source,
+                    "stage": "weekly-intake",
+                    "target_id": target_id,
+                    "decision": "selected",
+                    "reason": "selected-by-bounded-weekly-policy",
+                    "input_sha256": plan_digest,
+                    "metrics": {
+                        "selected_ligand": target.get("metadata", {}).get(
+                            "selected_ligand"
+                        ),
+                        "cameo_label": target.get("metadata", {}).get("cameo_label"),
+                    },
+                    "provenance": decision_provenance,
+                }
+            )
+        skipped = normalized.get("skipped", [])
+        if not isinstance(skipped, list) or not all(
+            isinstance(row, Mapping) for row in skipped
+        ):
+            raise SupabasePublicationError("plan.skipped must be an array of objects")
+        for row in skipped:
+            target_id = _safe_identifier(row.get("target_id"), "skipped target_id")
+            reason = row.get("reason")
+            if not isinstance(reason, str) or not reason or len(reason) > 500:
+                raise SupabasePublicationError("skipped target reason is invalid")
+            decisions.append(
+                {
+                    "decision_id": stable_id(
+                        "curation",
+                        {
+                            "source": intake_source,
+                            "stage": "weekly-intake",
+                            "target_id": target_id,
+                            "reason": reason,
+                            "plan_sha256": plan_digest,
+                        },
+                    ),
+                    "source": intake_source,
+                    "stage": "weekly-intake",
+                    "target_id": target_id,
+                    "decision": "rejected",
+                    "reason": reason,
+                    "input_sha256": plan_digest,
+                    "metrics": {},
+                    "provenance": decision_provenance,
+                }
+            )
+        decisions.sort(key=lambda row: (row["target_id"], row["decision"], row["reason"]))
         snapshot = {
             "snapshot_id": stable_id("snapshot", {"plan_sha256": plan_digest}),
             "campaign_id": campaign_id,
             "release_date": release_date,
             "plan_sha256": plan_digest,
             "files": stored_sources,
-            "metadata": normalized.get("snapshot", {}),
+            "metadata": {
+                **_json_object(normalized.get("snapshot", {}), "plan.snapshot"),
+                "selection_decisions": decisions,
+            },
         }
         payload = {
             "p_snapshot": snapshot,

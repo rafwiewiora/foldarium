@@ -21,6 +21,8 @@ class MethodAdapterTests(unittest.TestCase):
             payload = json.loads(plan.input_path.read_text())
             query = payload["queries"]["test-target"]
             self.assertEqual(query["chains"][0]["molecule_type"], "protein")
+            self.assertEqual(plan.argv[:2], ("/bin/bash", "-lc"))
+            self.assertEqual(plan.argv[3:5], ("foldarium-openfold3", "run_openfold"))
             self.assertIn("--use-msa-server", plan.argv)
             self.assertNotIn("shell=True", plan.argv)
 

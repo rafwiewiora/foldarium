@@ -32,6 +32,8 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "benchmark" / "prep"))
 import numpy as np  # noqa: E402
 
 import build_training_similarity as bts  # noqa: E402
+from foldarium_pipeline.contracts import canonical_json, stable_id  # noqa: E402
+from foldarium_pipeline.supabase import SupabaseCoordinator  # noqa: E402
 
 CUTOFF = "2021-09-30"
 NOVEL_THRESHOLD = 0.25
@@ -217,6 +219,79 @@ def update_report(report: dict[str, Any], results: dict[str, Any]) -> int:
     return updated
 
 
+def curation_rows(results: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build immutable Supabase rows from completed novelty classifications."""
+
+    rows: list[dict[str, Any]] = []
+    for item_id, result in sorted(results.items()):
+        if not isinstance(result, dict) or not isinstance(result.get("novel"), bool):
+            continue
+        input_digest = hashlib.sha256(
+            canonical_json(
+                {
+                    "protein_sha256": result.get("protein_sha256"),
+                    "xtal_ligand_sha256": result.get("xtal_ligand_sha256"),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        decision = "novel" if result["novel"] else "familiar"
+        overlap = result.get("train_shape_overlap")
+        if decision == "novel":
+            reason = (
+                "no-eligible-pre-cutoff-training-ligand"
+                if overlap is None
+                else "training-ligand-overlap-below-0.25"
+            )
+        else:
+            reason = "training-ligand-overlap-at-least-0.25"
+        week = result.get("week")
+        release_week = str(week).replace(".", "-") if week else None
+        provenance = {
+            "scorer_version": result.get("scorer_version"),
+            "foldseek_database": result.get("foldseek_database"),
+            "cutoff": result.get("cutoff"),
+            "novel_threshold": result.get("novel_threshold"),
+            "protein_sha256": result.get("protein_sha256"),
+            "xtal_ligand_sha256": result.get("xtal_ligand_sha256"),
+            "evaluated_at": result.get("evaluated_at"),
+        }
+        metrics = {
+            key: result.get(key)
+            for key in (
+                "train_pdb",
+                "train_het",
+                "train_identity",
+                "train_max_protein_identity",
+                "train_align_rmsd",
+                "train_shape_overlap",
+            )
+        }
+        identity = {
+            "source": "cameo-public-catchup",
+            "stage": "foldseek-novelty",
+            "target_id": item_id,
+            "input_sha256": input_digest,
+            "scorer_version": result.get("scorer_version"),
+        }
+        rows.append(
+            {
+                "decision_id": stable_id("curation", identity),
+                "source": "cameo-public-catchup",
+                "stage": "foldseek-novelty",
+                "target_id": item_id,
+                "campaign_id": None,
+                "snapshot_id": None,
+                "release_week": release_week,
+                "decision": decision,
+                "reason": reason,
+                "input_sha256": input_digest,
+                "metrics": metrics,
+                "provenance": provenance,
+            }
+        )
+    return rows
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage-dir", required=True)
@@ -225,6 +300,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--only", help="comma-separated staged PDB IDs")
     parser.add_argument("--update-report", action="store_true")
+    parser.add_argument(
+        "--publish-supabase",
+        action="store_true",
+        help="record every completed novelty decision through the private Supabase RPC",
+    )
     return parser
 
 
@@ -277,6 +357,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.update_report:
         updated = update_report(report, results)
         _save_object(report_path, report)
+    published = 0
+    if args.publish_supabase:
+        rows = curation_rows(results)
+        coordinator = SupabaseCoordinator.from_env()
+        for offset in range(0, len(rows), 100):
+            batch = rows[offset : offset + 100]
+            if batch:
+                coordinator.record_curation_decisions(batch)
+                published += len(batch)
     print(
         json.dumps(
             {
@@ -284,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
                 "new_items": completed,
                 "total_results": len(results),
                 "report_items_updated": updated,
+                "supabase_decisions_recorded": published,
                 "output": str(output),
             },
             indent=2,

@@ -15,6 +15,7 @@ OPENFOLD3_IMAGE = (
     "sha256:9bc891b799285f0edae94f9f3f05ffcb88f29dc8e758248ce384c64f80e16eec"
 )
 OPENFOLD3_CHECKPOINT = "openfold3-p2-155k"
+OPENFOLD3_ACTIVATE = "/opt/activate.sh"
 _MODEL_RE = re.compile(r"_seed_(?P<seed>\d+)_sample_(?P<sample>\d+)_model\.(?:cif|pdb)$")
 
 
@@ -62,6 +63,10 @@ class OpenFold3Adapter(MethodAdapter):
         output_dir.mkdir(parents=True, exist_ok=True)
         write_json(input_path, self._query(task))
         argv = [
+            "/bin/bash",
+            "-lc",
+            f"source {OPENFOLD3_ACTIVATE} && exec \"$@\"",
+            "foldarium-openfold3",
             "run_openfold",
             "predict",
             "--query-json",

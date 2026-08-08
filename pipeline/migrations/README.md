@@ -8,6 +8,8 @@ two sets diverge. Each file is transactional; do not apply a later file without 
 - `002_weekly_intake.sql`: immutable prerelease snapshots and atomic weekly-plan registration.
 - `003_weekly_quiz.sql`: redacted blind rounds, server-enforced voting windows, and Wednesday reveal.
 - `004_external_predictions.sql`: private normalized provenance for public CAMEO AF3 comparators.
+- `005_curation_decisions.sql`: private row-level selected/rejected/error decisions with metrics and
+  provenance; Saturday intake records these atomically with its prerelease snapshot.
 
 The tables hold campaign, target, prediction-run, artifact, and publication metadata. Large inputs and
 outputs remain in Foldarium-controlled object storage; rows refer to immutable object URIs and SHA-256

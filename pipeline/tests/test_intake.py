@@ -10,6 +10,7 @@ from foldarium_pipeline.intake import (
     build_weekly_plan,
     parse_wwpdb_snapshot,
     target_from_cameo,
+    target_from_wwpdb,
 )
 from foldarium_pipeline.selection import select_ligand
 
@@ -93,6 +94,23 @@ class WwPdbTests(unittest.TestCase):
 
 
 class TargetTests(unittest.TestCase):
+    def test_wwpdb_target_does_not_wait_for_cameo(self) -> None:
+        snapshot = parse_wwpdb_snapshot(SEQUENCE_TSV, NONPOLYMER_TSV)
+        target = target_from_wwpdb(
+            "36IQ", snapshot["entries"]["36IQ"], date(2026, 6, 20), WeeklyPolicy()
+        )
+        self.assertEqual(target["target_id"], "36IQ")
+        self.assertEqual(target["source"]["kind"], "wwpdb-prerelease")
+        self.assertEqual(target["metadata"]["selected_ligand"]["heavy_atoms"], 16)
+
+    def test_wwpdb_target_rejects_ambiguous_nucleic_sequence(self) -> None:
+        entry = {
+            "sequences": ["ACGT" * 20],
+            "ligands": [{"component_id": "DRG", "smiles": "C" * 16}],
+        }
+        with self.assertRaisesRegex(IntakeError, "ambiguous-or-nucleic"):
+            target_from_wwpdb("1ABC", entry, date(2026, 6, 20), WeeklyPolicy())
+
     def test_cameo_target_records_unknown_stoichiometry_policy(self) -> None:
         target = target_from_cameo(cameo_payload(), WeeklyPolicy())
         self.assertIsNotNone(target)
@@ -135,6 +153,29 @@ class PlanTests(unittest.TestCase):
         for task in plan["tasks"]:
             self.assertEqual(validate_prediction_task(task), task)
             self.assertEqual(task["resources"]["gpu_class"], "l4")
+
+    def test_wwpdb_only_plan_uses_the_saturday_snapshot(self) -> None:
+        plan = build_weekly_plan(
+            release_date=date(2026, 6, 20),
+            ww_pdb_snapshot=self.snapshot,
+            output_prefix="supabase://foldarium-predictions/runs",
+            policy=WeeklyPolicy(max_targets=1),
+            generated_at=self.generated,
+        )
+        self.assertEqual([target["target_id"] for target in plan["targets"]], ["36IQ"])
+        self.assertEqual(plan["campaign"]["configuration"]["intake_source"], "wwpdb-prerelease")
+        self.assertEqual(plan["budget"]["gpu_tasks"], 2)
+
+    def test_operator_can_pin_weekly_tasks_to_l4(self) -> None:
+        plan = build_weekly_plan(
+            release_date=date(2026, 6, 20),
+            ww_pdb_snapshot=self.snapshot,
+            output_prefix="supabase://foldarium-predictions/runs",
+            policy=WeeklyPolicy(max_targets=1, gpu_class="l4"),
+            generated_at=self.generated,
+        )
+        self.assertEqual({task["resources"]["gpu_class"] for task in plan["tasks"]}, {"l4"})
+        self.assertEqual(plan["campaign"]["configuration"]["gpu_class_override"], "l4")
 
     def test_plan_is_replay_deterministic(self) -> None:
         first = self.build([cameo_payload()])

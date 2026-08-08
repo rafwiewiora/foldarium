@@ -10,6 +10,7 @@ from foldarium_pipeline.weekly import (
     WeeklyNotReady,
     build_public_weekly_plan,
     collect_public_inputs,
+    collect_wwpdb_inputs,
 )
 
 
@@ -70,6 +71,13 @@ def sources() -> dict[str, bytes]:
 
 
 class PublicCollectionTests(unittest.TestCase):
+    def test_wwpdb_prerelease_is_ready_without_cameo(self) -> None:
+        mapping = sources()
+        del mapping[CAMEO_SITEMAP_URL]
+        result = collect_wwpdb_inputs(RELEASE, fetcher=mapping.__getitem__)
+        self.assertEqual(result["availability"]["wwpdb_entry_count"], 1)
+        self.assertEqual(set(result["source_files"]), {"wwpdb_sequence", "wwpdb_nonpolymer"})
+
     def test_collects_complete_replay_bundle(self) -> None:
         mapping = sources()
         result = collect_public_inputs(
@@ -90,10 +98,13 @@ class PublicCollectionTests(unittest.TestCase):
 
     def test_missing_week_fails_as_not_ready(self) -> None:
         mapping = sources()
-        with self.assertRaisesRegex(WeeklyNotReady, "not advertised"):
+        with self.assertRaisesRegex(WeeklyNotReady, "not advertised") as raised:
             collect_public_inputs(
                 date(2026, 8, 15), fetcher=mapping.__getitem__, fetch_workers=1
             )
+        self.assertEqual(raised.exception.availability["wwpdb_sequence_rows"], 1)
+        self.assertEqual(raised.exception.availability["wwpdb_nonpolymer_rows"], 1)
+        self.assertEqual(raised.exception.availability["cameo_target_pages"], 0)
 
 
 class PublicPlanTests(unittest.TestCase):
@@ -108,7 +119,8 @@ class PublicPlanTests(unittest.TestCase):
         )
         self.assertEqual(plan["budget"]["selected_targets"], 1)
         self.assertEqual(plan["budget"]["gpu_tasks"], 2)
-        self.assertEqual(replay["availability"]["target_pages"], 2)
+        self.assertEqual(replay["availability"]["wwpdb_entry_count"], 1)
+        self.assertNotIn("cameo_target_pages", replay["source_files"])
 
 
 if __name__ == "__main__":

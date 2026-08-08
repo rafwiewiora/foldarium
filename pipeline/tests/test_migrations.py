@@ -12,6 +12,7 @@ class MigrationMirrorTests(unittest.TestCase):
             "002_weekly_intake.sql": "20260808010100_add_weekly_intake.sql",
             "003_weekly_quiz.sql": "20260808010200_add_weekly_quiz.sql",
             "004_external_predictions.sql": "20260808010300_add_external_predictions.sql",
+            "005_curation_decisions.sql": "20260808010400_add_curation_decisions.sql",
         }
         for source_name, deployed_name in pairs.items():
             with self.subTest(source=source_name):

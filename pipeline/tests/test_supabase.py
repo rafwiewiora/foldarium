@@ -362,6 +362,37 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(target["package_sha256"], payload["p_runs"][0]["input_sha256"])
         self.assertEqual(target["package_uri"], payload["p_runs"][0]["input_uri"])
         self.assertNotIn(b"service-role-key", register.data)
+        decisions = payload["p_snapshot"]["metadata"]["selection_decisions"]
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0]["decision"], "selected")
+        self.assertEqual(decisions[0]["target_id"], target["target_id"])
+
+    def test_records_private_curation_decisions_through_one_rpc(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        response = coordinator.record_curation_decisions(
+            [
+                {
+                    "decision_id": "curation_test123",
+                    "source": "cameo-public-catchup",
+                    "stage": "foldseek-novelty",
+                    "target_id": "12IY",
+                    "release_week": "2026-07-11",
+                    "decision": "familiar",
+                    "reason": "training-ligand-overlap-at-least-0.25",
+                    "input_sha256": "a" * 64,
+                    "metrics": {"train_shape_overlap": 0.548},
+                    "provenance": {"scorer_version": "test/v1"},
+                }
+            ]
+        )
+        self.assertEqual(response, {"Key": "stored"})
+        request = opener.calls[-1][0]
+        self.assertTrue(request.full_url.endswith("/rpc/record_curation_decisions"))
+        payload = json.loads(request.data)
+        self.assertEqual(payload["p_decisions"][0]["decision"], "familiar")
 
     def test_weekly_campaign_preflight_stops_after_first_matching_row(self) -> None:
         class CampaignPreflightOpener(RecordingOpener):
