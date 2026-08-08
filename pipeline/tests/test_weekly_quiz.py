@@ -154,6 +154,37 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
         )
 
 
+class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
+    def test_selects_minimum_total_pairwise_rmsd_without_method_labels(self) -> None:
+        choices = [
+            {
+                "run_id": f"run-{label}",
+                "sample_id": f"sample-{label}",
+                "artifact_sha256": label * 64,
+                "model": label,
+            }
+            for label in ("a", "b", "c")
+        ]
+        positions = {"a": 0.0, "b": 2.0, "c": 10.0}
+
+        medoid, audit = weekly_quiz_module._select_receptor_medoid(
+            choices,
+            round_id="weekly-test-v3",
+            target_id="target-1",
+            aligner=lambda reference, predicted: {
+                "receptor_rmsd": abs(positions[reference] - positions[predicted])
+            },
+        )
+
+        self.assertEqual(medoid["model"], "b")
+        self.assertEqual(
+            audit["policy"], weekly_quiz_module.RECEPTOR_ANCHOR_POLICY
+        )
+        self.assertEqual(audit["total_pairwise_receptor_rmsd"], 10.0)
+        self.assertRegex(audit["choice_digest"], r"^[0-9a-f]{64}$")
+        self.assertRegex(audit["distance_matrix_sha256"], r"^[0-9a-f]{64}$")
+
+
 def fake_ligand(atomic_numbers: list[int]) -> list[SimpleNamespace]:
     from rdkit import Chem
 
@@ -332,6 +363,10 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertIn("distance_matrix_sha256", clustering)
             self.assertEqual(clustering["threshold_angstrom"], 2.0)
             self.assertIn("no ligand superposition", clustering["distance_metric"])
+            self.assertEqual(
+                clustering["receptor_anchor"]["policy"],
+                weekly_quiz_module.RECEPTOR_ANCHOR_POLICY,
+            )
             mapping = clustering["ligand_atom_mapping"]
             self.assertEqual(
                 mapping["policy"],

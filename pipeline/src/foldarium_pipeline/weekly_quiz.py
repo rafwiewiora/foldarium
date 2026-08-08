@@ -34,6 +34,7 @@ SUPPORTED_LEGACY_LIGAND_ORDER = {
     "boltz2": "2.2.1",
 }
 LIGAND_AUTOMORPHISM_CAP = 100_000
+RECEPTOR_ANCHOR_POLICY = "minimum-total-pairwise-receptor-rmsd-medoid/v1"
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -356,6 +357,68 @@ def _pairwise_pose_distances(
         ) from exc
 
 
+def _select_receptor_medoid(
+    choices: list[dict[str, Any]],
+    *,
+    round_id: str,
+    target_id: str,
+    aligner: Callable[[Any, Any], Mapping[str, Any]] = best_receptor_superposition,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Choose the method-blind prediction closest to all other receptors."""
+
+    if not choices:
+        raise WeeklyQuizAssemblyError("cannot select a receptor medoid without choices")
+    digests = [
+        choice_order_digest(
+            round_id,
+            target_id,
+            {
+                "run_id": choice["run_id"],
+                "sample_id": choice["sample_id"],
+                "artifact_sha256": choice["artifact_sha256"],
+            },
+        )
+        for choice in choices
+    ]
+    matrix = [[0.0 for _ in choices] for _ in choices]
+    for reference_index, reference in enumerate(choices):
+        for predicted_index, predicted in enumerate(choices):
+            if reference_index == predicted_index:
+                continue
+            try:
+                alignment = aligner(reference["model"], predicted["model"])
+                rmsd = float(alignment["receptor_rmsd"])
+            except (EvaluationError, KeyError, TypeError, ValueError) as exc:
+                raise WeeklyQuizAssemblyError(
+                    "could not compare receptors while selecting the shared medoid for "
+                    f"{target_id}"
+                ) from exc
+            if not math.isfinite(rmsd) or rmsd < 0:
+                raise WeeklyQuizAssemblyError(
+                    "receptor-medoid RMSD must be finite and non-negative"
+                )
+            matrix[reference_index][predicted_index] = rmsd
+    totals = [sum(row) for row in matrix]
+    medoid_index = min(range(len(choices)), key=lambda index: (totals[index], digests[index]))
+    distance_payload = {
+        "choice_order": digests,
+        "distances_angstrom": [
+            [f"{value:.6f}" for value in row]
+            for row in matrix
+        ],
+    }
+    return choices[medoid_index], {
+        "policy": RECEPTOR_ANCHOR_POLICY,
+        "choice_digest": digests[medoid_index],
+        "total_pairwise_receptor_rmsd": totals[medoid_index],
+        "choice_order": digests,
+        "total_pairwise_receptor_rmsds": totals,
+        "distance_matrix_sha256": hashlib.sha256(
+            canonical_json(distance_payload).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
 def _normalized_runs(
     runs: Iterable[Mapping[str, Any]], required_methods: frozenset[str]
 ) -> dict[str, list[dict[str, Any]]]:
@@ -527,12 +590,19 @@ def stage_weekly_quiz(
                 },
             )
         )
-        reference_model = raw_choices[0]["model"]
+        reference_choice, receptor_anchor = _select_receptor_medoid(
+            raw_choices,
+            round_id=round_id,
+            target_id=target_id,
+        )
+        reference_model = reference_choice["model"]
+        reference_choice_index: int | None = None
         choice_rows: list[dict[str, Any]] = []
         pose_coordinates: list[list[list[float]]] = []
         ligands: list[Any] = []
         for index, choice in enumerate(raw_choices, start=1):
-            if index == 1:
+            if choice is reference_choice:
+                reference_choice_index = index - 1
                 transform = _identity_transform(gemmi)
                 alignment = {
                     "reference_chain": None,
@@ -639,6 +709,7 @@ def stage_weekly_quiz(
             for choice in choice_rows
         ]
         clustering["ligand_atom_mapping"] = mapping_audit
+        clustering["receptor_anchor"] = receptor_anchor
         for choice, assignment in zip(choice_rows, assignments):
             choice["cluster_id"] = assignment["cluster_id"]
             choice["is_rep"] = assignment["is_rep"]
@@ -655,9 +726,11 @@ def stage_weekly_quiz(
         pose_cloud = numpy.array(
             [coordinate for pose in pose_coordinates for coordinate in pose], dtype=float
         )
-        # The shared receptor is the stable-hash-selected predicted anchor. It
-        # is only an all-overlay fallback and is never an experimental answer.
-        protein_relative = choice_rows[0]["protein_path"]
+        if reference_choice_index is None:
+            raise WeeklyQuizAssemblyError("selected receptor medoid disappeared during assembly")
+        # The shared receptor is the method-blind prediction medoid. It is only
+        # an all-overlay comparison frame and is never an experimental answer.
+        protein_relative = choice_rows[reference_choice_index]["protein_path"]
         pocket_relative = f"assets/{target_id}/overlay-pocket.pdb"
         _write_polymer(
             root / pocket_relative,
