@@ -46,7 +46,11 @@ class WeeklyPolicy:
     heavy_atom_minimum: int = HEAVY_ATOM_MINIMUM
     max_targets: int = 8
     diffusion_samples: int = 5
-    timeout_seconds: int = 20 * 60
+    # Five-sample cofolding can legitimately exceed twenty minutes on an L4 for
+    # the larger bounded targets. Keep the command budget explicit in every task
+    # so cost remains reviewable while avoiding a deterministic cutoff during
+    # final diffusion/serialization.
+    timeout_seconds: int = 30 * 60
     msa_mode: str = "server"
     protein_only: bool = True
     gpu_class: str | None = None

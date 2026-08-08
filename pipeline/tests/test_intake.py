@@ -153,6 +153,7 @@ class PlanTests(unittest.TestCase):
         for task in plan["tasks"]:
             self.assertEqual(validate_prediction_task(task), task)
             self.assertEqual(task["resources"]["gpu_class"], "l4")
+            self.assertEqual(task["resources"]["timeout_seconds"], 30 * 60)
 
     def test_wwpdb_only_plan_uses_the_saturday_snapshot(self) -> None:
         plan = build_weekly_plan(

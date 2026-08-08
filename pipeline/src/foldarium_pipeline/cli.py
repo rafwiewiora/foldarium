@@ -97,8 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
     weekly.add_argument("--max-targets", type=int, default=8)
     weekly.add_argument("--heavy-atom-minimum", type=int, default=15)
     weekly.add_argument("--diffusion-samples", type=int, default=5)
-    weekly.add_argument("--timeout-seconds", type=int, default=20 * 60)
+    weekly.add_argument("--timeout-seconds", type=int, default=30 * 60)
     weekly.add_argument("--msa-mode", choices=("server", "none", "empty"), default="server")
+    weekly.add_argument(
+        "--gpu-class",
+        choices=sorted(GPU_CLASS_NAMES),
+        help="pin all weekly tasks to one accelerator class",
+    )
     weekly.add_argument(
         "--output-prefix", default="supabase://foldarium-predictions/runs"
     )
@@ -208,6 +213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 diffusion_samples=args.diffusion_samples,
                 timeout_seconds=args.timeout_seconds,
                 msa_mode=args.msa_mode,
+                gpu_class=args.gpu_class,
             ),
             output_prefix=args.output_prefix,
         )

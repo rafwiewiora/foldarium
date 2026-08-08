@@ -140,7 +140,7 @@ serialization. They must never enter task JSON, browser code, logs, or git.
 - explicit OF3 checkpoint/cache bootstrap;
 - OF3 GPU: A100-40GB, 8 physical CPU cores, 32 GiB host RAM;
 - Boltz GPU: L40S, 4 physical CPU cores, 16 GiB host RAM;
-- `GPU_FUNCTION_TIMEOUT_SECONDS = 20 * 60` as the outer container ceiling on both GPU functions;
+- `GPU_FUNCTION_TIMEOUT_SECONDS = 35 * 60` as the outer container ceiling on both GPU functions;
 - a synchronous `run_task` local entrypoint that blocks on `.remote()` and prints the terminal result;
 - `max_containers=1` on each GPU function;
 - scale-to-zero behavior (no warm containers requested);
@@ -366,9 +366,10 @@ L40S:       $0.000542/sec -> $0.4878 for 900 GPU seconds
 CPU, host memory, image building, downloads, and Volume storage add cost, but two small bounded jobs
 should remain comfortably within USD 20.
 
-The outer-timeout hardening is done: both GPU functions now use a 20-minute ceiling
+The outer-timeout hardening is done: both GPU functions now use a 35-minute ceiling
 (`GPU_FUNCTION_TIMEOUT_SECONDS`), which also caps the derived run lease, and `max_containers=1` is
-retained. The inner subprocess timeout is no longer the only bound.
+retained. Five-sample weekly L4 tasks use a 30-minute subprocess budget, leaving five minutes for
+validation and durable publication.
 
 ## Task/run registration details
 
@@ -580,7 +581,8 @@ Every one of these surfaced only on real contact with the runtime, which is why 
 CPU-only bootstrap runs before any GPU work.
 
 1. The Modal GPU functions still carried a six-hour outer timeout while the task budget was
-   900 s. Capped at 20 minutes (`GPU_FUNCTION_TIMEOUT_SECONDS`).
+   900 s. Initially capped at 20 minutes; five-sample L4 weekly work later moved to a reviewed
+   30-minute task budget beneath a 35-minute container ceiling (`GPU_FUNCTION_TIMEOUT_SECONDS`).
 2. The original smoke environment needed the official OpenFold3 entrypoint to expose its
    Pixi interpreter and CLI. The current upstream image now contains Python 3.14, which is
    incompatible with the legacy Modal builder's injected `grpclib` runtime. Production now

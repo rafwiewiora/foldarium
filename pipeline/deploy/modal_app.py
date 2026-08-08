@@ -70,9 +70,10 @@ MODAL_HOST_BY_CLASS = {
 # the task's ``resources.timeout_seconds``, but a container can also stall outside
 # that subprocess: image pull, checkpoint reload, cache commit, or publication. On
 # a credit-limited account those phases must not be able to hold a GPU for hours,
-# so this ceiling is deliberately tight. Raising it should be an explicit,
-# reviewed change alongside a revised cost estimate.
-GPU_FUNCTION_TIMEOUT_SECONDS = 20 * 60
+# so this ceiling is deliberately tight. Five-sample L4 tasks receive a
+# thirty-minute command budget; the additional five minutes lets the worker
+# validate and durably publish completed outputs without leaving a stale lease.
+GPU_FUNCTION_TIMEOUT_SECONDS = 35 * 60
 LEASE_GRACE_SECONDS = 15 * 60
 OPENFOLD_CACHE_ROOT = "/cache/openfold"
 BOLTZ_CACHE_ROOT = "/cache/boltz"
