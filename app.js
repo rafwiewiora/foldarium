@@ -494,7 +494,10 @@ async function loadQuestion(i) {
 function renderUI() {
   $('#progress').textContent = DEV ? `item ${idx + 1} / ${ITEMS.length} · dev`
                                    : `question ${idx + 1} / ${ITEMS.length}`;
-  $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${cur.clusters.length} distinct pose clusters</small>`;
+  const poseSummary = cur.item.source === 'weekly'
+    ? `${cur.clusters.length} blind predicted poses`
+    : `${cur.clusters.length} distinct pose clusters`;
+  $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${poseSummary}</small>`;
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = displayMode === 'grid'
     ? gridEntries()
@@ -866,6 +869,7 @@ function syncButtons() {
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
   const inPlay = !!cur;
+  $('#mode').style.display = inPlay ? '' : 'none';
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   $('#protmode').style.display = (inPlay && quizSource !== 'rnp' && quizSource !== 'weekly') ? '' : 'none';
   document.querySelectorAll('#protmode button').forEach(b => b.classList.toggle('on', b.dataset.p === proteinMode));
@@ -876,10 +880,14 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
-  $('#modehint').textContent = displayMode === 'grid'
-    ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
-                 : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
-    : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.';
+  $('#modehint').textContent = cur?.item.source === 'weekly'
+    ? (displayMode === 'grid'
+      ? 'One linked viewer per blind predicted pose. Drag or zoom any pane to move them together.'
+      : 'These are ten blind predicted poses: five from each co-folding method. No geometric clustering was applied to this round.')
+    : (displayMode === 'grid'
+      ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
+                   : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
+      : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.');
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
 }
 
