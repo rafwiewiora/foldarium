@@ -100,3 +100,9 @@ test('left pose selections use stacked menu rows with arrows', async () => {
   assert.match(app, /color:rgba\(255,255,255,.82\)/);
   assert.match(app, /None of these are correct<\/span><span class="tag" data-tag><\/span>/);
 });
+
+test('Submit answer matches the bottom viewer controls', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /#view-options button,#lock\{[\s\S]*?background:#fff;[\s\S]*?color:var\(--muted\);[\s\S]*?border:1px solid var\(--line\);[\s\S]*?font-size:12\.5px/);
+});

@@ -138,9 +138,10 @@
     flex-flow:row wrap;justify-content:center;align-items:center;gap:6px;overflow-y:auto}
   #view-options .seg{display:contents}
   #view-options .view-actions{display:contents}
-  #view-options button{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
+  #view-options button,#lock{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
     border:1px solid var(--line);border-radius:9px;font-size:12.5px}
   #view-options button.on{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #lock:not(:disabled):hover{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
   #view-options .hint{flex-basis:100%;padding:5px 8px;text-align:center;background:#ffffffeb;border-radius:7px}
   #wrap.intro #stage{display:none}
   #wrap.intro #side{width:100%;max-width:480px;margin:auto;border-inline:1px solid var(--line);justify-content:center}
