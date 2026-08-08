@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +104,20 @@ WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "*/15 3-6 * * 6")
 WEEKLY_HOOK_ENV = "FOLDARIUM_WEEKLY_HOOK"
 PUBLIC_QUIZ_BUCKET_ENV = "FOLDARIUM_PUBLIC_QUIZ_BUCKET"
 WEEKLY_CRON_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEEKLY_CRON") == "1"
+WEDNESDAY_REVEAL_CRON_UTC = os.environ.get(
+    "FOLDARIUM_WEDNESDAY_REVEAL_CRON", "5 0-5 * * 3"
+)
+WEDNESDAY_REVEAL_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEDNESDAY_REVEAL") == "1"
+WEDNESDAY_REVEAL_PUBLISH_ENV = "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"
+# Six hourly Wednesday ticks cover a delayed coordinate release without an
+# unbounded poller. Each tick receives two short infrastructure retries; a
+# scientifically incomplete item still aborts the whole atomic reveal.
+WEDNESDAY_REVEAL_MODAL_RETRIES = 2
+QUIZ_EVALUATION_PACKAGES = (
+    "gemmi==0.7.3",
+    "numpy==2.3.2",
+    "rdkit==2025.3.6",
+)
 WEEKLY_RUNTIME_ENV = {
     key: os.environ[key]
     for key in (
@@ -112,6 +127,7 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_WEEKLY_MAX_TARGETS",
         "FOLDARIUM_WEEKLY_GPU_CLASS",
         PUBLIC_QUIZ_BUCKET_ENV,
+        WEDNESDAY_REVEAL_PUBLISH_ENV,
     )
     if key in os.environ
 }
@@ -247,6 +263,30 @@ def _load_weekly_hook(reference: str):
     return function
 
 
+def _default_weekly_round_id(now: datetime | None = None) -> str:
+    """Return the round opened on the most recent UTC Saturday."""
+
+    current = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(current, datetime) or current.tzinfo is None:
+        raise ValueError("now must be a timezone-aware datetime")
+    current = current.astimezone(timezone.utc)
+    saturday = current.date() - timedelta(days=(current.weekday() - 5) % 7)
+    return f"weekly-{saturday.isoformat()}"
+
+
+def _wednesday_publish_enabled(explicit: bool | None) -> bool:
+    """Resolve the explicit mutation gate for a manual or scheduled call."""
+
+    if explicit is not None:
+        if not isinstance(explicit, bool):
+            raise TypeError("publish must be a boolean or null")
+        return explicit
+    configured = os.environ.get(WEDNESDAY_REVEAL_PUBLISH_ENV, "0")
+    if configured not in {"0", "1"}:
+        raise ValueError(f"{WEDNESDAY_REVEAL_PUBLISH_ENV} must be 0 or 1")
+    return configured == "1"
+
+
 if modal is not None:
     # Modal re-imports this module inside every container to find the function
     # it should run. At that point the local checkout does not exist, so local
@@ -335,8 +375,7 @@ if modal is not None:
     )
     quiz_assembly_image = _add_core(
         modal.Image.debian_slim(python_version="3.12").uv_pip_install(
-            "gemmi==0.7.3",
-            "numpy==2.3.2",
+            *QUIZ_EVALUATION_PACKAGES
         )
     ).env(WEEKLY_RUNTIME_ENV)
 
@@ -698,6 +737,102 @@ if modal is not None:
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
         }
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=8.0,
+        memory=32768,
+        schedule=(
+            modal.Cron(WEDNESDAY_REVEAL_CRON_UTC)
+            if WEDNESDAY_REVEAL_ENABLED
+            else None
+        ),
+        secrets=[control_plane_secret],
+        timeout=2 * 60 * 60,
+        retries=modal.Retries(
+            max_retries=WEDNESDAY_REVEAL_MODAL_RETRIES,
+            backoff_coefficient=1.0,
+            initial_delay=60.0,
+            max_delay=60.0,
+        ),
+        max_containers=1,
+    )
+    def wednesday_reveal_tick(
+        round_id: str | None = None,
+        publish: bool | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate one exact blind round and optionally publish it atomically.
+
+        Scheduled calls derive the current round from the most recent UTC
+        Saturday and therefore use the classic PDB target IDs stored in that
+        round's private index. ``publish`` is an explicit per-call override;
+        when omitted, the deployment must set the mutation gate to ``1``.
+        """
+
+        import tempfile
+
+        from foldarium_pipeline.supabase import (
+            SupabaseCoordinator,
+            SupabasePublicationError,
+        )
+        from foldarium_pipeline.wednesday_reveal import (
+            WednesdayRevealNotReady,
+            run_wednesday_reveal,
+        )
+
+        selected_round_id = (
+            _default_weekly_round_id() if round_id is None else round_id
+        )
+        mutation_enabled = _wednesday_publish_enabled(publish)
+        coordinator = SupabaseCoordinator.from_env()
+        try:
+            round_record, private_index_content = (
+                coordinator.weekly_quiz_reveal_inputs(selected_round_id)
+            )
+        except SupabasePublicationError as exc:
+            # A round or its private index can arrive just after the first
+            # scheduled tick. Surface it as retryable while retaining the
+            # service's fail-closed publication boundary.
+            raise WednesdayRevealNotReady(
+                f"weekly reveal inputs are not ready for {selected_round_id}"
+            ) from exc
+
+        def prediction_resolver(choice: Mapping[str, Any]) -> dict[str, Any]:
+            return coordinator.download_predicted_complex(
+                choice.get("run_id"), choice.get("sample_id")
+            )
+
+        reveal_publisher = (
+            coordinator.reveal_weekly_quiz_round if mutation_enabled else None
+        )
+        with tempfile.TemporaryDirectory(prefix="foldarium-wednesday-reveal-") as temporary:
+            result = run_wednesday_reveal(
+                round_record,
+                private_index_content,
+                temporary,
+                prediction_resolver=prediction_resolver,
+                reveal_publisher=reveal_publisher,
+            )
+        outcome = {
+            **result,
+            "mode": "publish" if mutation_enabled else "dry-run",
+            "mutation_enabled": mutation_enabled,
+        }
+        print(
+            "foldarium.wednesday_reveal "
+            + json.dumps(
+                {
+                    "round_id": outcome.get("round_id"),
+                    "status": outcome.get("status"),
+                    "mode": outcome["mode"],
+                    "item_count": outcome.get("item_count"),
+                    "choice_count": outcome.get("choice_count"),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return outcome
 
     @app.function(
         image=control_image,

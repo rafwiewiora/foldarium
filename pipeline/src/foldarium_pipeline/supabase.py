@@ -637,6 +637,110 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError("complex artifacts reference unknown result samples")
         return normalized
 
+    def weekly_quiz_round(self, round_id: str) -> dict[str, Any]:
+        """Return one exact private weekly-round row for reveal evaluation.
+
+        This deliberately queries the private table rather than the public view:
+        the latter omits the private-index pointer and hides reveal state.  A
+        missing or duplicated identity is an error, never an invitation to pick
+        a nearby/current row.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+        query = urlencode(
+            {
+                "select": (
+                    "round_id,campaign_id,status,opens_at,closes_at,blind_manifest,"
+                    "blind_manifest_sha256,reveal_manifest,reveal_manifest_sha256,metadata"
+                ),
+                "round_id": f"eq.{round_id}",
+                "limit": "2",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/weekly_quiz_rounds?{query}", "weekly quiz round query"
+        )
+        if len(rows) != 1:
+            raise SupabasePublicationError(
+                f"weekly quiz round query returned {len(rows)} rows for exact round_id"
+            )
+        row = rows[0]
+        if row.get("round_id") != round_id:
+            raise SupabasePublicationError("weekly quiz round query returned the wrong round_id")
+        row["metadata"] = _json_object(row.get("metadata"), "weekly round metadata")
+        return row
+
+    def weekly_quiz_reveal_inputs(self, round_id: str) -> tuple[dict[str, Any], bytes]:
+        """Resolve an exact private round and its digest-bound private index."""
+
+        row = self.weekly_quiz_round(round_id)
+        raw_index = row["metadata"].get("private_index")
+        private_index = _json_object(raw_index, "weekly round metadata.private_index")
+        object_uri = private_index.get("object_uri")
+        digest = private_index.get("sha256")
+        media_type = private_index.get("media_type")
+        if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+            raise SupabasePublicationError("weekly round private index has no valid SHA-256")
+        if media_type != "application/json":
+            raise SupabasePublicationError("weekly round private index must be application/json")
+        content = self.download_content_object(object_uri, expected_sha256=digest)
+        size_bytes = private_index.get("size_bytes")
+        if size_bytes is not None and (
+            isinstance(size_bytes, bool)
+            or not isinstance(size_bytes, int)
+            or size_bytes != len(content)
+        ):
+            raise SupabasePublicationError("weekly round private index size does not match")
+        return row, content
+
+    def predicted_complex_artifact(
+        self, run_id: str, sample_id: str
+    ) -> dict[str, Any]:
+        """Return exactly one original predicted-complex artifact identity."""
+
+        run_id = _safe_identifier(run_id, "run_id")
+        sample_id = _safe_identifier(sample_id, "sample_id")
+        query = urlencode(
+            {
+                "select": "run_id,sample_id,role,object_uri,sha256,media_type",
+                "run_id": f"eq.{run_id}",
+                "sample_id": f"eq.{sample_id}",
+                "role": "eq.predicted_complex",
+                "limit": "2",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/prediction_artifacts?{query}",
+            "predicted complex artifact query",
+        )
+        if len(rows) != 1:
+            raise SupabasePublicationError(
+                "predicted complex artifact query did not return exactly one row"
+            )
+        artifact = rows[0]
+        digest = artifact.get("sha256")
+        media_type = artifact.get("media_type")
+        if (
+            artifact.get("run_id") != run_id
+            or artifact.get("sample_id") != sample_id
+            or artifact.get("role") != "predicted_complex"
+            or not isinstance(digest, str)
+            or not _SHA256.fullmatch(digest)
+            or not isinstance(media_type, str)
+            or not media_type
+        ):
+            raise SupabasePublicationError("predicted complex artifact metadata is invalid")
+        return artifact
+
+    def download_predicted_complex(self, run_id: str, sample_id: str) -> dict[str, Any]:
+        """Download an exact original complex and verify its recorded digest."""
+
+        artifact = self.predicted_complex_artifact(run_id, sample_id)
+        content = self.download_content_object(
+            artifact.get("object_uri"), expected_sha256=artifact["sha256"]
+        )
+        return {**artifact, "content": content}
+
     def download_content_object(
         self, object_uri: str, *, expected_sha256: str | None = None
     ) -> bytes:

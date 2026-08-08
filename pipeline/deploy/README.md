@@ -94,6 +94,38 @@ submitting work. Therefore enable registration and GPU submission together only
 after approving the displayed bounded budget; a registration-only deployment is
 an intentional operator hold point, not an automatic future-submit queue.
 
+### Wednesday reveal
+
+The Wednesday evaluator is a CPU-only Modal function. Its image pins
+`gemmi==0.7.3`, `numpy==2.3.2`, and `rdkit==2025.3.6`; it neither reserves a GPU
+nor uses either prediction cache Volume. The schedule is absent unless
+`FOLDARIUM_ENABLE_WEDNESDAY_REVEAL=1` is set at deploy time. When enabled, the
+default `FOLDARIUM_WEDNESDAY_REVEAL_CRON` is `5 0-5 * * 3`: six hourly attempts
+from 00:05 through 05:05 UTC on Wednesday, after voting closes at 00:00 UTC.
+Each tick has two one-minute Modal infrastructure retries and one active
+container, so delayed released coordinates are retried for a bounded window
+without creating an unbounded poller.
+
+Publication is a separate mutation gate. With
+`FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH` absent or set to `0`, scheduled calls run
+the complete evaluation as a dry run and do not call the reveal RPC. Set it to
+`1` only in a reviewed deployment that should publish. A manual dry run for an
+exact round is:
+
+```bash
+modal run --env main pipeline/deploy/modal_app.py::wednesday_reveal_tick \
+  --round-id weekly-2026-08-08 --no-publish
+```
+
+Use `--publish` only for an explicitly approved manual reveal. If `--round-id`
+is omitted, the function derives the round opened on the most recent UTC
+Saturday. It reads that exact private round and digest-bound private index,
+downloads each original `predicted_complex` by exact `(run_id, sample_id)`, and
+uses the stored classic four-character PDB target IDs for RCSB coordinates. A
+missing round/index/artifact, digest mismatch, unavailable coordinate, or one
+incomplete evaluation aborts the whole call before publication. Repeated calls
+after a successful reveal return `already-revealed` without rescoring.
+
 Keep the laptop's default Modal profile on `foldariumtest`. The separately
 configured `molspace-production` profile is for Brian's final deployment only;
 always pass/verify a profile explicitly before any production command.

@@ -148,6 +148,20 @@ Set `FOLDARIUM_WEEKLY_HOOK=foldarium_pipeline.weekly:modal_weekly_hook`. A new d
 leave registration/submission off, inspect the returned budget, then test registration in the test
 project, and only then enable submission. `FOLDARIUM_WEEKLY_MAX_TARGETS` is the hard per-week target cap.
 
+Wednesday evaluation has independent controls. `FOLDARIUM_ENABLE_WEDNESDAY_REVEAL=1` installs the
+CPU-only schedule; its default `FOLDARIUM_WEDNESDAY_REVEAL_CRON` runs hourly from 00:05 through 05:05 UTC
+on Wednesday, giving delayed coordinate releases a bounded retry window after the 00:00 UTC close. The
+evaluation image pins `gemmi==0.7.3`, `numpy==2.3.2`, and `rdkit==2025.3.6`. Publication remains off unless
+`FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH=1` is present, or an operator explicitly passes `--publish` to a
+manual invocation; `--no-publish` performs the full scoring dry run without the reveal RPC.
+
+The reveal worker derives the most recent Saturday round when no round ID is supplied, reads the exact
+private round and checksum-bound private index with the service role, then resolves every original
+`predicted_complex` by exact `(run_id, sample_id)` and recorded digest. Classic four-character PDB target
+IDs select the released RCSB coordinates. Missing/delayed coordinates, an incomplete item, a missing
+artifact, or a checksum mismatch aborts the entire reveal before mutation. A round already revealed with
+the same canonical content returns idempotently without downloading or rescoring predictions.
+
 Keep scheduler policy out of method adapters. A Modal cron can trigger the coordinator today; Cloud
 Scheduler can trigger the same coordinator on GCP. Supabase is the durable owner of schedules already
 materialized into work, leases, retries, and publication state.

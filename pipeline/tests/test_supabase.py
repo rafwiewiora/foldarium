@@ -840,6 +840,135 @@ class SupabaseCoordinatorTests(unittest.TestCase):
             )
         self.assertEqual(opener.calls, [])
 
+    def test_resolves_exact_private_weekly_round_and_digest_bound_index(self) -> None:
+        private_content = b'{"round_id":"weekly-2026-08-08"}'
+        digest = hashlib.sha256(private_content).hexdigest()
+        round_row = {
+            "round_id": "weekly-2026-08-08",
+            "campaign_id": "wwpdb-2026-08-08",
+            "status": "open",
+            "opens_at": "2026-08-08T03:00:00Z",
+            "closes_at": "2026-08-12T00:00:00Z",
+            "blind_manifest": {"schema_version": 1, "items": []},
+            "blind_manifest_sha256": "a" * 64,
+            "reveal_manifest": None,
+            "reveal_manifest_sha256": None,
+            "metadata": {
+                "private_index": {
+                    "object_uri": f"supabase://results/sha256/{digest[:2]}/{digest}",
+                    "sha256": digest,
+                    "size_bytes": len(private_content),
+                    "media_type": "application/json",
+                }
+            },
+        }
+
+        class RoundOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/weekly_quiz_rounds?" in url:
+                    query = parse_qs(urlsplit(url).query)
+                    self.test_case.assertEqual(
+                        query["round_id"], ["eq.weekly-2026-08-08"]
+                    )
+                    self.test_case.assertEqual(query["limit"], ["2"])
+                    self.test_case.assertIn("metadata", query["select"][0].split(","))
+                    return FakeResponse(json.dumps([round_row]).encode())
+                if "/storage/v1/object/authenticated/results/" in url:
+                    return FakeResponse(private_content)
+                raise AssertionError(url)
+
+        opener = RoundOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        returned_round, returned_content = coordinator.weekly_quiz_reveal_inputs(
+            "weekly-2026-08-08"
+        )
+        self.assertEqual(returned_round, round_row)
+        self.assertEqual(returned_content, private_content)
+        self.assertEqual(len(opener.calls), 2)
+        self.assertTrue(all(call[0].get_method() == "GET" for call in opener.calls))
+
+    def test_weekly_round_lookup_fails_closed_on_duplicate_identity(self) -> None:
+        row = {"round_id": "weekly-2026-08-08", "metadata": {}}
+
+        class DuplicateRoundOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(json.dumps([row, row]).encode())
+
+        opener = DuplicateRoundOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "returned 2 rows"):
+            coordinator.weekly_quiz_round("weekly-2026-08-08")
+        self.assertEqual(len(opener.calls), 1)
+
+    def test_downloads_only_exact_run_sample_predicted_complex_with_digest(self) -> None:
+        content = b"data_original_complex\n#\n"
+        digest = hashlib.sha256(content).hexdigest()
+        artifact = {
+            "run_id": "run-of3",
+            "sample_id": "sample-4",
+            "role": "predicted_complex",
+            "object_uri": f"supabase://results/sha256/{digest[:2]}/{digest}",
+            "sha256": digest,
+            "media_type": "chemical/x-mmcif",
+        }
+
+        class ArtifactOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/prediction_artifacts?" in url:
+                    query = parse_qs(urlsplit(url).query)
+                    self.test_case.assertEqual(query["run_id"], ["eq.run-of3"])
+                    self.test_case.assertEqual(query["sample_id"], ["eq.sample-4"])
+                    self.test_case.assertEqual(query["role"], ["eq.predicted_complex"])
+                    self.test_case.assertEqual(query["limit"], ["2"])
+                    return FakeResponse(json.dumps([artifact]).encode())
+                if "/storage/v1/object/authenticated/results/" in url:
+                    return FakeResponse(content)
+                raise AssertionError(url)
+
+        opener = ArtifactOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        resolved = coordinator.download_predicted_complex("run-of3", "sample-4")
+        self.assertEqual(resolved["content"], content)
+        self.assertEqual(resolved["sha256"], digest)
+        self.assertEqual(resolved["object_uri"], artifact["object_uri"])
+
+    def test_predicted_complex_lookup_never_picks_from_duplicate_rows(self) -> None:
+        digest = "a" * 64
+        artifact = {
+            "run_id": "run-of3",
+            "sample_id": "sample-4",
+            "role": "predicted_complex",
+            "object_uri": f"supabase://results/sha256/aa/{digest}",
+            "sha256": digest,
+            "media_type": "chemical/x-mmcif",
+        }
+
+        class DuplicateArtifactOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(json.dumps([artifact, artifact]).encode())
+
+        opener = DuplicateArtifactOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "exactly one row"):
+            coordinator.download_predicted_complex("run-of3", "sample-4")
+        self.assertEqual(len(opener.calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
