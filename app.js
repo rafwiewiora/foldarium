@@ -12,7 +12,10 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const METHOD_NAMES = { af3: 'AF3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
-const GHOST_POSE_ALPHA = 0.18, GHOST_POSE_SIZE = 0.14;
+const GHOST_POSE_ALPHA = 0.12, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
+// Retain the protein-ensemble experiment for future testing without exposing
+// it in the public quiz. The active Foldarium UI deliberately keeps this off.
+const ENABLE_GHOST_PROTEIN_EXPERIMENT = false;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
 // game-able = has a <1.5 AND a >3 pose; all-wrong = EVERY pose > 3; 1.5-3 A limbo items are dropped.
 const CORRECT_THRESH = 1.5, WRONG_THRESH = 3.0;
@@ -162,6 +165,11 @@ function focusLigandSpheres(targetPlugin, spheres) {
   return true;
 }
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function decorateClusterMembers(members, label) {
+  members.forEach((member, index) => {
+    member.label = label + (members.length > 1 ? '-' + (index + 1) : '');
+  });
+}
 function clusteredPoseLayers(choices, methodScoped = false) {
   if (!clustered || cur.revealed && cur.showAnswer) {
     return choices.map(choice => ({ choice, ghost: false }));
@@ -179,6 +187,18 @@ function clusteredPoseLayers(choices, methodScoped = false) {
       { choice, ghost: false },
     ];
   });
+}
+function ghostProteinUrls(choices, primaryUrl, clusteringEnabled = clustered) {
+  if (!ENABLE_GHOST_PROTEIN_EXPERIMENT || !clusteringEnabled || proteinMode !== 'af3') return [];
+  const urls = [];
+  for (const choice of choices) {
+    const cluster = cur.clusters.find(candidate => candidate.members.includes(choice));
+    for (const member of cluster?.members || [choice]) {
+      const url = member.afprotein_file;
+      if (url && url !== primaryUrl && !urls.includes(url)) urls.push(url);
+    }
+  }
+  return urls;
 }
 function gridPageMethod() {
   const methods = cur?.gridMethods || [];
@@ -356,6 +376,10 @@ async function buildGridCell(cell, revision) {
     const c = cell.entry.choice, spec = cell.spec, urls = gridProteinUrls(c, spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+    for (const url of ghostProteinUrls([c], urls.prot, spec.clustered)) {
+      const ghost = await loadStruct(url, 'pdb', cell.plugin);
+      await addRep(ghost.struct, 'polymer', 'cartoon', AF3PROT, GHOST_PROTEIN_ALPHA, cell.plugin);
+    }
     if (urls.pocket) {
       const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin);
       await addSticks(ps.struct, 0.16, 0.95, cell.plugin);
@@ -405,7 +429,7 @@ async function buildGrid(preserveCamera = true) {
     card.append(host, head); cellsBox.appendChild(card);
     return { entry, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false, index: i,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
-        revealed: cur.revealed, showXtal, showHbonds } };
+        revealed: cur.revealed, showXtal, showHbonds, clustered } };
   });
   gridViewers = cells;
   startGridLayout();
@@ -430,7 +454,7 @@ async function buildGrid(preserveCamera = true) {
 
 // ---- two layers: a FIXED reference (crystal protein cartoon + crystal pocket sticks, built once per
 //      question so the backbone never moves) and the rebuilt POSE layer (ligands + crystal-reveal). -----
-let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null;
+let proteinData = [], layerData = [], hbondData = [], currentProteinKey = null;
 function protUrls() {
   const answer = cur.revealed && cur.showAnswer;
   if (proteinMode === 'af3' && cur.item.afprotein_ref) {   // CAMEO only; RnP has no per-pose AF3 protein
@@ -444,17 +468,26 @@ function protUrls() {
 }
 async function buildProtein() {         // rebuilds ONLY when the target protein changes (no flicker)
   const { prot, pocket } = protUrls();
-  if (prot === currentProtUrl) return;
+  const vis = visibleChoices();
+  const shown = displayMode === 'one' ? [vis[Math.min(shownOne, vis.length - 1)]] : vis;
+  const ghostUrls = ghostProteinUrls(shown.filter(Boolean), prot);
+  const proteinKey = JSON.stringify([prot, pocket, ...ghostUrls]);
+  if (proteinKey === currentProteinKey) return;
   if (proteinData.length) { const b = plugin.build(); for (const x of proteinData) b.delete(x.ref || x); await b.commit(); proteinData = []; }
   const pr = await loadStruct(prot, 'pdb');
   proteinData.push(pr.data);
   await addRep(pr.struct, 'polymer', 'cartoon', proteinMode === 'af3' ? AF3PROT : PROT, 0.5);
+  for (const url of ghostUrls) {
+    const ghost = await loadStruct(url, 'pdb');
+    proteinData.push(ghost.data);
+    await addRep(ghost.struct, 'polymer', 'cartoon', AF3PROT, GHOST_PROTEIN_ALPHA);
+  }
   if (pocket) {
     const ps = await loadStruct(pocket, 'pdb');
     proteinData.push(ps.data);
     await addSticks(ps.struct, 0.16, 0.95);
   }
-  currentProtUrl = prot;
+  currentProteinKey = proteinKey;
 }
 async function clearLayer() {
   if (!layerData.length && !hbondData.length) return;
@@ -518,7 +551,10 @@ async function buildSingleLayer() {     // only the moving ligand poses (+ cryst
   return ligandSpheres;
 }
 async function buildLayer() {
-  if (displayMode === 'grid') return buildGrid();
+  if (displayMode === 'grid') {
+    $('#gridview').classList.add('on', 'loading-grid');
+    return buildGrid();
+  }
   // Keep the grid covering the stage until the main scene is ready. This matters when Grid persisted
   // across a question boundary: the singleton viewer was preloaded, but can still need a pose rebuild.
   if ($('#gridview').classList.contains('on')) {
@@ -541,7 +577,8 @@ async function loadQuestion(i) {
   item.choices.forEach(c => (byCluster[c.cluster] ??= []).push({ ...c }));
   const clusters = shuffle(Object.values(byCluster)).map((members, k) => {
     const color = PALETTE[k % PALETTE.length], label = LABELS[k % LABELS.length];
-    members.forEach((m, j) => { m.color = color; m.label = label + (members.length > 1 ? '·' + (j + 1) : ''); });
+    decorateClusterMembers(members, label);
+    members.forEach(member => { member.color = color; });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
   const gridMethods = item.source === 'rnp'
@@ -558,7 +595,7 @@ async function loadQuestion(i) {
   $('#myview').style.display = 'none'; $('#start').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
   try { await plugin.clear(); } catch (e) {}
-  proteinData = []; layerData = []; hbondData = []; currentProtUrl = null;
+  proteinData = []; layerData = []; hbondData = []; currentProteinKey = null;
   showXtal = false;
   syncButtons();
   try {
@@ -595,7 +632,7 @@ function renderUI() {
     let nm;
     if (clustered) {
       const cl = entry.cluster;
-      const label = displayMode === 'grid' ? c.label : cl.label;
+      const label = cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
       nm = `Pose ${label}` + (count > 1
         ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
