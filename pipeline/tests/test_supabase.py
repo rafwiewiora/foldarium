@@ -367,6 +367,69 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(decisions[0]["decision"], "selected")
         self.assertEqual(decisions[0]["target_id"], target["target_id"])
 
+    def test_appends_only_absent_runs_to_the_stored_weekly_campaign(self) -> None:
+        plan = self.weekly_plan()
+        campaign = {
+            **plan["campaign"],
+            "status": "predicting",
+            "metadata": {"weekly_plan_sha256": "b" * 64},
+        }
+        snapshot = {
+            "snapshot_id": "snapshot_existing",
+            "campaign_id": campaign["campaign_id"],
+            "release_date": campaign["release_date"],
+            "plan_sha256": "b" * 64,
+            "files": {"wwpdb_sequence": {"sha256": "c" * 64}},
+            "metadata": {},
+        }
+        existing = plan["tasks"][0]["task_id"]
+
+        class ExpansionOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if request.get_method() == "GET":  # type: ignore[attr-defined]
+                    if "/rest/v1/campaigns?" in url:
+                        return FakeResponse(json.dumps([campaign]).encode())
+                    if "/rest/v1/prerelease_snapshots?" in url:
+                        return FakeResponse(json.dumps([snapshot]).encode())
+                    if "/rest/v1/prediction_runs?" in url:
+                        return FakeResponse(json.dumps([{"run_id": existing}]).encode())
+                if url.endswith("/rest/v1/rpc/register_weekly_prediction_plan"):
+                    return FakeResponse(b'{"status":"registered","target_count":1,"run_count":1}')
+                if url.endswith("/rest/v1/rpc/record_curation_decisions"):
+                    return FakeResponse(b'{"status":"recorded"}')
+                return FakeResponse(b'{"Key":"stored"}')
+
+        opener = ExpansionOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        response = coordinator.append_weekly_plan(
+            plan,
+            adapter_version="foldarium-pipeline/0.3",
+        )
+        self.assertEqual(response["status"], "registered")
+        self.assertEqual(response["run_count"], 1)
+        self.assertEqual(response["registered_run_ids"], [plan["tasks"][1]["task_id"]])
+        register = next(
+            request for request, _ in opener.calls
+            if request.full_url.endswith("/rest/v1/rpc/register_weekly_prediction_plan")
+        )
+        payload = json.loads(register.data)
+        self.assertEqual(payload["p_campaign"], campaign)
+        self.assertEqual(payload["p_snapshot"], snapshot)
+        self.assertEqual(len(payload["p_targets"]), 1)
+        self.assertEqual([row["run_id"] for row in payload["p_runs"]], [plan["tasks"][1]["task_id"]])
+        decisions = next(
+            request for request, _ in opener.calls
+            if request.full_url.endswith("/rest/v1/rpc/record_curation_decisions")
+        )
+        self.assertEqual(
+            json.loads(decisions.data)["p_decisions"][0]["stage"],
+            "prospective-expansion",
+        )
+
     def test_records_private_curation_decisions_through_one_rpc(self) -> None:
         opener = RecordingOpener()
         coordinator = SupabaseCoordinator(

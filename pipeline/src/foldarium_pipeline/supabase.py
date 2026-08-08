@@ -877,6 +877,213 @@ class SupabaseCoordinator(SupabasePublisher):
         self._encode_json(payload)
         return self._rpc("register_weekly_prediction_plan", payload)
 
+    def append_weekly_plan(
+        self,
+        plan: Mapping[str, Any],
+        *,
+        adapter_version: str,
+        execution_backend: str = "modal",
+        max_attempts: int = 1,
+    ) -> dict[str, Any]:
+        """Append previously capped tasks to an immutable registered campaign.
+
+        Saturday's first bounded launch may deliberately register only a small
+        pilot.  Once that pilot is approved, this path reuses the exact stored
+        campaign and prerelease snapshot while adding only target/run identities
+        that are absent. Existing rows are never reset or updated.
+        """
+
+        normalized = _json_object(plan, "plan")
+        campaign = _json_object(normalized.get("campaign"), "plan.campaign")
+        targets = normalized.get("targets")
+        tasks = normalized.get("tasks")
+        plan_digest = normalized.get("plan_sha256")
+        if not isinstance(targets, list) or not targets or not all(
+            isinstance(target, Mapping) for target in targets
+        ):
+            raise SupabasePublicationError("plan.targets must be a non-empty array")
+        if not isinstance(tasks, list) or not tasks or not all(
+            isinstance(task, Mapping) for task in tasks
+        ):
+            raise SupabasePublicationError("plan.tasks must be a non-empty array")
+        if not isinstance(plan_digest, str) or not _SHA256.fullmatch(plan_digest):
+            raise SupabasePublicationError("plan.plan_sha256 must be a lowercase SHA-256")
+        unhashed = {
+            key: value
+            for key, value in normalized.items()
+            if key not in {"plan_sha256", "generated_at"}
+        }
+        actual_digest = hashlib.sha256(canonical_json(unhashed).encode("utf-8")).hexdigest()
+        if actual_digest != plan_digest:
+            raise SupabasePublicationError("plan.plan_sha256 does not match the plan")
+        if not isinstance(adapter_version, str) or not adapter_version.strip():
+            raise SupabasePublicationError("adapter_version must be a non-empty string")
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+            raise SupabasePublicationError("max_attempts must be a positive integer")
+
+        campaign_id = _safe_identifier(campaign.get("campaign_id"), "campaign_id")
+        campaign_query = urlencode(
+            {
+                "select": (
+                    "campaign_id,name,source,release_date,selection_policy_version,"
+                    "configuration,status,metadata"
+                ),
+                "campaign_id": f"eq.{campaign_id}",
+                "limit": "1",
+            }
+        )
+        stored_campaigns = self._get_json_rows(
+            f"/rest/v1/campaigns?{campaign_query}", "weekly expansion campaign preflight"
+        )
+        if len(stored_campaigns) != 1:
+            raise SupabasePublicationError("weekly expansion requires one existing campaign")
+        snapshot_query = urlencode(
+            {
+                "select": "snapshot_id,campaign_id,release_date,plan_sha256,files,metadata",
+                "campaign_id": f"eq.{campaign_id}",
+                "order": "created_at.desc",
+                "limit": "1",
+            }
+        )
+        stored_snapshots = self._get_json_rows(
+            f"/rest/v1/prerelease_snapshots?{snapshot_query}",
+            "weekly expansion snapshot preflight",
+        )
+        if len(stored_snapshots) != 1:
+            raise SupabasePublicationError("weekly expansion requires one existing snapshot")
+
+        run_query = urlencode(
+            {
+                "select": "run_id",
+                "target_id": "in.(" + ",".join(
+                    sorted(
+                        {
+                            _safe_identifier(
+                                task.get("target", {}).get("target_id"), "task target_id"
+                            )
+                            for task in tasks
+                        }
+                    )
+                ) + ")",
+            }
+        )
+        existing_runs = {
+            _safe_identifier(row.get("run_id"), "stored run_id")
+            for row in self._get_json_rows(
+                f"/rest/v1/prediction_runs?{run_query}",
+                "weekly expansion run preflight",
+            )
+        }
+        new_tasks = [deepcopy(dict(task)) for task in tasks if task.get("task_id") not in existing_runs]
+        if not new_tasks:
+            return {
+                "status": "already-registered",
+                "campaign_id": campaign_id,
+                "registered_run_ids": [],
+            }
+        new_target_ids = {
+            _safe_identifier(task.get("target", {}).get("target_id"), "task target_id")
+            for task in new_tasks
+        }
+        target_by_id = {
+            _safe_identifier(target.get("target_id"), "target_id"): deepcopy(dict(target))
+            for target in targets
+        }
+        if not new_target_ids.issubset(target_by_id):
+            raise SupabasePublicationError("every new task target must be present in plan.targets")
+
+        target_rows: list[dict[str, Any]] = []
+        packages: dict[str, dict[str, Any]] = {}
+        release_date = campaign.get("release_date")
+        for target_id in sorted(new_target_ids):
+            target = target_by_id[target_id]
+            encoded = canonical_json(target).encode("utf-8")
+            package = self.store_bytes(encoded, "application/json")
+            packages[target_id] = package
+            target_rows.append(
+                {
+                    "target_id": target_id,
+                    "campaign_id": campaign_id,
+                    "source_id": target_id,
+                    "source_release_date": release_date,
+                    "package_uri": package["object_uri"],
+                    "package_sha256": package["sha256"],
+                    "package_schema_version": 1,
+                    "input_summary": {
+                        "schema_version": target.get("schema_version"),
+                        "entities": [
+                            {
+                                "type": entity.get("type"),
+                                "chain_ids": entity.get("chain_ids"),
+                            }
+                            for entity in target.get("entities", [])
+                        ],
+                    },
+                    "metadata": target.get("metadata", {}),
+                }
+            )
+
+        run_rows: list[dict[str, Any]] = []
+        for task in new_tasks:
+            if task.get("campaign_id") != campaign_id:
+                raise SupabasePublicationError("new task campaign does not match stored campaign")
+            target_id = str(task.get("target", {}).get("target_id", ""))
+            package = packages[target_id]
+            row = build_run_row(
+                task,
+                adapter_version=adapter_version,
+                execution_backend=execution_backend,
+                input_uri=package["object_uri"],
+                max_attempts=max_attempts,
+            )
+            if row["input_sha256"] != package["sha256"]:
+                raise SupabasePublicationError("target package digest does not match staged input")
+            run_rows.append(row)
+
+        response = self._rpc(
+            "register_weekly_prediction_plan",
+            {
+                "p_snapshot": stored_snapshots[0],
+                "p_campaign": stored_campaigns[0],
+                "p_targets": target_rows,
+                "p_runs": run_rows,
+            },
+        )
+        decisions = [
+            {
+                "decision_id": stable_id(
+                    "curation",
+                    {
+                        "source": "wwpdb-prerelease",
+                        "stage": "prospective-expansion",
+                        "target_id": target_id,
+                        "plan_sha256": plan_digest,
+                    },
+                ),
+                "source": "wwpdb-prerelease",
+                "stage": "prospective-expansion",
+                "target_id": target_id,
+                "decision": "selected",
+                "reason": "selected-for-full-prerelease-blind-round",
+                "input_sha256": plan_digest,
+                "metrics": {},
+                "provenance": {
+                    "adapter_version": adapter_version,
+                    "plan_sha256": plan_digest,
+                },
+            }
+            for target_id in sorted(new_target_ids)
+        ]
+        self.record_curation_decisions(decisions)
+        return {
+            "status": "registered",
+            "campaign_id": campaign_id,
+            "target_count": len(target_rows),
+            "run_count": len(run_rows),
+            "registered_run_ids": [row["run_id"] for row in run_rows],
+            "registration": response,
+        }
+
     def open_weekly_quiz_round(
         self,
         *,

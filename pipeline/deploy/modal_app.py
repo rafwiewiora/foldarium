@@ -78,6 +78,22 @@ LEASE_GRACE_SECONDS = 15 * 60
 OPENFOLD_CACHE_ROOT = "/cache/openfold"
 BOLTZ_CACHE_ROOT = "/cache/boltz"
 
+
+def _bounded_prediction_concurrency() -> int:
+    """Resolve an operator-reviewed per-method GPU concurrency ceiling."""
+
+    raw = os.environ.get("FOLDARIUM_PREDICTION_MAX_CONTAINERS", "1")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("FOLDARIUM_PREDICTION_MAX_CONTAINERS must be an integer") from exc
+    if not 1 <= value <= 12:
+        raise ValueError("FOLDARIUM_PREDICTION_MAX_CONTAINERS must be from 1 to 12")
+    return value
+
+
+PREDICTION_MAX_CONTAINERS = _bounded_prediction_concurrency()
+
 # Saturday intake follows the lifecycle documented at the repository root. The
 # cron belongs to this adapter, not to the provider-neutral pipeline core. CAMEO
 # publication can lag the nominal 03:00 UTC boundary, so the deployed poller
@@ -409,7 +425,7 @@ if modal is not None:
         memory=32768,
         gpu="A100-40GB",
         timeout=GPU_FUNCTION_TIMEOUT_SECONDS,
-        max_containers=1,
+        max_containers=PREDICTION_MAX_CONTAINERS,
         volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
         secrets=[control_plane_secret],
     )
@@ -425,7 +441,7 @@ if modal is not None:
         memory=16384,
         gpu="L40S",
         timeout=GPU_FUNCTION_TIMEOUT_SECONDS,
-        max_containers=1,
+        max_containers=PREDICTION_MAX_CONTAINERS,
         volumes={BOLTZ_CACHE_ROOT: boltz_cache},
         secrets=[control_plane_secret],
     )
@@ -475,6 +491,37 @@ if modal is not None:
         """Fan out already-planned tasks; return Modal call IDs for observability."""
 
         return [_spawn_task(task_json) for task_json in task_jsons]
+
+    @app.function(
+        image=control_image,
+        cpu=1.0,
+        memory=2048,
+        secrets=[control_plane_secret],
+        timeout=15 * 60,
+        max_containers=1,
+    )
+    def register_weekly_expansion(plan_json: str | dict[str, Any]) -> dict[str, Any]:
+        """Append reviewed tasks to an existing capped weekly campaign.
+
+        This registration-only seam never spawns a prediction. The caller must
+        separately submit the returned run IDs, which preserves a review point
+        between durable control-plane creation and metered GPU fan-out.
+        """
+
+        from foldarium_pipeline.intake import ADAPTER_VERSION
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        if isinstance(plan_json, str):
+            plan = json.loads(plan_json)
+        elif isinstance(plan_json, Mapping):
+            plan = dict(plan_json)
+        else:
+            raise TypeError("plan_json must be a JSON object or serialized object")
+        return SupabaseCoordinator.from_env().append_weekly_plan(
+            plan,
+            adapter_version=ADAPTER_VERSION,
+            max_attempts=1,
+        )
 
     @app.function(
         image=control_image,

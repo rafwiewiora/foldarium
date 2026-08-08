@@ -142,7 +142,8 @@ serialization. They must never enter task JSON, browser code, logs, or git.
 - Boltz GPU: L40S, 4 physical CPU cores, 16 GiB host RAM;
 - `GPU_FUNCTION_TIMEOUT_SECONDS = 35 * 60` as the outer container ceiling on both GPU functions;
 - a synchronous `run_task` local entrypoint that blocks on `.remote()` and prints the terminal result;
-- `max_containers=1` on each GPU function;
+- prediction concurrency controlled by `FOLDARIUM_PREDICTION_MAX_CONTAINERS`
+  (default 1, hard-capped at 12 per method);
 - scale-to-zero behavior (no warm containers requested);
 - weekly cron completely absent unless `FOLDARIUM_ENABLE_WEEKLY_CRON=1` is present at deploy time.
 
@@ -367,9 +368,10 @@ CPU, host memory, image building, downloads, and Volume storage add cost, but tw
 should remain comfortably within USD 20.
 
 The outer-timeout hardening is done: both GPU functions now use a 35-minute ceiling
-(`GPU_FUNCTION_TIMEOUT_SECONDS`), which also caps the derived run lease, and `max_containers=1` is
-retained. Five-sample weekly L4 tasks use a 30-minute subprocess budget, leaving five minutes for
-validation and durable publication.
+(`GPU_FUNCTION_TIMEOUT_SECONDS`), which also caps the derived run lease. Prediction concurrency is
+operator-controlled by `FOLDARIUM_PREDICTION_MAX_CONTAINERS`, defaulting to one and refusing values
+above 12 per method. Five-sample weekly L4 tasks use a 30-minute subprocess budget, leaving five
+minutes for validation and durable publication.
 
 ## Task/run registration details
 
