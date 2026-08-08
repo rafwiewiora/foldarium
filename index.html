@@ -16,6 +16,14 @@
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
   #side,#viewer-question,#view-options,.badge{font-family:"Geist Sans",ui-sans-serif,system-ui,sans-serif}
+  #side{--ink:#171a1f;--muted:#66717f;--faint:#8a94a3;--line:#e2e6eb;color:var(--ink)}
+  #side h1{font-size:18px;letter-spacing:.065em}
+  #side .sub{font-size:12.5px;color:var(--muted);letter-spacing:.025em;line-height:1.45}
+  #side .q{font-size:11.5px;color:var(--faint);letter-spacing:.075em}
+  #side .choice{font-size:14px;line-height:1.4}
+  #side .setup-label{color:var(--muted)}
+  #side .setup-options small,#side .hint{color:var(--faint)}
+  #side .choice .tag{color:var(--faint)}
   button,input,summary{font-family:inherit}
   #gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
   #gate[hidden],#wrap[hidden]{display:none!important}

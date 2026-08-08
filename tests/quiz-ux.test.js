@@ -74,3 +74,13 @@ test('quiz chrome uses Geist Sans without changing the molecular viewer', async 
   assert.match(html, /#side,#viewer-question,#view-options,\.badge\{font-family:"Geist Sans"/);
   assert.doesNotMatch(html, /html,body\{[^}]*font-family:"Geist Sans"/);
 });
+
+test('left panel has a balanced type and gray hierarchy', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /#side\{--ink:#171a1f;--muted:#66717f;--faint:#8a94a3;--line:#e2e6eb/);
+  assert.match(html, /#side h1\{font-size:18px/);
+  assert.match(html, /#side \.sub\{font-size:12\.5px/);
+  assert.match(html, /#side \.q\{font-size:11\.5px/);
+  assert.match(html, /#side \.choice\{font-size:14px;line-height:1\.4/);
+});
