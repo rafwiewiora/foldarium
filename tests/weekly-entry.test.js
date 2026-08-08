@@ -44,6 +44,8 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(html, /Results and vote totals will be available Wednesday/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /Wednesday results are available\./);
+  assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);
+  assert.match(app, /Read-only Preview:[\s\S]*?this vote was not saved/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {

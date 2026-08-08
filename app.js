@@ -30,6 +30,8 @@ const OPTS = {
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
 const researchBackend = () => DEV ? null : window.foldariumBackend;
+const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
+  && window.FOLDARIUM_SUPABASE?.writable === false;
 const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [], weekly: [] };
@@ -825,6 +827,12 @@ async function startQuiz() {
     input.focus();
     return;
   }
+  if (isReadOnlyPreview()) {
+    remoteSessionId = null;
+    participantDisplayName = displayName;
+    beginQuiz();
+    return;
+  }
   button.disabled = true;
   status.textContent = 'Creating your private quiz session…';
   try {
@@ -1023,6 +1031,16 @@ async function finalizeWeeklyVote() {
   const picked = cur.selected;
   const choiceId = picked.none ? null : picked._weeklyChoiceId;
   const verdict = $('#verdict'); verdict.style.display = '';
+  if (isReadOnlyPreview()) {
+    viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
+    cur.revealed = true;
+    cur.showAnswer = false;
+    renderUI();
+    verdict.innerHTML = '<b>Read-only Preview:</b> this vote was not saved. Results remain blind until Wednesday.';
+    $('#next').style.display = '';
+    $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
+    return;
+  }
   verdict.textContent = 'Recording vote…';
   try {
     const backend = researchBackend();
@@ -1209,7 +1227,9 @@ function finish() {
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   if (quizSource === 'weekly') {
-    $('#verdict').innerHTML = WEEKLY_ROUND?.public_status === 'revealed'
+    $('#verdict').innerHTML = isReadOnlyPreview()
+      ? '<b>Read-only Preview complete.</b> No names or votes were saved.'
+      : WEEKLY_ROUND?.public_status === 'revealed'
       ? '<b>Weekly results complete.</b> These scores use the Wednesday released coordinates.'
       : '<b>Your weekly votes are saved.</b> Return Wednesday for released-coordinate results.';
     return;
