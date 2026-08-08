@@ -1,0 +1,9 @@
+{
+  "diffusion_samples": 5,
+  "max_parallel_samples": 1,
+  "msa_mode": "empty",
+  "recycling_steps": 3,
+  "sampling_steps": 200,
+  "seed": 0,
+  "step_scale": 1.5
+}

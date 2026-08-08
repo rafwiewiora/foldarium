@@ -47,6 +47,12 @@ const disabledBackend = {
   getLeaderboard: async () => {
     throw new Error('Leaderboard persistence is unavailable.');
   },
+  getWeeklyRound: async () => null,
+  getWeeklyVotes: async () => [],
+  getWeeklyVoteTotals: async () => [],
+  submitWeeklyVote: async () => {
+    throw new Error('Weekly quiz persistence is unavailable.');
+  },
 };
 
 export function createDeferredBackend({
@@ -99,6 +105,18 @@ export function createDeferredBackend({
     },
     async getLeaderboard() {
       return (await requireTarget()).getLeaderboard();
+    },
+    async getWeeklyRound() {
+      return (await requireTarget()).getWeeklyRound();
+    },
+    async getWeeklyVotes(...args) {
+      return (await requireTarget()).getWeeklyVotes(...args);
+    },
+    async getWeeklyVoteTotals(...args) {
+      return (await requireTarget()).getWeeklyVoteTotals(...args);
+    },
+    async submitWeeklyVote(...args) {
+      return (await requireTarget()).submitWeeklyVote(...args);
     },
     attach(backend) {
       if (target || failure) return;
@@ -315,6 +333,50 @@ export function createQuizBackend({
     },
     async getLeaderboard() {
       return (await leaderboardRpc('get_leaderboard')) ?? [];
+    },
+    async getWeeklyRound() {
+      const rows = await leaderboardRpc('get_current_weekly_quiz_round');
+      if (rows == null) return null;
+      if (!Array.isArray(rows)) throw new Error('Weekly quiz round response is invalid.');
+      return rows[0] ?? null;
+    },
+    async getWeeklyVotes(roundId) {
+      if (!roundId) throw new Error('Weekly round identity is invalid.');
+      return (await leaderboardRpc('get_my_weekly_quiz_votes', {
+        p_round_id: roundId,
+      }, true)) ?? [];
+    },
+    async getWeeklyVoteTotals(roundId) {
+      if (!roundId) throw new Error('Weekly round identity is invalid.');
+      return (await leaderboardRpc('get_weekly_quiz_vote_totals', {
+        p_round_id: roundId,
+      })) ?? [];
+    },
+    async submitWeeklyVote(roundId, itemId, choiceId, pickedNone) {
+      if (!roundId || !itemId || typeof pickedNone !== 'boolean') {
+        throw new Error('Weekly vote identity is invalid.');
+      }
+      if ((pickedNone && choiceId != null) || (!pickedNone && !choiceId)) {
+        throw new Error('Weekly vote choice is invalid.');
+      }
+      let remoteClient;
+      try {
+        remoteClient = await getClient();
+      } catch (error) {
+        throw new Error(`Weekly quiz persistence is unavailable: ${error.message}`, {
+          cause: error,
+        });
+      }
+      await userId(remoteClient);
+      const result = await remoteClient.rpc('submit_weekly_quiz_vote', {
+        p_vote_id: uuid(),
+        p_round_id: roundId,
+        p_item_id: itemId,
+        p_choice_id: pickedNone ? null : choiceId,
+        p_picked_none: pickedNone,
+      });
+      if (result.error) throw result.error;
+      return result.data;
     },
   };
 }

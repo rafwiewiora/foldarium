@@ -25,11 +25,19 @@ game); `oracle − game-able` = the **all-correct / trivial** bucket. Each bucke
 - `build_quiz_items.py` — game-able (a correct + a wrong pose)
 - `archive_build_allwrong.py` — all-wrong (no correct pose)
 - `archive_build_allcorrect.py` — all-correct (positive control)
+- `cameo/public_catchup.py` — current public CAMEO pages/AF3/reference coordinates; scan,
+  stage, then explicitly apply missing released weeks without the historical local dump
+- `cameo/score_stage_novelty.py` — resumable Foldseek/RCSB novelty scoring directly against a
+  catch-up stage's exported receptor and crystal ligand; `--update-report` copies only completed
+  boolean classifications into `catchup-report.json`
 
 Shared steps: `align_to_crystal.py` (superpose poses onto the crystal frame), `add_xtal_perpose.py` /
 `add_af3_proteins.py` / `use_af3_protein.py` (crystal ref + AF3-protein toggle). Novelty:
 `build_train_sim_quiz.py` / `build_sample_novelty.py` / `build_ligand_novelty.py` (Foldseek → pre-cutoff →
-ligand shape overlap). `process_cameo.py` is the core (collect models, pick the drug-like het, per-model RMSD).
+ligand shape overlap). Their public API dependency is the checked-in
+`foldarium_pipeline.foldseek` client; it searches only `pdb100`, batches RCSB release-date checks, and
+fails without assigning novelty when an upstream request is unavailable. `process_cameo.py` is the core
+(collect models, pick the drug-like het, per-model RMSD).
 
 ## Runs-n-Poses (retrospective) — `rnp/`
 Source: the RnP Zenodo release (`prediction_files.tar.gz`, 5 methods) + `all_similarity_scores.parquet`.

@@ -1,0 +1,19 @@
+{
+  "schema_version": "foldarium.prediction/v1",
+  "target_id": "foldarium-smoke-001",
+  "source": {
+    "kind": "synthetic-smoke-test"
+  },
+  "entities": [
+    {
+      "type": "protein",
+      "chain_ids": ["A"],
+      "sequence": "MKTAYIAKQRQISFVKSHFSRQDILDLWQ"
+    },
+    {
+      "type": "ligand",
+      "chain_ids": ["L"],
+      "smiles": "CCO"
+    }
+  ]
+}
