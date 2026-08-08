@@ -11,6 +11,7 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
+const GHOST_POSE_ALPHA = 0.18, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
 // game-able = has a <1.5 AND a >3 pose; all-wrong = EVERY pose > 3; 1.5-3 A limbo items are dropped.
 const CORRECT_THRESH = 1.5, WRONG_THRESH = 3.0;
@@ -45,16 +46,17 @@ let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
 let displayMode = WEEKLY_ONLY ? 'one' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
+let showProteinEnsemble = false; // optional faint receptor backbones for the Weekly visual experiment
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
-let userView = { displayMode, clustered: true, proteinMode: 'crystal', showHbonds: false };
-const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds }; };
+let userView = { displayMode, clustered: true, proteinMode: 'crystal', showHbonds: false, showProteinEnsemble: false };
+const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds, showProteinEnsemble }; };
 const applyUserView = () => {
-  ({ displayMode, clustered, proteinMode, showHbonds } = userView);
+  ({ displayMode, clustered, proteinMode, showHbonds, showProteinEnsemble } = userView);
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
 };
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
@@ -82,6 +84,7 @@ function currentReplayableAppState() {
     clustered,
     protein_mode: proteinMode,
     show_hbonds: showHbonds,
+    show_protein_ensemble: showProteinEnsemble,
     show_xtal: showXtal,
     shown_one_index: shownOne,
     grid_page_index: gridMethodIndex,
@@ -112,7 +115,7 @@ function activatePane(paneId, reason = 'interaction') {
 function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
-    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #lock, '
+    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #protein-ensemble, #lock, '
     + '#next, #prev, #myview, #showXtal, #start, #gridpages button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
@@ -140,12 +143,15 @@ async function addRep(struct, selector, type, color, alpha = 1, targetPlugin = p
     type, typeParams: { alpha }, color: 'uniform', colorParams: { value: color },
   });
 }
-async function addPose(struct, carbon, targetPlugin = plugin) {
+async function addPose(struct, carbon, targetPlugin = plugin, {
+  alpha = 1,
+  sizeFactor = 0.24,
+} = {}) {
   let comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'ligand');
   if (!comp) comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return null;
   return targetPlugin.builders.structure.representation.addRepresentation(comp, {
-    type: 'ball-and-stick', typeParams: { sizeFactor: 0.24 },
+    type: 'ball-and-stick', typeParams: { sizeFactor, alpha },
     color: 'element-symbol', colorParams: { carbonColor: { name: 'uniform', params: { value: carbon } } },
   });
 }
@@ -163,6 +169,42 @@ function visibleChoices() {
   return clustered ? cur.clusters.map(c => c.rep) : cur.clusters.flatMap(c => c.members);
 }
 
+function clusterForChoice(choice) {
+  return cur?.clusters?.find(cluster => cluster.members.includes(choice)) || null;
+}
+
+// A clustered Weekly choice remains one vote (the medoid/representative raw
+// choice ID), but the geometry shows every member: faint members first and the
+// representative last so its colour and silhouette stay visually dominant.
+function weeklyPoseLayers(choices) {
+  if (cur?.item?.source !== 'weekly' || !clustered || cur.revealed && cur.showAnswer) {
+    return choices.map(choice => ({ choice, ghost: false }));
+  }
+  return choices.flatMap(choice => {
+    const cluster = clusterForChoice(choice);
+    if (!cluster || cluster.members.length < 2) return [{ choice, ghost: false }];
+    return [
+      ...cluster.members.filter(member => !sameChoice(member, choice))
+        .map(member => ({ choice: member, ghost: true })),
+      { choice, ghost: false },
+    ];
+  });
+}
+
+function weeklyGhostProteinUrls(choices, primaryUrl) {
+  if (!showProteinEnsemble || cur?.item?.source !== 'weekly' || !clustered
+      || cur.revealed && cur.showAnswer) return [];
+  const urls = [];
+  for (const choice of choices) {
+    const cluster = clusterForChoice(choice);
+    for (const member of cluster?.members || [choice]) {
+      if (member.afprotein_file && member.afprotein_file !== primaryUrl
+          && !urls.includes(member.afprotein_file)) urls.push(member.afprotein_file);
+    }
+  }
+  return urls;
+}
+
 function configurePlugin(targetPlugin) {
   try {
     targetPlugin.canvas3d?.setProps({
@@ -170,6 +212,20 @@ function configurePlugin(targetPlugin) {
       renderer: { backgroundColor: 0xffffff },
     });
   } catch (e) {}
+}
+function cameraChanges(targetPlugin) {
+  return targetPlugin?.canvas3d?.camera?.changed || targetPlugin?.canvas3d?.camera?.stateChanged;
+}
+async function pinCameraSnapshot(targetPlugin, snapshot) {
+  if (!targetPlugin?.canvas3d?.camera || !snapshot) return;
+  const setSnapshot = value => targetPlugin.canvas3d?.camera?.setState?.(value, 0);
+  if (window.pinCameraAfterSettled) {
+    await window.pinCameraAfterSettled({
+      cameraChanged: cameraChanges(targetPlugin),
+      setSnapshot,
+      snapshot,
+    });
+  } else setSnapshot(snapshot);
 }
 const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
 function focusLigandSpheres(targetPlugin, spheres) {
@@ -342,11 +398,42 @@ async function buildGridCell(cell, revision) {
     const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+    if (cell.spec.showProteinEnsemble && cell.spec.item.source === 'weekly' && cell.spec.clustered) {
+      const proteinUrls = [...new Set((cell.entry.cluster?.members || [])
+        .map(member => member.afprotein_file)
+        .filter(url => url && url !== urls.prot))];
+      for (const proteinUrl of proteinUrls) {
+        const ghostProtein = await loadStruct(proteinUrl, 'pdb', cell.plugin);
+        await addRep(ghostProtein.struct, 'polymer', 'cartoon', urls.color,
+          GHOST_PROTEIN_ALPHA, cell.plugin);
+      }
+    }
     if (urls.pocket) { const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin); await addSticks(ps.struct, 0.16, 0.95, cell.plugin); }
-    const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
-    await addPose(pose.struct, cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color, cell.plugin);
-    cell.poseSphere = structureSphere(pose.struct);
-    if (revision === gridBuildRevision && !cell.disposed) { cell.viewer.handleResize?.(); cell.plugin.canvas3d.requestCameraReset(); }
+    const poseMembers = cell.spec.item.source === 'weekly' && cell.spec.clustered
+      ? [
+          ...(cell.entry.cluster?.members || []).filter(member => !sameChoice(member, c))
+            .map(choice => ({ choice, ghost: true })),
+          { choice: c, ghost: false },
+        ]
+      : [{ choice: c, ghost: false }];
+    for (const layer of poseMembers) {
+      const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
+      await addPose(pose.struct,
+        cell.spec.answer ? (layer.choice.correct ? GOOD : BAD) : c.color,
+        cell.plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
+    }
+    if (cell.spec.showHbonds && urls.pocket) {
+      await buildInteractions(urls.pocket, [c.pose_file], cell.plugin);
+    }
+    if (revision === gridBuildRevision && !cell.disposed) {
+      cell.viewer.handleResize?.();
+      await window.waitForCameraSettled({
+        cameraChanged: cameraChanges(cell.plugin),
+        requestReset: () => cell.plugin.canvas3d?.requestCameraReset?.(),
+      });
+    }
   } catch (e) {
     try { cell.viewer?.dispose(); } catch (_) {}
     cell.viewer = null; cell.plugin = null;
@@ -363,7 +450,10 @@ async function buildGridCell(cell, revision) {
   }
 }
 async function buildGrid(preserveCamera = true) {
-  const previousCamera = preserveCamera ? gridViewers.find(cell => cell.plugin?.canvas3d)?.plugin.canvas3d.camera.getSnapshot() : null;
+  const previousCamera = preserveCamera
+    ? (gridViewers.find(cell => cell.plugin?.canvas3d)?.plugin.canvas3d.camera.getSnapshot()
+      || plugin?.canvas3d?.camera?.getSnapshot?.())
+    : null;
   const revision = ++gridBuildRevision;
   disposeGridViewers();
   const view = $('#gridview'), cellsBox = $('#gridcells');
@@ -387,7 +477,8 @@ async function buildGrid(preserveCamera = true) {
     const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
       detachReplay: null,
-      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer } };
+      spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
+        clustered, showHbonds, showProteinEnsemble } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
@@ -395,21 +486,16 @@ async function buildGrid(preserveCamera = true) {
   const active = cells.filter(cell => cell.plugin?.canvas3d);
   if (active.length) {
     const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
-    for (const cell of active) cell.plugin.canvas3d.camera.setState(snapshot, 0);
-    try { plugin.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+    await Promise.all(active.map(cell => pinCameraSnapshot(cell.plugin, snapshot)));
+    try { await pinCameraSnapshot(plugin, snapshot); } catch (e) {}
     stopGridCameraSync = syncGridCameras(active);
   }
   view.classList.remove('loading-grid'); syncGridSelection();
 }
 
-// ---- camera persistence (viewer pattern): keep the view while scrolling poses --------------------
-let savedCam = null;
-function saveCam() { try { savedCam = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) { savedCam = null; } }
-function restoreCam() { try { if (savedCam) plugin.canvas3d.camera.setState(savedCam, 0); } catch (e) {} }
-
 // ---- two layers: a protein/pocket context (fixed for classic questions; pose-specific for Weekly
 //      one-at-a-time) and the rebuilt POSE layer (ligands + crystal-reveal). -----
-let proteinData = [], layerData = [], hbondData = [], currentProtUrl = null, currentPocketUrl = null;
+let proteinData = [], layerData = [], hbondData = [], currentProteinKey = null;
 function protUrls() {
   const answer = cur.revealed && cur.showAnswer;
   if (cur.item.source === 'weekly') {
@@ -435,20 +521,26 @@ function protUrls() {
   }
   return { prot: cur.item.protein_file, pocket: cur.item.pocket_file };
 }
-async function buildProtein() {         // rebuilds ONLY when the target protein changes (no flicker)
+async function buildProtein(shown) {    // rebuilds ONLY when the protein ensemble changes (no flicker)
   const { prot, pocket } = protUrls();
-  if (prot === currentProtUrl && pocket === currentPocketUrl) return;
+  const ghostProteinUrls = weeklyGhostProteinUrls(shown, prot);
+  const proteinKey = JSON.stringify([prot, pocket, ghostProteinUrls]);
+  if (proteinKey === currentProteinKey) return;
   if (proteinData.length) { const b = plugin.build(); for (const x of proteinData) b.delete(x.ref || x); await b.commit(); proteinData = []; }
   const pr = await loadStruct(prot, 'pdb');
   proteinData.push(pr.data);
   await addRep(pr.struct, 'polymer', 'cartoon', proteinMode === 'af3' ? AF3PROT : PROT, 0.5);
+  for (const proteinUrl of ghostProteinUrls) {
+    const ghostProtein = await loadStruct(proteinUrl, 'pdb');
+    proteinData.push(ghostProtein.data);
+    await addRep(ghostProtein.struct, 'polymer', 'cartoon', PROT, GHOST_PROTEIN_ALPHA);
+  }
   if (pocket) {
     const ps = await loadStruct(pocket, 'pdb');
     proteinData.push(ps.data);
     await addSticks(ps.struct, 0.16, 0.95);
   }
-  currentProtUrl = prot;
-  currentPocketUrl = pocket;
+  currentProteinKey = proteinKey;
 }
 async function clearLayer() {
   if (!layerData.length && !hbondData.length) return;
@@ -463,31 +555,37 @@ async function clearLayer() {
 // render Mol*'s built-in 'interactions' representation over it (dashed cylinders). This is treated as an
 // "H-bonds" affordance; Mol*'s default provider set is H-bond-dominated (see report note). Poses stay
 // anonymised (geometry only) and correctness is never revealed — all shown poses are treated equally.
-async function buildHbonds(poseUrls) {
-  if (!showHbonds || !poseUrls.length) return;
-  const { pocket } = protUrls();
-  if (!pocket) return;
+async function buildInteractions(pocket, poseUrls, targetPlugin = plugin, onData = null) {
+  if (!pocket || !poseUrls.length) return;
   const parts = [atomRecords(await fetchPdbText(pocket))];
   for (const u of poseUrls) parts.push(atomRecords(await fetchPdbText(u)));
   const pdb = parts.filter(Boolean).join('\nTER\n') + '\nEND\n';
-  const data = await plugin.builders.data.rawData({ data: pdb });
-  hbondData.push(data);
-  const traj = await plugin.builders.structure.parseTrajectory(data, 'pdb');
-  const model = await plugin.builders.structure.createModel(traj);
-  const struct = await plugin.builders.structure.createStructure(model);
-  const comp = await plugin.builders.structure.tryCreateComponentStatic(struct, 'all');
+  const data = await targetPlugin.builders.data.rawData({ data: pdb });
+  onData?.(data);
+  const traj = await targetPlugin.builders.structure.parseTrajectory(data, 'pdb');
+  const model = await targetPlugin.builders.structure.createModel(traj);
+  const struct = await targetPlugin.builders.structure.createStructure(model);
+  const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return;
-  await plugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
+  await targetPlugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
+}
+async function buildHbonds(poseUrls) {
+  if (!showHbonds || !poseUrls.length) return;
+  const { pocket } = protUrls();
+  await buildInteractions(pocket, poseUrls, plugin, data => hbondData.push(data));
 }
 async function buildCanonicalLayer(shown) {
-  saveCam();
-  await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
+  let preservedCamera = null;
+  try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  await buildProtein(shown);             // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
-  for (const c of shown) {
+  for (const layer of weeklyPoseLayers(shown)) {
+    const c = layer.choice;
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
-    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color);
+    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color, plugin,
+      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
   }
   // crystal reference (true pose) — only after reveal, when toggled on
   const hbondPoses = shown.map(c => c.pose_file);
@@ -498,7 +596,7 @@ async function buildCanonicalLayer(shown) {
     hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
   }
   await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
-  restoreCam();
+  await pinCameraSnapshot(plugin, preservedCamera);
   viewerTraceRecorder?.captureState();
 }
 async function buildSingleLayer() {
@@ -577,8 +675,8 @@ async function loadQuestion(i) {
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
       $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
       try { await plugin.clear(); } catch (e) {}
-      proteinData = []; layerData = []; hbondData = []; savedCam = null;
-      currentProtUrl = null; currentPocketUrl = null;
+      proteinData = []; layerData = []; hbondData = [];
+      currentProteinKey = null;
       showXtal = false;
       syncButtons();
     },
@@ -696,7 +794,7 @@ function showIntro() {
   $('#participant-setup').style.display = DEV ? 'none' : '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
-  $('#hbonds').style.display = 'none';
+  $('#hbonds').style.display = 'none'; $('#protein-ensemble').style.display = 'none';
   $('#myview').style.display = 'none'; $('#xtalrow').style.display = 'none';
   $('#progress').textContent = 'ready';
   if (quizSource === 'weekly') {
@@ -789,7 +887,9 @@ function beginQuiz() {
   $('#lock').textContent = quizSource === 'weekly'
     ? (WEEKLY_ROUND?.public_status === 'revealed' ? 'Show result' : 'Record vote')
     : 'Lock in answer';
-  $('#suggestion-open').disabled = !remoteSessionId;
+  // Read-only Previews should still expose the dialog for visual/interaction
+  // testing; only the database-backed Send action remains unavailable.
+  $('#suggestion-open').disabled = !(remoteSessionId || isReadOnlyPreview());
   loadQuestion(0);
 }
 
@@ -879,10 +979,13 @@ function fallbackSuggestionContext(appState) {
 function openSuggestionDialog() {
   const status = $('#suggestion-status');
   status.textContent = remoteSessionId
-    ? '' : 'Start a named quiz before sending a suggestion.';
+    ? ''
+    : (isReadOnlyPreview()
+      ? 'Read-only Preview: you can inspect this dialog, but Send is disabled.'
+      : 'Start a named quiz before sending a suggestion.');
   $('#suggestion-submit').disabled = !remoteSessionId;
   $('#suggestion-dialog').showModal();
-  if (remoteSessionId) requestAnimationFrame(() => $('#suggestion-text').focus());
+  requestAnimationFrame(() => $('#suggestion-text').focus());
 }
 
 async function submitSuggestion(event) {
@@ -1165,16 +1268,22 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
+  const proteinEnsemble = $('#protein-ensemble');
+  const canShowProteinEnsemble = inPlay && cur.item.source === 'weekly'
+    && clustered && cur.clusters.some(cluster => cluster.members.length > 1);
+  proteinEnsemble.classList.toggle('on', showProteinEnsemble);
+  proteinEnsemble.textContent = showProteinEnsemble ? 'Hide ghost proteins' : 'Ghost proteins';
+  proteinEnsemble.style.display = canShowProteinEnsemble ? '' : 'none';
   const weeklyHasClusters = cur?.item.source === 'weekly'
     && cur.clusters.some(cluster => cluster.members.length > 1);
   const weeklyClusteringAvailable = cur?.item.source === 'weekly'
     && cur.item.clustering_available;
   $('#modehint').textContent = cur?.item.source === 'weekly'
     ? (displayMode === 'grid'
-      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per method-blind pose cluster' : 'One linked viewer per raw blind pose'}. Each pane uses that pose's exact predicted protein; drag or zoom any pane to move them together.`
+      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per method-blind pose cluster; faint sticks show its other members' : 'One linked viewer per raw blind pose'}. Each pane uses the representative pose's exact predicted protein; drag or zoom any pane to move them together.`
       : (displayMode === 'one'
-        ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? ' and the cluster medoid' : ''}.`
-        : `${weeklyHasClusters && clustered ? 'Method-blind pose-cluster representatives' : 'All raw blind poses'} are overlaid in one shared frame. Use One at a time for each pose's exact matching predicted protein.`))
+        ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? '; faint sticks show the other members of its cluster' : ''}.`
+        : `${weeklyHasClusters && clustered ? 'Cluster representatives and their faint member poses' : 'All raw blind poses'} are overlaid in one shared frame. Use One at a time for each pose's exact matching predicted protein.`))
     : (displayMode === 'grid'
       ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
                    : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
@@ -1223,7 +1332,7 @@ function finish() {
   $('#ligand').textContent = 'Quiz complete';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
-  $('#hbonds').style.display = 'none';
+  $('#hbonds').style.display = 'none'; $('#protein-ensemble').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   if (quizSource === 'weekly') {
@@ -1504,6 +1613,15 @@ async function init() {
       syncButtons();
     });
     recordAppEvent('hbonds_toggled');
+  };
+  $('#protein-ensemble').onclick = async () => {
+    if (interactionBlocked()) return;
+    await viewerRebuild.enqueue(() => {
+      showProteinEnsemble = !showProteinEnsemble;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+    });
+    recordAppEvent('protein_ensemble_toggled');
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;

@@ -330,6 +330,81 @@ test('a failed Grid tile is disabled, marked failed, and renders the error as te
   assert.deepEqual(cell.host.htmlAssignments, [], 'exception text must not be injected as HTML');
 });
 
+test('Weekly clustered layers keep one selectable representative and ghost every other pose', async () => {
+  const app = await readApp();
+  const representative = { pose_file: 'rep.pdb' };
+  const firstGhost = { pose_file: 'ghost-1.pdb' };
+  const secondGhost = { pose_file: 'ghost-2.pdb' };
+  const cluster = { rep: representative, members: [firstGhost, representative, secondGhost] };
+  const layers = evaluateDeclaration(app, 'function weeklyPoseLayers(choices)', {
+    cur: { item: { source: 'weekly' }, clusters: [cluster], revealed: false, showAnswer: false },
+    clustered: true,
+    clusterForChoice: () => cluster,
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+  })([representative]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(layers)), [
+    { choice: firstGhost, ghost: true },
+    { choice: secondGhost, ghost: true },
+    { choice: representative, ghost: false },
+  ]);
+});
+
+test('Weekly Grid renders ghost cluster members and representative H-bonds', async () => {
+  const app = await readApp();
+  const poseCalls = [];
+  const interactionCalls = [];
+  let resetCount = 0;
+  const camera = { changed: {}, getSnapshot: () => ({ position: 1 }), setState: () => {} };
+  const plugin = { canvas3d: { camera, requestCameraReset: () => { resetCount += 1; } } };
+  const representative = { pose_file: 'rep.pdb', afprotein_file: 'rep-protein.pdb', color: 7 };
+  const ghost = { pose_file: 'ghost.pdb', afprotein_file: 'ghost-protein.pdb', color: 7 };
+  const sandbox = {
+    molstar: { Viewer: { create: async () => ({ plugin, handleResize: () => {}, dispose: () => {} }) } },
+    OPTS: {},
+    gridBuildRevision: 4,
+    configurePlugin: () => {},
+    viewerTraceRecorder: null,
+    gridProteinUrls: () => ({ prot: 'rep-protein.pdb', pocket: 'rep-pocket.pdb', color: 3 }),
+    loadStruct: async url => ({ struct: { url } }),
+    addRep: async () => {},
+    addSticks: async () => {},
+    addPose: async (_struct, _color, _plugin, options) => { poseCalls.push(options || null); },
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+    GHOST_PROTEIN_ALPHA: 0.12,
+    GHOST_POSE_ALPHA: 0.18,
+    GHOST_POSE_SIZE: 0.14,
+    structureSphere: () => ({ radius: 1 }),
+    buildInteractions: async (...args) => { interactionCalls.push(args); },
+    cameraChanges: target => target.canvas3d.camera.changed,
+    window: { waitForCameraSettled: async ({ requestReset }) => requestReset() },
+    GOOD: 0x2BA84A,
+    BAD: 0xE23B2E,
+  };
+  const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
+  const cell = {
+    entry: { choice: representative, cluster: { members: [representative, ghost] } },
+    card: fakeElement(), head: fakeElement('button'), host: fakeElement(),
+    viewer: null, plugin: null, disposed: false,
+    spec: {
+      item: { source: 'weekly' }, proteinMode: 'crystal', answer: false,
+      clustered: true, showHbonds: true, showProteinEnsemble: true,
+    },
+  };
+
+  await buildGridCell(cell, 4);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(poseCalls)), [
+    { alpha: 0.18, sizeFactor: 0.14 },
+    null,
+  ]);
+  assert.equal(interactionCalls.length, 1);
+  assert.equal(interactionCalls[0][0], 'rep-pocket.pdb');
+  assert.deepEqual(JSON.parse(JSON.stringify(interactionCalls[0][1])), ['rep.pdb']);
+  assert.equal(resetCount, 1);
+  assert.equal(cell.failed, undefined);
+});
+
 test('Easy eligibility keeps reachable pick puzzles and drops sets whose clusters hide an option', async () => {
   const app = await readApp();
   const thresholds = /const CORRECT_THRESH = ([\d.]+), WRONG_THRESH = ([\d.]+);/.exec(app);

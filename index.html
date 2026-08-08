@@ -168,7 +168,10 @@
       <button data-p="crystal" class="on">Crystal protein</button>
       <button data-p="af3">AF3 protein</button>
     </div>
-    <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+      <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
+    </div>
     <div class="hint" id="modehint">Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.</div>
 
     <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
@@ -273,6 +276,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
       window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
       window.createRevealAfterIdle = rebuildModule.createRevealAfterIdle;
       window.waitForCameraSettled = rebuildModule.waitForCameraSettled;
+      window.pinCameraAfterSettled = rebuildModule.pinCameraAfterSettled;
       try {
         const module = await import('./viewer-trace.js');
         window.createViewerTraceRecorder = module.createViewerTraceRecorder;

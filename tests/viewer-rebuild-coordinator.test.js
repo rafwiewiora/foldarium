@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   createRevealAfterIdle,
   createViewerRebuildCoordinator,
+  pinCameraAfterSettled,
   waitForCameraSettled,
 } from '../viewer-rebuild-coordinator.js';
 
@@ -187,6 +188,42 @@ test('waits for a quiet camera after reset before resolving', async () => {
   assert.deepEqual(events, ['reset', 'unsubscribe', 'settled']);
 });
 
+test('pins the requested camera again after late automatic camera changes settle', async () => {
+  let cameraChanged;
+  let nextTimer = 0;
+  const timers = new Map();
+  const states = [];
+  const events = [];
+  const snapshot = { position: [1, 2, 3], target: [0, 0, 0] };
+  const pinned = pinCameraAfterSettled({
+    cameraChanged: {
+      subscribe(callback) {
+        cameraChanged = callback;
+        return { unsubscribe: () => events.push('unsubscribe') };
+      },
+    },
+    setSnapshot(value) { states.push(value); },
+    snapshot,
+    settleMs: 300,
+    setTimer(callback) {
+      const id = ++nextTimer;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimer(id) { timers.delete(id); },
+  }).then(() => events.push('settled'));
+
+  assert.deepEqual(states, [snapshot], 'expected an immediate camera pin');
+  cameraChanged();
+  cameraChanged();
+  assert.equal(timers.size, 1, 'late resets should restart a single quiet timer');
+  [...timers.values()][0]();
+  await pinned;
+
+  assert.deepEqual(states, [snapshot, snapshot], 'expected the final pin to win the reset race');
+  assert.deepEqual(events, ['unsubscribe', 'settled']);
+});
+
 test('quiz routes every pre-answer viewer mutation through the coordinator', async () => {
   const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
   const initStart = app.indexOf('async function init()');
@@ -206,7 +243,7 @@ test('quiz routes every pre-answer viewer mutation through the coordinator', asy
   assert.match(app, /revealAfterIdle = window\.createRevealAfterIdle\(/);
   assert.match(app, /async function reveal\(\)[\s\S]*?await revealAfterIdle\(\);/);
   assert.equal((onePosePick.match(/viewerRebuild\.enqueue\(/g) || []).length, 1);
-  assert.equal((controls.match(/viewerRebuild\.enqueue\(/g) || []).length, 4);
+  assert.equal((controls.match(/viewerRebuild\.enqueue\(/g) || []).length, 5);
   assert.equal((keyboard.match(/viewerRebuild\.enqueue\(/g) || []).length, 2);
   assert.doesNotMatch(onePosePick + controls + keyboard, /onePoseRebuild|await buildLayer\(\)/);
 });

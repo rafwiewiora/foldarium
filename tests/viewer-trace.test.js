@@ -452,7 +452,7 @@ test('quiz records only pre-reveal viewer interactions and keeps the local log l
 
   assert.match(app, /if \(!DEV && typeof window\.createViewerTraceRecorder === 'function'\)/);
   assert.match(app, /await viewerRebuild\.enqueue\([\s\S]*?viewerTraceRecorder\?\.start\(\{ appState: currentReplayableAppState\(\) \}\);/);
-  assert.match(app, /restoreCam\(\);\s*viewerTraceRecorder\?\.captureState\(\);/);
+  assert.match(app, /await pinCameraSnapshot\(plugin, preservedCamera\);\s*viewerTraceRecorder\?\.captureState\(\);/);
   assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop\(\{ appState: currentReplayableAppState\(\) \}\) \?\? null;[\s\S]*?await viewerRebuild\.enqueue\([\s\S]*?cur\.revealed = true/);
   assert.match(app, /function logAnswer\(picked, af3, viewerTrace\)/);
   assert.match(app, /log\.push\(rec\);[\s\S]*?recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);

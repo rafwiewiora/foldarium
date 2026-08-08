@@ -98,6 +98,63 @@ export function waitForCameraSettled({
   });
 }
 
+// Mol* may publish a late automatic camera reset after an asynchronous
+// structure/representation build has resolved. Pinning once immediately after
+// the build is therefore racy: the late reset wins and visibly recentres the
+// scene. Wait until camera changes go quiet, unsubscribe, and then make the
+// caller's snapshot the final camera state.
+export function pinCameraAfterSettled({
+  cameraChanged,
+  setSnapshot,
+  snapshot,
+  settleMs = 300,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+}) {
+  if (!snapshot || typeof setSnapshot !== 'function') return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    let subscription = null;
+    let finished = false;
+
+    const cleanup = () => {
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      subscription?.unsubscribe();
+      subscription = null;
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      try {
+        setSnapshot(snapshot);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const schedule = () => {
+      if (finished) return;
+      if (timer !== null) clearTimer(timer);
+      timer = setTimer(() => {
+        timer = null;
+        finish();
+      }, settleMs);
+    };
+
+    try {
+      subscription = cameraChanged?.subscribe(schedule) ?? null;
+      setSnapshot(snapshot);
+      schedule();
+    } catch (error) {
+      finished = true;
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
 export function createRevealAfterIdle({ coordinator, reveal }) {
   let activeReveal = null;
 

@@ -46,6 +46,8 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(app, /Wednesday results are available\./);
   assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);
   assert.match(app, /Read-only Preview:[\s\S]*?this vote was not saved/);
+  assert.match(app, /Read-only Preview: you can inspect this dialog, but Send is disabled/);
+  assert.match(app, /suggestion-open'\)\.disabled = !\(remoteSessionId \|\| isReadOnlyPreview\(\)\)/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {
