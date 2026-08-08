@@ -90,6 +90,10 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /function drawSession\(\)/);
   assert.match(app, /function gridEntriesFor\(method\)/);
   assert.match(app, /const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'\.split\(''\);/);
+  assert.match(app, /\$\('#mode'\)\.style\.display = inPlay \? '' : 'none';/);
+  assert.match(app, /\$\{cur\.clusters\.length\} blind predicted poses/);
+  assert.match(app, /No geometric clustering was applied to this round\./);
+  assert.match(html, /\.seg\{display:flex;flex:none;/);
   assert.match(html, /data-m="grid"/);
 });
 
