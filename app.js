@@ -491,6 +491,7 @@ function renderUI() {
     const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');
     b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
+    b.style.setProperty('--choice-color', hex(c.color));
     let nm;
     if (clustered) {
       const cl = entry.cluster;
@@ -506,6 +507,7 @@ function renderUI() {
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
     nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
+    nb.style.setProperty('--choice-color', '#5a6675');
     nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span><span class="tag" data-tag></span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);

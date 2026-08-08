@@ -100,11 +100,15 @@
   .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px}
   #choices{gap:0;background:#f4f5f2;border-top:1px solid #cfd4d8;border-inline:1px solid #cfd4d8}
   #choices .choice{min-height:58px;padding:0 16px;gap:12px;border:0;border-bottom:1px solid #cfd4d8;
-    border-radius:0;background:#f4f5f2;color:#31343b;font-size:15px;font-weight:500}
-  #choices .choice:hover{background:#eef1ef;border-color:#cfd4d8}
-  #choices .choice.sel{background:#edf6f8;outline:0;box-shadow:inset 4px 0 0 var(--accent)}
-  #choices .sw{width:13px;height:13px}
-  #choices .choice .tag{display:flex;align-items:center;justify-content:flex-end;min-width:22px;color:#3d424a}
+    border-radius:0;background:linear-gradient(90deg,#f4f5f2 0%,#f4f5f2 36%,var(--choice-color) 100%);
+    color:#31343b;font-size:15px;font-weight:500}
+  #choices .choice:hover{background:linear-gradient(90deg,#eef1ef 0%,#eef1ef 36%,var(--choice-color) 100%);
+    border-color:#cfd4d8}
+  #choices .choice.sel{background:linear-gradient(90deg,#edf6f8 0%,#edf6f8 36%,var(--choice-color) 100%);
+    outline:0;box-shadow:inset 4px 0 0 var(--accent)}
+  #choices .sw{display:none}
+  #choices .choice .tag{display:flex;align-items:center;justify-content:flex-end;min-width:22px;color:#fff;
+    text-shadow:0 1px 2px rgba(0,0,0,.45)}
   #choices .choice .tag::after{content:"→";font-size:21px;font-weight:400;line-height:1}
   #choices .choice.sel .tag::after{content:""}
   button.primary{min-height:44px;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:12px 14px;
