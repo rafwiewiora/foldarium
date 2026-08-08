@@ -38,6 +38,34 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error_code"], "gpu_out_of_memory")
 
+    def test_zero_exit_input_oom_is_not_mislabeled_as_output_validation(self) -> None:
+        task = make_task("boltz2", {"msa_mode": "empty", "seed": 0})
+        completed = CompletedProcess(
+            [],
+            0,
+            stdout="Skipping input: torch.OutOfMemoryError: CUDA out of memory",
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("foldarium_pipeline.worker._GpuMemorySampler"):
+                with patch("foldarium_pipeline.worker.subprocess.run", return_value=completed):
+                    result = execute_task_json(task, temporary, dry_run=False)
+        self.assertEqual(result["error_code"], "gpu_out_of_memory")
+
+    def test_corrupt_msa_archive_gets_an_actionable_failure_code(self) -> None:
+        task = make_task("boltz2", {"msa_mode": "empty", "seed": 0})
+        completed = CompletedProcess(
+            [],
+            0,
+            stdout="Skipping input after tarfile.ReadError: not a gzip file",
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("foldarium_pipeline.worker._GpuMemorySampler"):
+                with patch("foldarium_pipeline.worker.subprocess.run", return_value=completed):
+                    result = execute_task_json(task, temporary, dry_run=False)
+        self.assertEqual(result["error_code"], "msa_preprocessing_failed")
+
 
 if __name__ == "__main__":
     unittest.main()

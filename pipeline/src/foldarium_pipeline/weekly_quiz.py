@@ -237,6 +237,55 @@ def _normalized_runs(
     return grouped
 
 
+def select_complete_method_pairs(
+    runs: Iterable[Mapping[str, Any]],
+    required_methods: frozenset[str] = REQUIRED_METHODS,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Select one newest successful run per required method and target.
+
+    ``campaign_prediction_outputs`` returns newest runs first within each
+    target/method. Replacement successes must not cause an otherwise complete
+    target to disappear from the quiz; only the selected pair is staged.
+    """
+
+    by_target: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for raw in runs:
+        if not isinstance(raw, Mapping):
+            raise WeeklyQuizAssemblyError("campaign outputs must be objects")
+        row = deepcopy(dict(raw))
+        target_id = row.get("target_id")
+        method = row.get("method")
+        if not isinstance(target_id, str) or not target_id:
+            raise WeeklyQuizAssemblyError("campaign output target_id is invalid")
+        if not isinstance(method, str) or not method:
+            raise WeeklyQuizAssemblyError("campaign output method is invalid")
+        by_target[target_id][method].append(row)
+
+    complete: list[dict[str, Any]] = []
+    omitted: list[dict[str, Any]] = []
+    replacements: list[dict[str, Any]] = []
+    for target_id, method_rows in sorted(by_target.items()):
+        methods = set(method_rows)
+        if not required_methods.issubset(methods):
+            omitted.append({"target_id": target_id, "succeeded_methods": sorted(methods)})
+            continue
+        for method in sorted(required_methods):
+            rows = method_rows[method]
+            complete.append(rows[0])
+            if len(rows) > 1:
+                replacements.append(
+                    {
+                        "target_id": target_id,
+                        "method": method,
+                        "selected_run_id": rows[0].get("run_id"),
+                        "ignored_run_ids": [row.get("run_id") for row in rows[1:]],
+                    }
+                )
+    return complete, omitted, replacements
+
+
 def stage_weekly_quiz(
     runs: Iterable[Mapping[str, Any]],
     destination: str | Path,
@@ -425,6 +474,11 @@ def publish_staged_weekly_quiz(
     ):
         raise WeeklyQuizAssemblyError("closes_at must be after opens_at")
 
+    # Service-role uploads also succeed for private buckets, but the browser
+    # resolves every URI below through Supabase's unauthenticated public object
+    # endpoint. Verify visibility before the first upload.
+    public_coordinator.require_public_bucket()
+
     manifest_items: list[dict[str, Any]] = []
     for item in stage.get("items", []):
         if not isinstance(item, Mapping):
@@ -507,5 +561,6 @@ __all__ = [
     "WEEKLY_QUIZ_STAGE_VERSION",
     "WeeklyQuizAssemblyError",
     "publish_staged_weekly_quiz",
+    "select_complete_method_pairs",
     "stage_weekly_quiz",
 ]

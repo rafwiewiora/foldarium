@@ -29,6 +29,27 @@ def _prediction_failure_code(stderr: str) -> str:
     return "gpu_out_of_memory" if any(marker in lowered for marker in markers) else "prediction_failed"
 
 
+def _output_validation_failure_code(stdout: str, stderr: str) -> str:
+    """Recover input-level failures hidden behind a successful CLI exit code."""
+
+    output = stdout + "\n" + stderr
+    accelerator = _prediction_failure_code(output)
+    if accelerator == "gpu_out_of_memory":
+        return accelerator
+    lowered = output.casefold()
+    archive_markers = (
+        "not a gzip file",
+        "not a bzip2 file",
+        "not an lzma file",
+        "not a tar file",
+        "invalid header",
+        "readerror",
+    )
+    if any(marker in lowered for marker in archive_markers):
+        return "msa_preprocessing_failed"
+    return "output_validation_failed"
+
+
 class _GpuMemorySampler:
     """Record peak device memory while a prediction subprocess runs.
 
@@ -191,7 +212,10 @@ def execute_task_json(
             **base_result,
             "status": "failed",
             "duration_seconds": duration,
-            "error_code": "output_validation_failed",
+            "error_code": _output_validation_failure_code(
+                completed.stdout,
+                completed.stderr,
+            ),
             "error": "prediction outputs did not satisfy the method adapter contract",
         }
     result: dict[str, Any] = {

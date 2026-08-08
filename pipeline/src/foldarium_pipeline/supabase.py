@@ -543,12 +543,30 @@ class SupabaseCoordinator(SupabasePublisher):
         """Return succeeded run/sample rows with their private complex artifacts."""
 
         campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        target_query = urlencode(
+            {
+                "select": "target_id",
+                "campaign_id": f"eq.{campaign_id}",
+                "order": "target_id.asc",
+            }
+        )
+        campaign_targets = self._get_json_rows(
+            f"/rest/v1/targets?{target_query}", "campaign target query"
+        )
+        if not campaign_targets:
+            return []
+        target_ids = [
+            _safe_identifier(row.get("target_id"), "campaign target_id")
+            for row in campaign_targets
+        ]
         run_query = urlencode(
             {
-                "select": "run_id,target_id,method,method_version,task_payload,result,status",
-                "campaign_id": f"eq.{campaign_id}",
+                "select": (
+                    "run_id,target_id,method,method_version,task_payload,result,status,completed_at"
+                ),
+                "target_id": "in.(" + ",".join(target_ids) + ")",
                 "status": "eq.succeeded",
-                "order": "target_id.asc,method.asc,run_id.asc",
+                "order": "target_id.asc,method.asc,completed_at.desc,run_id.desc",
             }
         )
         runs = self._get_json_rows(
@@ -672,6 +690,31 @@ class SupabaseCoordinator(SupabasePublisher):
             "size_bytes": len(content),
             "media_type": media_type,
         }
+
+    def require_public_bucket(self) -> None:
+        """Fail unless this Storage bucket is browser-readable without a token."""
+
+        endpoint = "/storage/v1/bucket/" + quote(self.storage_bucket, safe="")
+        body = self._request(
+            endpoint,
+            None,
+            operation="public storage bucket check",
+            method="GET",
+        )
+        try:
+            bucket = json.loads((body or b"").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "public storage bucket check returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(bucket, Mapping)
+            or bucket.get("id") != self.storage_bucket
+            or bucket.get("public") is not True
+        ):
+            raise SupabasePublicationError(
+                f"storage bucket {self.storage_bucket!r} must be public for quiz assets"
+            )
 
     def register_weekly_plan(
         self,

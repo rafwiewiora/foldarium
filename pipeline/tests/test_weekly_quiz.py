@@ -9,6 +9,7 @@ from pathlib import Path
 from foldarium_pipeline.contracts import make_prediction_task
 from foldarium_pipeline.weekly_quiz import (
     publish_staged_weekly_quiz,
+    select_complete_method_pairs,
     stage_weekly_quiz,
 )
 
@@ -100,6 +101,10 @@ class FakeCoordinator:
         self.storage_bucket = bucket
         self.stored: list[tuple[bytes, str]] = []
         self.opened: dict | None = None
+        self.public_bucket_checked = False
+
+    def require_public_bucket(self) -> None:
+        self.public_bucket_checked = True
 
     def store_bytes(self, content: bytes, media_type: str) -> dict:
         self.stored.append((content, media_type))
@@ -114,6 +119,34 @@ class FakeCoordinator:
     def open_weekly_quiz_round(self, **kwargs):
         self.opened = kwargs
         return {"status": "open", "round_id": kwargs["round_id"]}
+
+
+class WeeklyQuizPairSelectionTests(unittest.TestCase):
+    def test_keeps_newest_complete_pair_and_reports_replacement_runs(self) -> None:
+        rows = [
+            {"target_id": "complete", "method": "boltz2", "run_id": "boltz-new"},
+            {"target_id": "complete", "method": "boltz2", "run_id": "boltz-old"},
+            {"target_id": "complete", "method": "openfold3", "run_id": "of3-new"},
+            {"target_id": "complete", "method": "future-method", "run_id": "future"},
+            {"target_id": "partial", "method": "openfold3", "run_id": "of3-only"},
+        ]
+
+        complete, omitted, replacements = select_complete_method_pairs(rows)
+
+        self.assertEqual(
+            {(row["method"], row["run_id"]) for row in complete},
+            {("boltz2", "boltz-new"), ("openfold3", "of3-new")},
+        )
+        self.assertEqual(omitted, [{"target_id": "partial", "succeeded_methods": ["openfold3"]}])
+        self.assertEqual(
+            replacements,
+            [{
+                "target_id": "complete",
+                "method": "boltz2",
+                "selected_run_id": "boltz-new",
+                "ignored_run_ids": ["boltz-old"],
+            }],
+        )
 
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
@@ -168,6 +201,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             )
             self.assertEqual(summary["status"], "opened")
             self.assertEqual(summary["choice_count"], 2)
+            self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
             self.assertNotIn("method", json.dumps(blind))
             self.assertTrue(

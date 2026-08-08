@@ -108,6 +108,33 @@ class SupabasePublisherTests(unittest.TestCase):
         with self.assertRaises(SupabaseConfigurationError):
             SupabasePublisher("https://project.supabase.co", "key", "../results")
 
+    def test_public_bucket_check_requires_matching_public_storage_metadata(self) -> None:
+        class BucketOpener(RecordingOpener):
+            def __init__(self, payload: bytes) -> None:
+                super().__init__()
+                self.payload = payload
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(self.payload)
+
+        public = BucketOpener(b'{"id":"quiz-assets","public":true}')
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "key", "quiz-assets", opener=public
+        )
+        publisher.require_public_bucket()
+        self.assertTrue(
+            public.calls[0][0].full_url.endswith("/storage/v1/bucket/quiz-assets")
+        )
+        self.assertEqual(public.calls[0][0].get_method(), "GET")
+
+        private = BucketOpener(b'{"id":"quiz-assets","public":false}')
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "key", "quiz-assets", opener=private
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "must be public"):
+            publisher.require_public_bucket()
+
     def test_claim_run_uses_the_atomic_claim_rpc(self) -> None:
         opener = RecordingOpener(
             claim_body=b'{"run_id":"run_test123","status":"running","lease_owner":"modal-worker-1"}'
@@ -593,6 +620,8 @@ class SupabaseCoordinatorTests(unittest.TestCase):
             def __call__(self, request: object, *, timeout: float) -> FakeResponse:
                 self.calls.append((request, timeout))
                 url = request.full_url  # type: ignore[attr-defined]
+                if "/targets?" in url:
+                    return FakeResponse(b'[{"target_id":"target-test"}]')
                 if "/prediction_runs?" in url:
                     return FakeResponse(json.dumps([run]).encode())
                 if "/prediction_artifacts?" in url:

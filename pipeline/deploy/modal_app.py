@@ -101,6 +101,7 @@ PREDICTION_MAX_CONTAINERS = _bounded_prediction_concurrency()
 # hook exits before touching the public feeds or spawning any work.
 WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "*/15 3-6 * * 6")
 WEEKLY_HOOK_ENV = "FOLDARIUM_WEEKLY_HOOK"
+PUBLIC_QUIZ_BUCKET_ENV = "FOLDARIUM_PUBLIC_QUIZ_BUCKET"
 WEEKLY_CRON_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEEKLY_CRON") == "1"
 WEEKLY_RUNTIME_ENV = {
     key: os.environ[key]
@@ -110,6 +111,7 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_WEEKLY_SUBMIT",
         "FOLDARIUM_WEEKLY_MAX_TARGETS",
         "FOLDARIUM_WEEKLY_GPU_CLASS",
+        PUBLIC_QUIZ_BUCKET_ENV,
     )
     if key in os.environ
 }
@@ -331,6 +333,12 @@ if modal is not None:
     control_image = _add_core(modal.Image.debian_slim(python_version="3.12")).env(
         WEEKLY_RUNTIME_ENV
     )
+    quiz_assembly_image = _add_core(
+        modal.Image.debian_slim(python_version="3.12").uv_pip_install(
+            "gemmi==0.7.3",
+            "numpy==2.3.2",
+        )
+    ).env(WEEKLY_RUNTIME_ENV)
 
     @app.function(
         image=openfold3_image,
@@ -522,6 +530,75 @@ if modal is not None:
             adapter_version=ADAPTER_VERSION,
             max_attempts=1,
         )
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=8.0,
+        memory=32768,
+        secrets=[control_plane_secret],
+        timeout=30 * 60,
+        max_containers=1,
+    )
+    def assemble_weekly_quiz_round(
+        campaign_id: str,
+        round_id: str,
+        opens_at: str,
+        closes_at: str,
+        open_round: bool = False,
+    ) -> dict[str, Any]:
+        """Assemble complete method pairs and optionally open the blind round."""
+
+        import tempfile
+
+        from foldarium_pipeline.supabase import SupabaseConfigurationError, SupabaseCoordinator
+        from foldarium_pipeline.weekly_quiz import (
+            REQUIRED_METHODS,
+            publish_staged_weekly_quiz,
+            select_complete_method_pairs,
+            stage_weekly_quiz,
+        )
+
+        private = SupabaseCoordinator.from_env()
+        outputs = private.campaign_prediction_outputs(campaign_id)
+        complete, omitted, replacements = select_complete_method_pairs(
+            outputs, REQUIRED_METHODS
+        )
+        if not complete:
+            raise RuntimeError("campaign has no complete two-method target pairs")
+
+        public_bucket = os.environ.get(PUBLIC_QUIZ_BUCKET_ENV)
+        if not public_bucket:
+            raise SupabaseConfigurationError(
+                f"missing required environment variable: {PUBLIC_QUIZ_BUCKET_ENV}"
+            )
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == private.storage_bucket:
+            raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
+
+        with tempfile.TemporaryDirectory(prefix="foldarium-weekly-quiz-") as temporary:
+            stage = stage_weekly_quiz(
+                complete,
+                temporary,
+                round_id=round_id,
+                campaign_id=campaign_id,
+                downloader=private.download_content_object,
+            )
+            published = publish_staged_weekly_quiz(
+                temporary,
+                private_coordinator=private,
+                public_coordinator=public,
+                opens_at=opens_at,
+                closes_at=closes_at,
+                open_round=open_round,
+            )
+        return {
+            **published,
+            "complete_target_count": len(stage["items"]),
+            "omitted_succeeded_partial_targets": omitted,
+            "ignored_succeeded_replacement_runs": replacements,
+        }
 
     @app.function(
         image=control_image,
