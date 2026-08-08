@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tempfile
 import unittest
@@ -287,6 +288,94 @@ class SupabasePublisherTests(unittest.TestCase):
                     successful_result("model.cif", content), model.parent, "worker-1"
                 )
         self.assertEqual(len(opener.calls), 2)
+
+    def test_storage_http_400_duplicate_verifies_matching_object(self) -> None:
+        content = b"already stored quiz asset"
+        duplicate = json.dumps(
+            {
+                "statusCode": "409",
+                "error": "Duplicate",
+                "message": "The resource already exists",
+            }
+        ).encode()
+
+        class DuplicateThenVerify(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if "/storage/v1/object/results/" in request.full_url:  # type: ignore[attr-defined]
+                    raise HTTPError(  # type: ignore[attr-defined]
+                        request.full_url, 400, "bad request", {}, io.BytesIO(duplicate)
+                    )
+                if "/storage/v1/object/authenticated/results/" in request.full_url:  # type: ignore[attr-defined]
+                    return FakeResponse(content)
+                raise AssertionError(request.full_url)  # type: ignore[attr-defined]
+
+        opener = DuplicateThenVerify()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        stored = publisher.store_bytes(content, "chemical/x-pdb")
+        self.assertEqual(stored["sha256"], hashlib.sha256(content).hexdigest())
+        self.assertEqual(len(opener.calls), 2)
+        self.assertEqual(opener.calls[1][0].get_method(), "GET")
+
+    def test_storage_http_400_duplicate_rejects_mismatching_object(self) -> None:
+        content = b"expected quiz asset"
+        duplicate = json.dumps(
+            {
+                "statusCode": 409,
+                "error": "Duplicate",
+                "message": "The resource already exists",
+            }
+        ).encode()
+
+        class DuplicateWithWrongObject(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if "/storage/v1/object/results/" in request.full_url:  # type: ignore[attr-defined]
+                    raise HTTPError(  # type: ignore[attr-defined]
+                        request.full_url, 400, "bad request", {}, io.BytesIO(duplicate)
+                    )
+                if "/storage/v1/object/authenticated/results/" in request.full_url:  # type: ignore[attr-defined]
+                    return FakeResponse(b"different bytes")
+                raise AssertionError(request.full_url)  # type: ignore[attr-defined]
+
+        opener = DuplicateWithWrongObject()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "does not match"):
+            publisher.store_bytes(content, "chemical/x-pdb")
+        self.assertEqual(len(opener.calls), 2)
+
+    def test_storage_http_400_non_duplicate_remains_a_failure(self) -> None:
+        content = b"quiz asset"
+        non_duplicate = json.dumps(
+            {
+                "statusCode": "400",
+                "error": "Bad Request",
+                "message": "The object name is invalid",
+            }
+        ).encode()
+
+        class BadRequest(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                raise HTTPError(  # type: ignore[attr-defined]
+                    request.full_url,
+                    400,
+                    "bad request",
+                    {},
+                    io.BytesIO(non_duplicate),
+                )
+
+        opener = BadRequest()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "failed with HTTP 400"):
+            publisher.store_bytes(content, "chemical/x-pdb")
+        self.assertEqual(len(opener.calls), 1)
 
     def test_failed_result_finishes_without_artifact_io(self) -> None:
         opener = RecordingOpener()

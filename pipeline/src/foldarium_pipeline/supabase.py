@@ -28,6 +28,7 @@ from .staging import build_run_row
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_MAX_STORAGE_ERROR_BYTES = 16 * 1024
 
 # Retrying a prediction is a metered state transition, not ordinary queue
 # maintenance. Keep the authorization deliberately narrower than the worker's
@@ -64,6 +65,32 @@ def _json_object(value: Any, field: str) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise SupabasePublicationError(f"{field} must contain finite JSON values") from exc
     return copied
+
+
+def _is_storage_duplicate_response(status: int, body: bytes) -> bool:
+    """Recognize only Supabase's known HTTP-400 duplicate-object envelope.
+
+    Storage has returned the legacy JSON envelope below with either an HTTP 400
+    or 409 status. Ordinary 400 responses must remain failures. HTTP 409 keeps
+    its standard conflict meaning; both paths still return to callers only
+    after the content-addressed object has been downloaded and re-hashed.
+    """
+
+    if status == 409:
+        return True
+    if status != 400 or not body or len(body) > _MAX_STORAGE_ERROR_BYTES:
+        return False
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, Mapping)
+        and str(payload.get("statusCode")) == "409"
+        and payload.get("error") == "Duplicate"
+        and isinstance(payload.get("message"), str)
+        and payload["message"].strip().casefold() == "the resource already exists"
+    )
 
 
 class SupabasePublisher:
@@ -448,10 +475,16 @@ class SupabasePublisher:
         try:
             response = self._opener(request, timeout=self._timeout_seconds)
         except HTTPError as exc:
-            if allow_conflict and exc.code == 409:
+            status = exc.code
+            error_body = b""
+            if allow_conflict and status == 400:
+                try:
+                    error_body = exc.read(_MAX_STORAGE_ERROR_BYTES + 1)
+                except (AttributeError, OSError):
+                    error_body = b""
+            if allow_conflict and _is_storage_duplicate_response(status, error_body):
                 exc.close()
                 return None
-            status = exc.code
             exc.close()
             raise SupabasePublicationError(f"{operation} failed with HTTP {status}") from None
         except (URLError, TimeoutError, OSError):
@@ -469,7 +502,7 @@ class SupabasePublisher:
             if close is not None:
                 close()
         if status is not None and not 200 <= int(status) < 300:
-            if allow_conflict and int(status) == 409:
+            if allow_conflict and _is_storage_duplicate_response(int(status), data):
                 return None
             raise SupabasePublicationError(f"{operation} failed with HTTP {status}")
         return data
