@@ -183,24 +183,31 @@ def _execute(task_json: str | Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise TypeError("execute_task_json must return a dict")
     if result.get("status") == "failed":
-        # The core result remains deliberately terse. Preserve a bounded tail in
-        # private Modal logs so an operator can distinguish a CLI/configuration
-        # error from a model/runtime failure without launching a diagnostic GPU
-        # retry. Method stderr must never be copied into a public quiz payload.
-        stderr_path = Path(WORK_ROOT) / task["task_id"] / "logs" / "stderr.log"
-        if stderr_path.is_file():
-            stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-8_000:]
-            print(
-                "foldarium.worker.stderr "
-                + json.dumps(
-                    {
-                        "task_id": task["task_id"],
-                        "method": task["method"],
-                        "stderr_tail": stderr_tail,
-                    },
-                    sort_keys=True,
-                )
-            )
+        # The core result remains deliberately terse. Preserve bounded command
+        # tails and an output inventory in private Modal logs so an operator can
+        # distinguish CLI/configuration, filtering, and collector failures
+        # without launching a diagnostic GPU retry. These diagnostics must never
+        # be copied into a public quiz payload.
+        task_root = Path(WORK_ROOT) / task["task_id"]
+        diagnostic: dict[str, Any] = {
+            "task_id": task["task_id"],
+            "method": task["method"],
+            "error_code": result.get("error_code"),
+        }
+        for stream in ("stdout", "stderr"):
+            log_path = task_root / "logs" / f"{stream}.log"
+            if log_path.is_file():
+                diagnostic[f"{stream}_tail"] = log_path.read_text(
+                    encoding="utf-8", errors="replace"
+                )[-8_000:]
+        output_root = task_root / "output"
+        if output_root.is_dir():
+            diagnostic["output_files"] = [
+                path.relative_to(output_root).as_posix()
+                for path in sorted(output_root.rglob("*"))
+                if path.is_file()
+            ][:200]
+        print("foldarium.worker.diagnostic " + json.dumps(diagnostic, sort_keys=True))
     publisher.publish_result(
         result,
         Path(WORK_ROOT) / task["task_id"] / "output",
