@@ -7,6 +7,7 @@ import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
 
 from foldarium_pipeline.supabase import (
     SupabaseConfigurationError,
@@ -393,6 +394,192 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["decision"], "selected")
         self.assertEqual(decisions[0]["target_id"], target["target_id"])
+
+    def test_authorizes_exact_transient_boltz_msa_retry_and_verifies_patch(self) -> None:
+        task = next(
+            task for task in self.weekly_plan()["tasks"] if task["method"] == "boltz2"
+        )
+        run_id = task["task_id"]
+
+        for error_code in ("output_validation_failed", "msa_preprocessing_failed"):
+            with self.subTest(error_code=error_code):
+                row = {
+                    "run_id": run_id,
+                    "target_id": task["target"]["target_id"],
+                    "method": "boltz2",
+                    "status": "failed",
+                    "attempt_count": 1,
+                    "max_attempts": 1,
+                    "error_code": error_code,
+                    "task_payload": task,
+                }
+
+                class RetryOpener(RecordingOpener):
+                    def __init__(self) -> None:
+                        super().__init__()
+                        self.authorized = False
+
+                    def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                        self.calls.append((request, timeout))
+                        url = request.full_url  # type: ignore[attr-defined]
+                        if request.get_method() == "GET":  # type: ignore[attr-defined]
+                            current = {**row, "max_attempts": 2 if self.authorized else 1}
+                            return FakeResponse(json.dumps([current]).encode())
+                        if request.get_method() == "PATCH":  # type: ignore[attr-defined]
+                            query = parse_qs(urlsplit(url).query)
+                            if query["run_id"] != [f"in.({run_id})"]:
+                                raise AssertionError(query)
+                            if query["method"] != ["eq.boltz2"]:
+                                raise AssertionError(query)
+                            if query["status"] != ["eq.failed"]:
+                                raise AssertionError(query)
+                            if query["attempt_count"] != ["eq.1"]:
+                                raise AssertionError(query)
+                            if query["max_attempts"] != ["eq.1"]:
+                                raise AssertionError(query)
+                            if sorted(
+                                query["error_code"][0].removeprefix("in.(").removesuffix(")").split(",")
+                            ) != ["msa_preprocessing_failed", "output_validation_failed"]:
+                                raise AssertionError(query)
+                            if json.loads(request.data) != {"max_attempts": 2}:  # type: ignore[attr-defined]
+                                raise AssertionError(request.data)  # type: ignore[attr-defined]
+                            self.authorized = True
+                            return FakeResponse(json.dumps([{**row, "max_attempts": 2}]).encode())
+                        raise AssertionError(url)
+
+                opener = RetryOpener()
+                coordinator = SupabaseCoordinator(
+                    "https://project.supabase.co", "service-role-key", "results", opener=opener
+                )
+                report = coordinator.authorize_transient_boltz_msa_retries(
+                    [run_id],
+                    confirmed_oom_run_ids=["run_known_oom"],
+                )
+                self.assertEqual(report["status"], "authorized")
+                self.assertEqual(report["requested_run_ids"], [run_id])
+                self.assertEqual(report["authorized_run_ids"], [run_id])
+                self.assertEqual(report["already_authorized_run_ids"], [])
+                self.assertEqual(report["confirmed_oom_run_ids"], ["run_known_oom"])
+                self.assertEqual(report["task_payloads"], {run_id: task})
+                self.assertEqual(
+                    report["authorization_rows"],
+                    [
+                        {
+                            "run_id": run_id,
+                            "target_id": task["target"]["target_id"],
+                            "error_code": error_code,
+                            "attempt_count": 1,
+                            "previous_max_attempts": 1,
+                            "max_attempts": 2,
+                            "action": "authorized",
+                        }
+                    ],
+                )
+                self.assertEqual(
+                    [request.get_method() for request, _ in opener.calls],
+                    ["GET", "PATCH", "GET"],
+                )
+
+    def test_transient_boltz_msa_retry_authorization_is_idempotent(self) -> None:
+        task = next(
+            task for task in self.weekly_plan()["tasks"] if task["method"] == "boltz2"
+        )
+        row = {
+            "run_id": task["task_id"],
+            "target_id": task["target"]["target_id"],
+            "method": "boltz2",
+            "status": "failed",
+            "attempt_count": 1,
+            "max_attempts": 2,
+            "error_code": "msa_preprocessing_failed",
+            "task_payload": task,
+        }
+
+        class AlreadyAuthorizedOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("idempotent authorization must not write")
+                return FakeResponse(json.dumps([row]).encode())
+
+        opener = AlreadyAuthorizedOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        report = coordinator.authorize_transient_boltz_msa_retries(
+            [task["task_id"]], confirmed_oom_run_ids=[]
+        )
+        self.assertEqual(report["status"], "already-authorized")
+        self.assertEqual(report["authorized_run_ids"], [])
+        self.assertEqual(report["already_authorized_run_ids"], [task["task_id"]])
+        self.assertEqual(report["approved_submission_run_ids"], [])
+        self.assertEqual(report["task_payloads"], {})
+        self.assertEqual(len(opener.calls), 2)
+
+        recovery = coordinator.authorize_transient_boltz_msa_retries(
+            [task["task_id"]],
+            confirmed_oom_run_ids=[],
+            resubmit_already_authorized=True,
+        )
+        self.assertEqual(recovery["status"], "resubmission-authorized")
+        self.assertEqual(
+            recovery["resubmission_authorized_run_ids"], [task["task_id"]]
+        )
+        self.assertEqual(
+            recovery["approved_submission_run_ids"], [task["task_id"]]
+        )
+        self.assertEqual(recovery["task_payloads"], {task["task_id"]: task})
+        self.assertEqual(
+            recovery["authorization_rows"][0]["action"],
+            "approved-for-resubmission",
+        )
+        self.assertTrue(all(
+            request.get_method() == "GET" for request, _ in opener.calls
+        ))
+
+    def test_transient_boltz_msa_retry_refuses_confirmed_oom_before_query(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "confirmed OOM"):
+            coordinator.authorize_transient_boltz_msa_retries(
+                ["run_9ce43151df233cc5fbae4f6e"],
+                confirmed_oom_run_ids=["run_9ce43151df233cc5fbae4f6e"],
+            )
+        self.assertEqual(opener.calls, [])
+
+    def test_transient_boltz_msa_retry_rejects_non_transient_row_without_patch(self) -> None:
+        task = next(
+            task for task in self.weekly_plan()["tasks"] if task["method"] == "boltz2"
+        )
+        row = {
+            "run_id": task["task_id"],
+            "target_id": task["target"]["target_id"],
+            "method": "boltz2",
+            "status": "failed",
+            "attempt_count": 1,
+            "max_attempts": 1,
+            "error_code": "gpu_out_of_memory",
+            "task_payload": task,
+        }
+
+        class OomOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("OOM preflight must not write")
+                return FakeResponse(json.dumps([row]).encode())
+
+        opener = OomOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "transient MSA error"):
+            coordinator.authorize_transient_boltz_msa_retries(
+                [task["task_id"]], confirmed_oom_run_ids=["run_known_oom"]
+            )
+        self.assertEqual(len(opener.calls), 1)
 
     def test_appends_only_absent_runs_to_the_stored_weekly_campaign(self) -> None:
         plan = self.weekly_plan()

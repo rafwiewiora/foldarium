@@ -29,6 +29,17 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
+# Retrying a prediction is a metered state transition, not ordinary queue
+# maintenance. Keep the authorization deliberately narrower than the worker's
+# complete error taxonomy: the legacy code is needed for runs completed before
+# MSA archive failures received their own classification, while the specific
+# code covers newly classified failures. GPU OOM and every other failure mode
+# are intentionally absent.
+TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES = frozenset(
+    {"msa_preprocessing_failed", "output_validation_failed"}
+)
+MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS = 10
+
 
 class SupabaseConfigurationError(ValueError):
     """Raised when the explicitly supplied Supabase configuration is unsafe."""
@@ -715,6 +726,246 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError(
                 f"storage bucket {self.storage_bucket!r} must be public for quiz assets"
             )
+
+    def authorize_transient_boltz_msa_retries(
+        self,
+        run_ids: list[str],
+        *,
+        confirmed_oom_run_ids: list[str],
+        resubmit_already_authorized: bool = False,
+    ) -> dict[str, Any]:
+        """Authorize one serialized retry for exact transient Boltz MSA runs.
+
+        Initial authorization requires every requested row to be a failed
+        Boltz-2 run at attempt 1/1 with an explicitly allowed transient error
+        code, and requires the operator to supply the separately diagnosed OOM
+        run IDs that must be refused. The conditional PATCH changes only
+        ``max_attempts`` to 2; the existing claim RPC performs the actual
+        failed-to-running transition.
+
+        A repeated preflight after a completed authorization is read-only and
+        reports the rows as already authorized. It never authorizes a third
+        attempt and gives the deployment adapter no newly authorized task to
+        submit again by default. The explicit ``resubmit_already_authorized``
+        recovery switch exposes the verified task only when a prior control
+        call authorized the row but failed before Modal acknowledged a spawn.
+        """
+
+        from .contracts import validate_prediction_task
+
+        if not isinstance(resubmit_already_authorized, bool):
+            raise SupabasePublicationError(
+                "resubmit_already_authorized must be a boolean"
+            )
+        if not isinstance(run_ids, list) or not run_ids:
+            raise SupabasePublicationError("retry run_ids must be a non-empty list")
+        if len(run_ids) > MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS:
+            raise SupabasePublicationError(
+                "retry run_ids exceeds the bounded maintenance batch size"
+            )
+        normalized_ids = [
+            _safe_identifier(run_id, f"retry run_ids[{index}]")
+            for index, run_id in enumerate(run_ids)
+        ]
+        if len(set(normalized_ids)) != len(normalized_ids):
+            raise SupabasePublicationError("retry run_ids must be unique")
+        if not isinstance(confirmed_oom_run_ids, list):
+            raise SupabasePublicationError(
+                "confirmed_oom_run_ids must be an operator-reviewed list"
+            )
+        if len(confirmed_oom_run_ids) > MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS:
+            raise SupabasePublicationError(
+                "confirmed_oom_run_ids exceeds the bounded maintenance batch size"
+            )
+        normalized_oom_ids = [
+            _safe_identifier(run_id, f"confirmed_oom_run_ids[{index}]")
+            for index, run_id in enumerate(confirmed_oom_run_ids)
+        ]
+        if len(set(normalized_oom_ids)) != len(normalized_oom_ids):
+            raise SupabasePublicationError("confirmed_oom_run_ids must be unique")
+        refused_oom_ids = sorted(set(normalized_ids).intersection(normalized_oom_ids))
+        if refused_oom_ids:
+            raise SupabasePublicationError(
+                "refusing to authorize operator-confirmed OOM run_ids: "
+                + ", ".join(refused_oom_ids)
+            )
+
+        fields = (
+            "run_id,target_id,method,status,attempt_count,max_attempts,"
+            "error_code,task_payload"
+        )
+
+        def fetch_rows(operation: str) -> list[dict[str, Any]]:
+            query = urlencode(
+                {
+                    "select": fields,
+                    "run_id": "in.(" + ",".join(normalized_ids) + ")",
+                    "order": "run_id.asc",
+                }
+            )
+            rows = self._get_json_rows(
+                f"/rest/v1/prediction_runs?{query}", operation
+            )
+            by_id = {
+                _safe_identifier(row.get("run_id"), "retry row run_id"): row
+                for row in rows
+            }
+            if len(by_id) != len(rows):
+                raise SupabasePublicationError("retry preflight returned duplicate run rows")
+            missing = [run_id for run_id in normalized_ids if run_id not in by_id]
+            extras = sorted(set(by_id).difference(normalized_ids))
+            if missing or extras:
+                raise SupabasePublicationError(
+                    "retry preflight did not return exactly the requested run_ids"
+                )
+            return [by_id[run_id] for run_id in normalized_ids]
+
+        def validate_rows(
+            rows: list[dict[str, Any]], *, allowed_max_attempts: set[int]
+        ) -> dict[str, dict[str, Any]]:
+            tasks: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                run_id = row["run_id"]
+                if row.get("method") != "boltz2":
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} is not a Boltz-2 run"
+                    )
+                if row.get("status") != "failed" or row.get("attempt_count") != 1:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} must be failed at attempt_count 1"
+                    )
+                if row.get("max_attempts") not in allowed_max_attempts:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} has an unauthorized max_attempts value"
+                    )
+                if row.get("error_code") not in TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} does not have an allowed transient MSA error"
+                    )
+                try:
+                    task = validate_prediction_task(row.get("task_payload"))
+                except (TypeError, ValueError) as exc:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} has an invalid task payload"
+                    ) from exc
+                if (
+                    task.get("task_id") != run_id
+                    or task.get("method") != "boltz2"
+                    or task.get("target", {}).get("target_id") != row.get("target_id")
+                ):
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} task payload does not match the stored run"
+                    )
+                tasks[run_id] = task
+            return tasks
+
+        before = fetch_rows("transient Boltz MSA retry preflight")
+        tasks = validate_rows(before, allowed_max_attempts={1, 2})
+        newly_authorized = [
+            row["run_id"] for row in before if row["max_attempts"] == 1
+        ]
+        already_authorized = [
+            row["run_id"] for row in before if row["max_attempts"] == 2
+        ]
+        recovery_submissions = (
+            already_authorized if resubmit_already_authorized else []
+        )
+
+        if newly_authorized:
+            allowed_codes = sorted(TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES)
+            query = urlencode(
+                {
+                    "run_id": "in.(" + ",".join(newly_authorized) + ")",
+                    "method": "eq.boltz2",
+                    "status": "eq.failed",
+                    "attempt_count": "eq.1",
+                    "max_attempts": "eq.1",
+                    "error_code": "in.(" + ",".join(allowed_codes) + ")",
+                }
+            )
+            body = self._request(
+                f"/rest/v1/prediction_runs?{query}",
+                self._encode_json({"max_attempts": 2}),
+                operation="transient Boltz MSA retry authorization",
+                method="PATCH",
+                content_type="application/json",
+                extra_headers={
+                    "Accept": "application/json",
+                    "Prefer": "return=representation",
+                },
+            )
+            try:
+                updated = json.loads((body or b"[]").decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SupabasePublicationError(
+                    "transient Boltz MSA retry authorization returned invalid JSON"
+                ) from exc
+            if not isinstance(updated, list) or not all(
+                isinstance(row, Mapping) for row in updated
+            ):
+                raise SupabasePublicationError(
+                    "transient Boltz MSA retry authorization returned an invalid row set"
+                )
+            updated_ids = {
+                _safe_identifier(row.get("run_id"), "authorized retry run_id")
+                for row in updated
+            }
+            if updated_ids != set(newly_authorized) or len(updated) != len(
+                newly_authorized
+            ):
+                raise SupabasePublicationError(
+                    "conditional retry authorization did not update every requested run"
+                )
+
+        verified = fetch_rows("transient Boltz MSA retry verification")
+        verified_tasks = validate_rows(verified, allowed_max_attempts={2})
+        if verified_tasks != tasks:
+            raise SupabasePublicationError(
+                "retry task payload changed during authorization"
+            )
+        approved_submission_ids = newly_authorized + recovery_submissions
+        return {
+            "status": (
+                "authorized"
+                if newly_authorized
+                else (
+                    "resubmission-authorized"
+                    if recovery_submissions
+                    else "already-authorized"
+                )
+            ),
+            "requested_run_ids": normalized_ids,
+            "authorized_run_ids": newly_authorized,
+            "already_authorized_run_ids": already_authorized,
+            "resubmission_authorized_run_ids": recovery_submissions,
+            "approved_submission_run_ids": approved_submission_ids,
+            "resubmit_already_authorized": resubmit_already_authorized,
+            "authorization_rows": [
+                {
+                    "run_id": row["run_id"],
+                    "target_id": row["target_id"],
+                    "error_code": row["error_code"],
+                    "attempt_count": row["attempt_count"],
+                    "previous_max_attempts": row["max_attempts"],
+                    "max_attempts": 2,
+                    "action": (
+                        "authorized"
+                        if row["run_id"] in newly_authorized
+                        else (
+                            "approved-for-resubmission"
+                            if resubmit_already_authorized
+                            else "already-authorized"
+                        )
+                    ),
+                }
+                for row in before
+            ],
+            "confirmed_oom_run_ids": normalized_oom_ids,
+            "allowed_error_codes": sorted(TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES),
+            "task_payloads": {
+                run_id: verified_tasks[run_id] for run_id in approved_submission_ids
+            },
+        }
 
     def register_weekly_plan(
         self,

@@ -459,6 +459,34 @@ if modal is not None:
         boltz_cache.commit()
         return result
 
+    @app.function(
+        image=boltz2_image,
+        cpu=4.0,
+        memory=16384,
+        gpu="L4",
+        timeout=GPU_FUNCTION_TIMEOUT_SECONDS,
+        max_containers=1,
+        volumes={BOLTZ_CACHE_ROOT: boltz_cache},
+        secrets=[control_plane_secret],
+    )
+    def run_transient_boltz_msa_retry(
+        task_json: str | dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run one explicitly authorized Boltz MSA retry on a serialized L4.
+
+        This function deliberately bypasses dynamic GPU sizing and has a hard
+        one-container ceiling. Even if several exact run IDs are authorized in
+        one maintenance call, only one retry can contact ColabFold at a time.
+        """
+
+        canonical_json = _normalise_task_json(task_json)
+        if _method_name(canonical_json) != "boltz2":
+            raise ValueError("the transient MSA retry worker accepts only Boltz-2 tasks")
+        boltz_cache.reload()
+        result = _execute(canonical_json)
+        boltz_cache.commit()
+        return result
+
     def _sized_function(task_json: str):
         """Return the method's function, moved onto the task's requested class.
 
@@ -499,6 +527,77 @@ if modal is not None:
         """Fan out already-planned tasks; return Modal call IDs for observability."""
 
         return [_spawn_task(task_json) for task_json in task_jsons]
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def retry_transient_boltz_msa_runs(
+        run_ids: list[str],
+        confirmed_oom_run_ids: list[str],
+        resubmit_already_authorized: bool = False,
+    ) -> dict[str, Any]:
+        """Authorize and submit an exact bounded list of transient MSA retries.
+
+        ``resubmit_already_authorized`` is a break-glass recovery for a prior
+        control call that raised after the database PATCH but before Modal
+        acknowledged the spawn. It remains off during ordinary idempotent use.
+        """
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        authorization = (
+            SupabaseCoordinator.from_env().authorize_transient_boltz_msa_retries(
+                run_ids,
+                confirmed_oom_run_ids=confirmed_oom_run_ids,
+                resubmit_already_authorized=resubmit_already_authorized,
+            )
+        )
+        task_payloads = authorization.pop("task_payloads")
+        submissions: list[dict[str, str]] = []
+        submission_errors: list[dict[str, str]] = []
+        for run_id in authorization["approved_submission_run_ids"]:
+            task_json = _normalise_task_json(task_payloads[run_id])
+            try:
+                call_id = run_transient_boltz_msa_retry.spawn(task_json).object_id
+            except Exception as exc:  # Modal acknowledgement is the audit boundary.
+                submission_errors.append(
+                    {
+                        "run_id": run_id,
+                        "error_type": type(exc).__name__,
+                        "error": "Modal did not acknowledge the retry spawn",
+                    }
+                )
+                continue
+            submissions.append({"run_id": run_id, "modal_call_id": call_id})
+        submitted_ids = [row["run_id"] for row in submissions]
+        unsubmitted_ids = [row["run_id"] for row in submission_errors]
+        if submission_errors and submissions:
+            submission_status = "partially-submitted"
+        elif submission_errors:
+            submission_status = "submission-failed"
+        elif submissions:
+            submission_status = "submitted"
+        else:
+            submission_status = "not-resubmitted"
+        return {
+            **authorization,
+            "submission_status": submission_status,
+            "submissions": submissions,
+            "submission_errors": submission_errors,
+            "submitted_run_ids": submitted_ids,
+            "authorized_not_submitted_run_ids": unsubmitted_ids,
+            "recovery": (
+                "call again with only authorized_not_submitted_run_ids and "
+                "resubmit_already_authorized=True after verifying no Modal call exists"
+                if unsubmitted_ids
+                else None
+            ),
+        }
 
     @app.function(
         image=control_image,
