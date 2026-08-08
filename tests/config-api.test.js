@@ -75,13 +75,21 @@ test('Preview never falls back to production or server-side Supabase credentials
   assert.doesNotMatch(JSON.stringify(config), /server-only|sb_secret|never expose|production/);
 });
 
-test('Preview requires both staging credentials and an explicit write opt-in', () => {
+test('Preview credentials default to read-only and require an explicit write opt-in', () => {
   const staging = {
     FOLDARIUM_PREVIEW_SUPABASE_URL: 'https://staging.supabase.co',
     FOLDARIUM_PREVIEW_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_staging',
   };
 
-  assert.equal(resolveBrowserConfig(previewEnv(staging)).enabled, false);
+  assert.deepEqual(resolveBrowserConfig(previewEnv(staging)), {
+    url: 'https://staging.supabase.co',
+    publishableKey: 'sb_publishable_staging',
+    structureBaseUrl: 'https://staging.supabase.co/storage/v1/object/public/structures',
+    enabled: true,
+    writable: false,
+    deploymentEnvironment: 'preview',
+    commitSha: 'abcdef1234567',
+  });
   assert.deepEqual(resolveBrowserConfig(previewEnv({
     ...staging,
     FOLDARIUM_PREVIEW_WRITES_ENABLED: '1',

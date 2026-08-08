@@ -163,6 +163,44 @@ test('empty configuration disables remote persistence without loading Supabase',
   assert.deepEqual(await backend.getWeeklyVoteTotals('round-1'), []);
 });
 
+test('read-only Preview loads public weekly data but cannot write or create auth users', async () => {
+  const supabase = fakeSupabase();
+  supabase.setRpcResult('get_current_weekly_quiz_round', {
+    data: [{ round_id: 'weekly-v2' }], error: null,
+  });
+  supabase.setRpcResult('get_weekly_quiz_vote_totals', {
+    data: [{ item_id: 'item-1', vote_count: 4 }], error: null,
+  });
+  let acquisitions = 0;
+  const backend = initQuizBackend(
+    {
+      url: 'https://example.supabase.co',
+      publishableKey: 'sb_publishable_test',
+      writable: false,
+    },
+    {
+      createClient: () => { acquisitions++; return supabase.client; },
+      storage: memoryStorage(),
+    },
+  );
+
+  assert.deepEqual(await backend.getWeeklyRound(), { round_id: 'weekly-v2' });
+  assert.deepEqual(await backend.getWeeklyVoteTotals('weekly-v2'), [
+    { item_id: 'item-1', vote_count: 4 },
+  ]);
+  assert.deepEqual(await backend.getWeeklyVotes('weekly-v2'), []);
+  await assert.rejects(
+    backend.startNamedSession({ displayName: 'Ada' }),
+    /Preview is read-only/i,
+  );
+  await assert.rejects(backend.flush({ strict: true }), /Preview is read-only/i);
+  assert.equal(acquisitions, 1);
+  assert.deepEqual(
+    supabase.rpcs.map(row => row.name),
+    ['get_current_weekly_quiz_round', 'get_weekly_quiz_vote_totals'],
+  );
+});
+
 test('claims a username and loads shared leaderboard rows through Supabase RPCs', async () => {
   const { client, rpcs, setRpcResult } = fakeSupabase();
   const rows = [{

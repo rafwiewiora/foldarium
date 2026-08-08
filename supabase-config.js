@@ -24,8 +24,8 @@
     if (!isRuntimeConfig(config)) throw new Error('invalid runtime config');
 
     window.FOLDARIUM_SUPABASE = Object.freeze({
-      url: config.enabled && config.writable ? config.url : '',
-      publishableKey: config.enabled && config.writable ? config.publishableKey : '',
+      url: config.enabled ? config.url : '',
+      publishableKey: config.enabled ? config.publishableKey : '',
       structureBaseUrl: config.enabled ? config.structureBaseUrl : '',
       enabled: config.enabled,
       writable: config.writable,
@@ -51,7 +51,6 @@
       || typeof value.publishableKey !== 'string'
       || typeof value.structureBaseUrl !== 'string') return false;
     if (!value.enabled) return !value.writable;
-    if (!value.writable) return false;
     return isHttpsUrl(value.url) && isHttpsUrl(value.structureBaseUrl) && value.publishableKey.length > 0;
   }
 

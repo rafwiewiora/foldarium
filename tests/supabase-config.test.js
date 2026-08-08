@@ -79,14 +79,19 @@ test('fails closed when runtime config cannot be loaded', async () => {
   }
 });
 
-test('a disabled or read-only response cannot initialize the write backend', async () => {
-  for (const response of [
-    validConfig({ enabled: false, writable: false }),
-    validConfig({ enabled: true, writable: false }),
-  ]) {
-    const { config } = await runLoader({ response });
-    assert.equal(config.url, '');
-    assert.equal(config.publishableKey, '');
-    assert.equal(config.writable, false);
-  }
+test('a read-only response retains public read credentials without enabling writes', async () => {
+  const { config } = await runLoader({ response: validConfig({ writable: false }) });
+  assert.equal(config.url, 'https://staging.supabase.co');
+  assert.equal(config.publishableKey, 'sb_publishable_staging');
+  assert.equal(config.enabled, true);
+  assert.equal(config.writable, false);
+});
+
+test('a disabled response strips browser credentials', async () => {
+  const { config } = await runLoader({
+    response: validConfig({ enabled: false, writable: false }),
+  });
+  assert.equal(config.url, '');
+  assert.equal(config.publishableKey, '');
+  assert.equal(config.enabled, false);
 });

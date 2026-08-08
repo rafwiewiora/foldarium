@@ -81,6 +81,31 @@ const disabledBackend = {
   },
 };
 
+function readOnlyBackend(readBackend) {
+  const unavailable = () => {
+    throw new Error('This Preview is read-only; recorded quiz persistence is unavailable.');
+  };
+  return {
+    startSession: () => null,
+    startNamedSession: async () => unavailable(),
+    recordAnswer: () => {},
+    completeSession: () => {},
+    flush: async ({ strict = false } = {}) => {
+      if (strict) unavailable();
+    },
+    claimUsername: async () => unavailable(),
+    getLeaderboard: (...args) => readBackend.getLeaderboard(...args),
+    getWeeklyRound: (...args) => readBackend.getWeeklyRound(...args),
+    // Avoid anonymous-auth account creation in a read-only Preview. The public
+    // totals and round remain available; viewer inspection uses ?dev=1.
+    getWeeklyVotes: async () => [],
+    getWeeklyVoteTotals: (...args) => readBackend.getWeeklyVoteTotals(...args),
+    submitWeeklyVote: async () => unavailable(),
+    submitWeeklyVoteAttempt: async () => unavailable(),
+    submitUserSuggestion: async () => unavailable(),
+  };
+}
+
 export function createDeferredBackend({
   uuid = () => crypto.randomUUID(),
 } = {}) {
@@ -539,7 +564,10 @@ export function initQuizBackend(config = {}, dependencies = {}) {
     }
     return clientPromise;
   };
-  const backend = createQuizBackend({ ...dependencies, getClient });
+  const writableBackend = createQuizBackend({ ...dependencies, getClient });
+  const backend = config.writable === false
+    ? readOnlyBackend(writableBackend)
+    : writableBackend;
   queueMicrotask(() => { void backend.flush(); });
   return backend;
 }

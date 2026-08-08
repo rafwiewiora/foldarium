@@ -29,7 +29,7 @@ export function resolveBrowserConfig(env = {}) {
   const publishableKey = publicBrowserKey(env[names.publishableKey] || env[names.anonKey]);
   const writesEnabled = !names.writesEnabled || env[names.writesEnabled] === '1';
 
-  if (!url || !publishableKey || !writesEnabled) {
+  if (!url || !publishableKey) {
     return disabledConfig(deploymentEnvironment, commitSha);
   }
 
@@ -44,7 +44,7 @@ export function resolveBrowserConfig(env = {}) {
     publishableKey,
     structureBaseUrl,
     enabled: true,
-    writable: true,
+    writable: writesEnabled,
     deploymentEnvironment,
     commitSha,
   };
