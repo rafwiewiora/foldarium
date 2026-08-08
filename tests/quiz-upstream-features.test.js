@@ -358,7 +358,7 @@ test('Surface mode adds protein and ligand surfaces in Grid at the requested opa
 
   assert.deepEqual(reps, [
     { url: 'protein.pdb', selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
-    { url: 'protein.pdb', selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.3 },
+    { url: 'protein.pdb', selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.7 },
     { url: 'pose.pdb', selector: 'all', type: 'molecular-surface', color: 0x5B8FF9, alpha: 0.7 },
   ]);
 });
@@ -396,7 +396,7 @@ test('Surface toggle rebuilds the canonical protein and removes its surface when
 
   assert.deepEqual(reps, [
     { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
-    { selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.3 },
+    { selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.7 },
     { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
   ]);
   assert.deepEqual(deleted, ['protein-data']);

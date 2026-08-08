@@ -265,7 +265,7 @@ async function buildGridCell(cell, revision) {
     const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
-    if (cell.spec.showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', urls.color, 0.3, cell.plugin);
+    if (cell.spec.showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', urls.color, 0.7, cell.plugin);
     if (urls.pocket) { const ps = await loadStruct(urls.pocket, 'pdb', cell.plugin); await addSticks(ps.struct, 0.16, 0.95, cell.plugin); }
     const pose = await loadStruct(c.pose_file, 'pdb', cell.plugin);
     const poseColor = cell.spec.answer ? (c.correct ? GOOD : BAD) : c.color;
@@ -344,7 +344,7 @@ async function buildProtein() {         // rebuilds ONLY when the target protein
   proteinData.push(pr.data);
   const proteinColor = proteinMode === 'af3' ? AF3PROT : PROT;
   await addRep(pr.struct, 'polymer', 'cartoon', proteinColor, 0.5);
-  if (showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', proteinColor, 0.3);
+  if (showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', proteinColor, 0.7);
   if (pocket) {
     const ps = await loadStruct(pocket, 'pdb');
     proteinData.push(ps.data);
