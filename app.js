@@ -506,7 +506,7 @@ function renderUI() {
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
     nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
-    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span>`;
+    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span><span class="tag" data-tag></span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
   }

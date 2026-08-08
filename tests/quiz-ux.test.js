@@ -84,3 +84,12 @@ test('left panel has a balanced type and gray hierarchy', async () => {
   assert.match(html, /#side \.q\{font-size:11\.5px/);
   assert.match(html, /#side \.choice\{font-size:14px;line-height:1\.4/);
 });
+
+test('left pose selections use stacked menu rows with arrows', async () => {
+  const [html, app] = await Promise.all([readHtml(), readApp()]);
+
+  assert.match(html, /#choices\{gap:0;[\s\S]*?border-top:1px solid #cfd4d8/);
+  assert.match(html, /#choices \.choice\{min-height:58px;[\s\S]*?border-radius:0/);
+  assert.match(html, /#choices \.choice \.tag::after\{content:"→"/);
+  assert.match(app, /None of these are correct<\/span><span class="tag" data-tag><\/span>/);
+});

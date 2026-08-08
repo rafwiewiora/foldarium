@@ -98,6 +98,15 @@
   .choice.correct{border-color:var(--good);background:#eef8f1}
   .choice.wrong{border-color:var(--bad);background:#fff1f0}
   .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px}
+  #choices{gap:0;background:#f4f5f2;border-top:1px solid #cfd4d8;border-inline:1px solid #cfd4d8}
+  #choices .choice{min-height:58px;padding:0 16px;gap:12px;border:0;border-bottom:1px solid #cfd4d8;
+    border-radius:0;background:#f4f5f2;color:#31343b;font-size:15px;font-weight:500}
+  #choices .choice:hover{background:#eef1ef;border-color:#cfd4d8}
+  #choices .choice.sel{background:#edf6f8;outline:0;box-shadow:inset 4px 0 0 var(--accent)}
+  #choices .sw{width:13px;height:13px}
+  #choices .choice .tag{display:flex;align-items:center;justify-content:flex-end;min-width:22px;color:#3d424a}
+  #choices .choice .tag::after{content:"→";font-size:21px;font-weight:400;line-height:1}
+  #choices .choice.sel .tag::after{content:""}
   button.primary{min-height:44px;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:12px 14px;
     font-size:14px;font-weight:650;cursor:pointer}
   button.primary:disabled{opacity:.4;cursor:default}
@@ -300,7 +309,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080803');
+      await loadScript('app.js?v=2026080804');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;
