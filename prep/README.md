@@ -27,6 +27,9 @@ game); `oracle − game-able` = the **all-correct / trivial** bucket. Each bucke
 - `archive_build_allcorrect.py` — all-correct (positive control)
 - `cameo/public_catchup.py` — current public CAMEO pages/AF3/reference coordinates; scan,
   stage, then explicitly apply missing released weeks without the historical local dump
+- `cameo/score_stage_novelty.py` — resumable Foldseek/RCSB novelty scoring directly against a
+  catch-up stage's exported receptor and crystal ligand; `--update-report` copies only completed
+  boolean classifications into `catchup-report.json`
 
 Shared steps: `align_to_crystal.py` (superpose poses onto the crystal frame), `add_xtal_perpose.py` /
 `add_af3_proteins.py` / `use_af3_protein.py` (crystal ref + AF3-protein toggle). Novelty:

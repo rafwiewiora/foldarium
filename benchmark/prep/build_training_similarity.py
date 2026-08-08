@@ -189,7 +189,7 @@ def search_pre_cutoff(seq, exclude_pdb, rows=40, _cif=None):
         protein_only_pdb(cif, qpdb)
     except Exception as e:
         print(f"    [foldseek] {exclude_pdb}: pdb-prep failed: {str(e)[:80]}", flush=True)
-        return []
+        return None   # hard failure: never turn broken query preparation into "novel"
     # Submit with backoff: the public server intermittently rate-limits (returns a non-ticket body,
     # surfacing as KeyError 'id' in fs.submit). Retry rather than mislabel the system "novel".
     res = None
