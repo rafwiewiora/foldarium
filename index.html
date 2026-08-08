@@ -25,7 +25,7 @@
   #gate .err{font-size:12px;color:var(--bad);min-height:1.2em;margin:0}
   #wrap{display:flex;height:100vh}
   #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
-    padding:18px 18px 14px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+    padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;overflow-y:auto}
   #stage{flex:1;position:relative;min-width:0;background:#fff}
   #app{position:absolute;inset:0}
   #stage canvas{transition:opacity .14s ease-out}
@@ -57,37 +57,58 @@
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
   h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
   .sub{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-top:4px}
-  #setup{margin-top:2px}
+  #setup{margin-top:2px;display:flex;flex-direction:column;gap:10px}
+  .setup-label{font-size:11px;color:var(--muted);margin-bottom:5px}
   .q{font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
+  #question-head{display:flex;justify-content:space-between;gap:12px}
   .lig{font-size:18px;font-weight:600}
   .lig small{font-size:12px;color:var(--muted);font-weight:400}
   .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-  .seg button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px;font-size:12px;cursor:pointer}
+  .seg button{flex:1;min-height:40px;background:transparent;color:var(--muted);border:0;padding:8px;
+    font-size:12px;cursor:pointer}
   .seg button.on{background:#1b2330;color:var(--ink)}
+  .setup-options button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left}
+  .setup-options small{font-size:10px;color:var(--faint);font-weight:400}
+  .instruction{font-size:13px;line-height:1.4;color:var(--muted)}
+  details{border:1px solid var(--line);border-radius:8px}
+  details[hidden]{display:none}
+  summary{min-height:40px;padding:10px 11px;cursor:pointer;color:var(--muted);font-size:12px}
+  .details-body{padding:0 10px 10px;display:flex;flex-direction:column;gap:8px}
+  button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .choices{display:flex;flex-direction:column;gap:7px}
   .choice{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
     border-radius:8px;cursor:pointer;background:transparent;color:var(--ink);font-size:13px;text-align:left;transition:.12s}
   .choice:hover{border-color:var(--accent)}
-  .choice.sel{border-color:var(--accent);background:#15212b}
+  .choice.sel{border-color:var(--accent);background:#15212b;outline:2px solid var(--accent);outline-offset:-2px}
   .sw{width:14px;height:14px;border-radius:3px;flex:none;border:1px solid rgba(255,255,255,.25)}
   .choice .tag{margin-left:auto;font-size:11px;color:var(--muted)}
+  .choice.sel .tag{color:var(--accent);font-weight:600}
   .choice.correct{border-color:var(--good);background:#11261a}
   .choice.wrong{border-color:var(--bad);background:#261413}
   .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12px}
-  button.primary{background:var(--accent);color:#06131a;border:0;border-radius:8px;padding:11px;
+  button.primary{min-height:40px;background:var(--accent);color:#06131a;border:0;border-radius:8px;padding:11px;
     font-size:13px;font-weight:600;cursor:pointer}
   button.primary:disabled{opacity:.4;cursor:default}
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;
     padding:10px;font-size:13px;cursor:pointer}
   button.ghost.mini{padding:7px 10px;font-size:11.5px;color:var(--muted);align-self:flex-start}
   button.ghost.on{border-color:var(--accent);color:var(--accent)}
-  .verdict{font-size:13px;line-height:1.5;padding:10px 12px;border-radius:8px;background:#141b24;border:1px solid var(--line)}
-  .score{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:6px}
+  .verdict{font-size:13px;line-height:1.5;padding:12px;border-radius:8px;background:#141b24;border:1px solid var(--line)}
+  .verdict strong{display:block;font-size:17px;margin-bottom:3px}
+  .score{border-top:1px solid var(--line);padding-top:10px;font-size:12px;display:flex;flex-direction:column;gap:6px}
   .score .row{display:flex;justify-content:space-between}
   .score b{font-variant-numeric:tabular-nums}
   .hint{font-size:11px;color:var(--faint);line-height:1.5}
   .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
     padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+  @media (max-width: 760px){
+    #wrap{height:100dvh;flex-direction:column}
+    #stage{order:1;flex:1;min-height:50dvh}
+    #side{order:2;width:100%;height:46dvh;max-height:46dvh;border-right:0;border-top:1px solid var(--line)}
+    #wrap.intro #stage{display:none}
+    #wrap.intro #side{height:100dvh;max-height:none;justify-content:center}
+    .badge{top:8px;left:8px}
+  }
 </style>
 </head>
 <body>
@@ -108,52 +129,76 @@
     </div>
 
     <div id="setup">
-      <div class="seg" id="quizsrc">
-        <button data-q="cameo" class="on">CAMEO</button>
-        <button data-q="rnp">Runs-n-Poses</button>
+      <div>
+        <div class="setup-label">Dataset</div>
+        <div class="seg setup-options" id="quizsrc">
+          <button data-q="cameo" class="on" aria-pressed="true"><span>CAMEO</span><small>AlphaFold3 poses</small></button>
+          <button data-q="rnp" aria-pressed="false"><span>Runs-n-Poses</span><small>Multiple methods</small></button>
+        </div>
       </div>
-      <div class="seg" id="diff" style="margin-top:6px">
-        <button data-d="easy" class="on">Easy</button>
-        <button data-d="hard">Hard</button>
+      <div>
+        <div class="setup-label">Difficulty</div>
+        <div class="seg setup-options" id="diff">
+          <button data-d="easy" class="on" aria-pressed="true"><span>Easy</span><small>A correct pose is included</small></button>
+          <button data-d="hard" aria-pressed="false"><span>Hard</span><small>“None” may be correct</small></button>
+        </div>
       </div>
       <div class="hint" id="setuphint"></div>
     </div>
 
-    <div class="q" id="progress">question — / —</div>
+    <div id="question-head">
+      <div class="q" id="progress">question — / —</div>
+      <div class="q" id="score-summary">score 0 / 0</div>
+    </div>
     <div class="lig" id="ligand">—</div>
+    <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
 
-    <div class="seg" id="mode">
-      <button data-m="all" class="on">Show all</button>
-      <button data-m="one">One at a time</button>
-      <button data-m="grid">Grid</button>
-    </div>
-    <div class="seg" id="gridpages" style="display:none;margin-top:6px"></div>
-    <div class="seg" id="protmode" style="margin-top:6px">
-      <button data-p="crystal" class="on">Crystal protein</button>
-      <button data-p="af3">AF3 protein</button>
-    </div>
-    <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
-    <div class="hint" id="modehint">Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.</div>
-
-    <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
+    <details id="view-options" hidden>
+      <summary>View options</summary>
+      <div class="details-body">
+        <div class="seg" id="mode">
+          <button data-m="all" class="on" aria-pressed="true">Show all</button>
+          <button data-m="one" aria-pressed="false">One at a time</button>
+          <button data-m="grid" aria-pressed="false">Grid</button>
+        </div>
+        <div class="seg" id="gridpages" style="display:none"></div>
+        <div class="seg" id="protmode">
+          <button data-p="crystal" class="on" aria-pressed="true">Crystal protein</button>
+          <button data-p="af3" aria-pressed="false">AF3 protein</button>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+          <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
+        </div>
+        <div class="hint" id="modehint"></div>
+      </div>
+    </details>
     <div class="choices" id="choices"></div>
 
-    <button class="primary" id="lock" disabled>Lock in answer</button>
-    <div class="verdict" id="verdict" style="display:none"></div>
+    <button class="primary" id="lock" disabled>Submit answer</button>
+    <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
     <button class="primary" id="start" style="display:none">Start quiz →</button>
-    <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
-    <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
-      <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span></label>
     <div style="display:flex;gap:6px">
       <button class="ghost" id="prev" style="display:none;flex:1">← Prev</button>
-      <button class="ghost" id="next" style="display:none;flex:1">Next question →</button>
+      <button class="primary" id="next" style="display:none;flex:1">Next question →</button>
     </div>
 
-    <div class="score">
-      <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
-      <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
-      <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
-    </div>
+    <details id="answer-details" hidden>
+      <summary>Answer details</summary>
+      <div class="details-body">
+        <div class="choices" id="answer-choices"></div>
+        <div class="hint" id="answer-ai"></div>
+        <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
+        <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
+          <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span>
+        </label>
+        <div class="score">
+          <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
+          <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
+          <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
+        </div>
+      </div>
+    </details>
   </div>
   <div id="stage">
     <div id="app"></div>
