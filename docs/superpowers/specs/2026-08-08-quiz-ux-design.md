@@ -6,7 +6,7 @@ Make the quiz intuitive for a mixed scientific audience, including first-time us
 
 ## Direction
 
-Use a guided core flow with progressively disclosed viewer controls:
+Use a minimal three-state flow with progressively disclosed technical detail:
 
 1. Choose dataset and difficulty.
 2. Inspect the molecular viewer.
@@ -16,16 +16,15 @@ Use a guided core flow with progressively disclosed viewer controls:
 
 ## Interface
 
-- Label setup groups as **Dataset** and **Difficulty**, with short plain-language descriptions.
-- Show question progress and score together near the top of the sidebar.
-- Keep pose choices and the primary action visually dominant.
-- Rename **Lock in answer** to **Submit answer**.
-- Put view mode, protein source, clustering, and H-bonds inside a collapsed **Viewer tools** section.
-- Replace the persistent technical paragraph with short contextual guidance.
+- **Setup:** show only Dataset, Difficulty, and **Start quiz**, with short option descriptions.
+- **Question:** show progress, score, viewer, pose choices, and **Submit answer**.
+- **Result:** lead with **Correct** or **Not quite**, then show **Next question** as the primary action.
+- Keep one instruction: **Pick the pose that best fits the binding pocket.**
+- Put view mode, protein source, clustering, and H-bonds inside a collapsed **View options** section.
+- Put RMSD values, AI comparison, and answer-inspection controls inside collapsed **Answer details**.
 - Give the selected pose a strong border, checkmark, and **Selected** label.
-- After submission, lead with **Correct** or **Not quite**, followed by the correct pose and RMSD details.
-- Make **Next question** the only primary result action; keep answer-inspection controls secondary.
-- Add a short first-question tip explaining rotation, zoom, pose colors, and submission.
+- Remove tutorials, persistent technical explanations, and competing primary actions.
+- Keep scientific dataset names, but pair them with concise plain-language descriptions.
 
 ## Responsive and Accessible Behavior
 
