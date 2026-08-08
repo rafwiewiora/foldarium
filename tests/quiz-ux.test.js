@@ -11,7 +11,7 @@ test('quiz exposes a minimal primary flow and hides technical controls', async (
   assert.match(html, />Dataset</);
   assert.match(html, />Difficulty</);
   assert.match(html, /Pick the pose that best fits the binding pocket\./);
-  assert.match(html, /<details id="view-options"/);
+  assert.match(html, /<div id="view-options"/);
   assert.match(html, /<details id="answer-details"/);
   assert.match(html, />Submit answer</);
   assert.match(html, /loadScript\('app\.js\?v=\d+'\)/);
@@ -40,17 +40,16 @@ test('view options are anchored to the bottom of the viewer', async () => {
   const html = await readHtml();
   const stageStart = html.indexOf('<div id="stage">');
   const stageEnd = html.indexOf('</div>\n</div>', stageStart);
-  const viewOptions = html.indexOf('<details id="view-options"');
+  const viewOptions = html.indexOf('<div id="view-options"');
 
   assert.ok(viewOptions > stageStart && viewOptions < stageEnd);
   assert.match(html, /#view-options\{position:absolute;[\s\S]*?bottom:16px/);
 });
 
-test('viewer controls are unbundled behind a compact caret', async () => {
+test('viewer controls form an always-visible bottom toolbar', async () => {
   const html = await readHtml();
 
-  assert.match(html, /#view-options\{[\s\S]*?background:transparent;[\s\S]*?border:0/);
-  assert.match(html, /#view-options summary::after\{content:"⌃"/);
-  assert.match(html, /#view-options\[open\] summary::after\{content:"⌄"/);
+  assert.match(html, /#view-options\{[\s\S]*?display:flex;[\s\S]*?background:transparent;[\s\S]*?border:0/);
+  assert.doesNotMatch(html, /<summary>View options<\/summary>/);
   assert.match(html, /#view-options \.seg\{display:contents/);
 });

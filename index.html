@@ -102,14 +102,9 @@
   .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
     padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
   #view-options{position:absolute;z-index:30;left:50%;bottom:16px;transform:translateX(-50%);
-    width:min(760px,calc(100% - 32px));background:transparent;border:0}
+    width:min(760px,calc(100% - 32px));display:flex;justify-content:center;align-items:center;
+    background:transparent;border:0}
   #view-options[hidden]{display:none}
-  #view-options[open]{display:flex;flex-direction:column-reverse;align-items:center;gap:8px}
-  #view-options summary{display:grid;place-items:center;width:32px;height:32px;min-height:32px;margin:auto;
-    padding:0;list-style:none;border:1px solid var(--line);border-radius:50%;background:#fff;font-size:0}
-  #view-options summary::-webkit-details-marker{display:none}
-  #view-options summary::after{content:"⌃";font-size:17px;line-height:1;color:var(--muted)}
-  #view-options[open] summary::after{content:"⌄"}
   #view-options .details-body{width:100%;max-height:min(48vh,420px);padding:0;display:flex;
     flex-flow:row wrap;justify-content:center;align-items:center;gap:6px;overflow-y:auto}
   #view-options .seg{display:contents}
@@ -203,8 +198,7 @@
     <div id="app"></div>
     <div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div>
     <div id="gridview"><div id="gridcells"></div></div>
-    <details id="view-options" hidden>
-      <summary>View options</summary>
+    <div id="view-options" hidden>
       <div class="details-body">
         <div class="seg" id="mode">
           <button data-m="all" class="on" aria-pressed="true">Show all</button>
@@ -222,7 +216,7 @@
         </div>
         <div class="hint" id="modehint"></div>
       </div>
-    </details>
+    </div>
   </div>
 </div>
 <script type="module">
