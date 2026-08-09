@@ -573,7 +573,7 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
     clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
     visibleIndexForChoice: () => 3,
-    onPick: async (...args) => { calls.push(args); },
+    activateCanonicalPoseChoice: async (...args) => { calls.push(args); },
     console,
   });
 
@@ -581,6 +581,80 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   await Promise.resolve();
 
   assert.deepEqual(calls, [[3, exact]]);
+});
+
+test('Weekly Show all waits for the click zoom before activating pose context', async () => {
+  const app = await readApp();
+  const oldCamera = { position: [1, 1, 1], target: [0, 0, 0] };
+  const zoomedCamera = { position: [2, 2, 2], target: [4, 4, 4] };
+  let current = oldCamera;
+  let waitOptions = null;
+  const snapshotAfterInteraction = evaluateDeclaration(
+    app,
+    'async function cameraSnapshotAfterInteraction(targetPlugin)',
+    {
+      window: {
+        waitForCameraSettled: async options => {
+          waitOptions = options;
+          current = zoomedCamera;
+        },
+      },
+      cameraChanges: () => ({ subscribe() {} }),
+    },
+  );
+  const plugin = { canvas3d: { camera: { getSnapshot: () => current } } };
+
+  assert.equal(await snapshotAfterInteraction(plugin), zoomedCamera);
+  assert.equal(waitOptions.settleMs, 80);
+  assert.doesNotThrow(() => waitOptions.requestReset(),
+    'waiting for the user click zoom must not request another camera reset');
+
+  const choice = { pose_file: 'clicked.pdb' };
+  const item = { source: 'weekly' };
+  const calls = [];
+  const activationSandbox = {
+    canonicalPoseActivationRevision: 0,
+    cur: { item, revealed: false },
+    displayMode: 'all',
+    plugin,
+    cameraSnapshotAfterInteraction: async () => zoomedCamera,
+    onPick: async (...args) => { calls.push(args); },
+  };
+  const activate = evaluateDeclaration(
+    app,
+    'async function activateCanonicalPoseChoice(index, choice)',
+    activationSandbox,
+  );
+
+  await activate(2, choice);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[
+    2,
+    choice,
+    { rebuildCameraSnapshot: zoomedCamera },
+  ]]);
+  assert.match(app, /let preservedCamera = nextCanonicalCameraSnapshot;\s*nextCanonicalCameraSnapshot = null;/);
+  assert.match(app, /nextCanonicalCameraSnapshot = rebuildCameraSnapshot;/);
+});
+
+test('all Molstar viewers disable the axes helper', async () => {
+  const app = await readApp();
+  let props = null;
+  const configure = evaluateDeclaration(app, 'function configurePlugin(targetPlugin)', {});
+
+  configure({ canvas3d: { setProps: value => { props = value; } } });
+
+  assert.equal(props.camera.manualReset, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(props.camera.helper)), {
+    axes: { name: 'off', params: {} },
+  });
+});
+
+test('pose information popovers stay within sidebar and Grid cards', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /\.choice \.pose-info::after\{[^}]*width:min\(270px,calc\(100vw - 40px\)\)/);
+  assert.match(html, /\.grid-head \.pose-info::after\{[^}]*width:min\(220px,calc\(var\(--grid-card-w,300px\) - 28px\)\)/);
 });
 
 test('Weekly Show all clears only visual pose context when empty Molstar space is clicked', async () => {
@@ -596,6 +670,7 @@ test('Weekly Show all clears only visual pose context when empty Molstar space i
   const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
     interactionBlocked: () => false,
     cur,
+    canonicalPoseActivationRevision: 0,
     displayMode: 'all',
     choiceFromPoseInteraction: () => null,
     canonicalInteractionIsEmpty: event => event.current.loci.kind === 'empty-loci',
@@ -670,6 +745,12 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
   const syncStageBadge = evaluateDeclaration(app, 'function syncStageBadge()', badgeSandbox);
   syncStageBadge();
   assert.equal(registry.elements.get('#badge').textContent, 'Pose C · ligand pLDDT 72.5');
+  assert.equal(registry.elements.get('#badge').style.display, '');
+
+  badgeSandbox.displayMode = 'all';
+  syncStageBadge();
+  assert.equal(registry.elements.get('#badge').style.display, 'none',
+    'Weekly Show all has no pose-specific badge information to display');
 });
 
 test('Weekly Show all rebuilds the exact clicked protein and pocket sticks', async () => {

@@ -61,7 +61,9 @@
     white-space:normal;box-shadow:0 8px 28px #0008;opacity:0;visibility:hidden;transform:translateY(3px);
     transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
   .pose-info:hover::after,.pose-info:focus-visible::after{opacity:1;visibility:visible;transform:translateY(0)}
-  .grid-head .pose-info::after{top:calc(100% + 8px);bottom:auto}
+  .choice .pose-info::after{right:-6px;width:min(270px,calc(100vw - 40px));max-width:none}
+  .grid-head .pose-info::after{top:calc(100% + 8px);bottom:auto;right:-6px;
+    width:min(220px,calc(var(--grid-card-w,300px) - 28px));max-width:none}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
   #gridpages{overflow-x:auto}

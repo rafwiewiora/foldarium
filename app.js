@@ -82,6 +82,7 @@ let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
 let poseChoiceByRepresentation = new WeakMap();
 let canonicalPoseClickSubscription = null;
+let nextCanonicalCameraSnapshot = null, canonicalPoseActivationRevision = 0;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
@@ -260,7 +261,8 @@ function weeklyGhostProteinUrls(choices, primaryUrl) {
 function configurePlugin(targetPlugin) {
   try {
     targetPlugin.canvas3d?.setProps({
-      camera: { manualReset: true }, cameraResetDurationMs: 0,
+      camera: { manualReset: true, helper: { axes: { name: 'off', params: {} } } },
+      cameraResetDurationMs: 0,
       renderer: { backgroundColor: 0xffffff },
     });
   } catch (e) {}
@@ -336,7 +338,28 @@ function canonicalInteractionIsEmpty(event) {
   return !current || current?.loci?.kind === 'empty-loci'
     || (!current.repr && !current.loci);
 }
+async function cameraSnapshotAfterInteraction(targetPlugin) {
+  const camera = targetPlugin?.canvas3d?.camera;
+  if (!camera) return null;
+  if (window.waitForCameraSettled) {
+    await window.waitForCameraSettled({
+      cameraChanged: cameraChanges(targetPlugin),
+      requestReset: () => {},
+      settleMs: 80,
+    });
+  }
+  try { return camera.getSnapshot?.() || null; } catch (e) { return null; }
+}
+async function activateCanonicalPoseChoice(index, choice) {
+  const revision = ++canonicalPoseActivationRevision;
+  const item = cur?.item;
+  const cameraSnapshot = await cameraSnapshotAfterInteraction(plugin);
+  if (revision !== canonicalPoseActivationRevision || cur?.item !== item
+      || displayMode !== 'all' || cur?.revealed) return;
+  await onPick(index, choice, { rebuildCameraSnapshot: cameraSnapshot });
+}
 async function clearWeeklyShowAllContext() {
+  canonicalPoseActivationRevision++;
   if (!cur?.contextChoice) return;
   await viewerRebuild.enqueue(() => {
     cur.contextChoice = null;
@@ -355,6 +378,7 @@ function onCanonicalPoseInteraction(event) {
       || displayMode !== 'all' || cur.revealed) return;
   const choice = choiceFromPoseInteraction(event);
   if (!choice) {
+    canonicalPoseActivationRevision++;
     if (cur.contextChoice && canonicalInteractionIsEmpty(event)) {
       void clearWeeklyShowAllContext().catch(error => {
         console.warn('Could not reset the Show all pose context:', error.message);
@@ -365,7 +389,7 @@ function onCanonicalPoseInteraction(event) {
   if (sameChoice(choice, cur.contextChoice)) return;
   const index = visibleIndexForChoice(choice);
   if (index < 0) return;
-  void onPick(index, choice).catch(error => {
+  void activateCanonicalPoseChoice(index, choice).catch(error => {
     console.warn('Could not inspect the clicked pose:', error.message);
   });
 }
@@ -749,8 +773,11 @@ async function buildHbonds(poseUrls) {
   await buildInteractions(pocket, poseUrls, plugin, data => hbondData.push(data));
 }
 async function buildCanonicalLayer(shown) {
-  let preservedCamera = null;
-  try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  let preservedCamera = nextCanonicalCameraSnapshot;
+  nextCanonicalCameraSnapshot = null;
+  if (!preservedCamera) {
+    try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  }
   const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
   try {
     syncStageBadge();
@@ -1235,7 +1262,7 @@ async function submitSuggestion(event) {
   }
 }
 
-async function onPick(k, exactChoice = null) {
+async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = {}) {
   if (interactionBlocked()) return;
   const answerChoices = displayMode === 'grid' ? allGridEntries().map(entry => entry.choice) : visibleChoices();
   if (k !== 'none' && displayMode === 'one') {
@@ -1286,6 +1313,9 @@ async function onPick(k, exactChoice = null) {
     selectedPaneId = exactChoice
       ? (gridViewers.find(cell => sameChoice(cell.entry.choice, exactChoice))?.paneId || selectedPaneId)
       : null;
+    if (displayMode === 'all' && cur.item.source === 'weekly' && rebuildCameraSnapshot) {
+      nextCanonicalCameraSnapshot = rebuildCameraSnapshot;
+    }
   };
   if (displayMode === 'all' && cur.item.source === 'weekly') {
     await viewerRebuild.enqueue(choosePose);
@@ -1521,6 +1551,9 @@ function syncStageBadge() {
   if (DEV) return;
   const badge = $('#badge');
   if (!badge) return;
+  const hideWeeklyOverlayBadge = cur?.item?.source === 'weekly' && displayMode === 'all';
+  badge.style.display = hideWeeklyOverlayBadge ? 'none' : '';
+  if (hideWeeklyOverlayBadge) return;
   if (cur?.item?.source === 'weekly' && displayMode === 'one') {
     const choices = visibleChoices();
     const choice = choices[Math.min(shownOne, choices.length - 1)];
