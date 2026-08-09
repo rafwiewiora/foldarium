@@ -100,6 +100,8 @@ test('Foldarium branding is present and the name intro starts centered', async (
   assert.match(html, /<h1>Foldarium<\/h1>/);
   assert.match(html, /<div id="wrap" class="intro" hidden>/);
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
+  assert.match(html, /#wrap\.intro #question-head,[\s\S]*?#wrap\.intro #answer-details\{display:none!important\}/);
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #badge,[\s\S]*?html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
 });
 
 test('left pose selections use calm cards with pose-color rails', async () => {
@@ -120,7 +122,7 @@ test('left pose selections use calm cards with pose-color rails', async () => {
 test('weekly entry hides irrelevant setup and uses light research controls', async () => {
   const html = await readHtml();
 
-  assert.match(html, /html\[data-quiz-mode="weekly"\] #setup,[\s\S]*?#score-summary\{display:none!important\}/);
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #setup,[\s\S]*?#score-summary,[\s\S]*?#instruction\{display:none!important\}/);
   assert.match(html, /\.participant-setup\{[\s\S]*?background:#f6f8fa\}/);
   assert.match(html, /\.dialog-form input,\.dialog-form textarea\{[\s\S]*?background:#fff/);
   assert.match(html, /\.privacy-note\{[\s\S]*?background:#f6f8fa/);
