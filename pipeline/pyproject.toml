@@ -17,6 +17,10 @@ evaluation = [
   "numpy>=2,<3",
   "rdkit>=2025.3",
 ]
+interactions = [
+  "prolif==2.2.0",
+  "rdkit==2026.3.4",
+]
 
 [project.scripts]
 foldarium-pipeline = "foldarium_pipeline.cli:main"

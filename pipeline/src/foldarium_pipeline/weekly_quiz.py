@@ -1,4 +1,4 @@
-"""Coordinator-side Saturday assembly of aligned, method-blind quiz assets."""
+"""Coordinator-side Saturday assembly of aligned weekly quiz assets."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from .evaluation import (
 )
 from .quiz import build_blind_manifest, manifest_sha256
 
-WEEKLY_QUIZ_STAGE_VERSION = 2
+WEEKLY_QUIZ_STAGE_VERSION = 3
 POCKET_RADIUS_ANGSTROM = 5.0
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
@@ -35,6 +35,10 @@ SUPPORTED_LEGACY_LIGAND_ORDER = {
 }
 LIGAND_AUTOMORPHISM_CAP = 100_000
 RECEPTOR_ANCHOR_POLICY = "minimum-total-pairwise-receptor-rmsd-medoid/v1"
+LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
+LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
+SMINA_SCORE_METRIC = "smina_affinity"
+PROLIF_COUNT_METRIC = "prolif_unique_residue_interaction_type"
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -121,6 +125,87 @@ def _prediction_ligand(model: Any, heavy_atoms: int, preferred_chains: set[str])
             f"prediction must contain one selected {heavy_atoms}-heavy-atom ligand; found {len(choices)}"
         )
     return choices[0]
+
+
+def _ligand_confidence(ligand: Any) -> dict[str, Any]:
+    """Normalize the selected ligand's atom pLDDTs without hiding method calibration.
+
+    The pinned OpenFold3 and Boltz-2 versions both export per-atom pLDDT on a
+    nominal 0--100 scale in the coordinate model's B/QA value.  We publish the
+    heavy-atom mean and the originating method alongside it; consumers must not
+    treat scores from the two separately trained confidence heads as calibrated
+    probabilities or assume that equal values are interchangeable.
+    """
+
+    values: list[float] = []
+    for atom in _heavy_atoms(ligand):
+        value = float(atom.b_iso)
+        if not math.isfinite(value) or value < 0.0 or value > 100.0:
+            raise WeeklyQuizAssemblyError(
+                "selected ligand contains an invalid 0-100 pLDDT value"
+            )
+        values.append(value)
+    if not values:
+        raise WeeklyQuizAssemblyError("selected ligand contains no heavy-atom pLDDT values")
+    return {
+        "metric": LIGAND_CONFIDENCE_METRIC,
+        "value": round(sum(values) / len(values), 2),
+        "scale_min": 0.0,
+        "scale_max": 100.0,
+        "aggregation": LIGAND_CONFIDENCE_AGGREGATION,
+    }
+
+
+def _choice_scoring_fields(result: Any, *, expected_pose_id: str) -> dict[str, Any]:
+    """Validate a remote fixed-pose score before binding it into the stage digest."""
+
+    if not isinstance(result, Mapping):
+        raise WeeklyQuizAssemblyError("pose scorer returned no result object")
+    if result.get("pose_id") != expected_pose_id:
+        raise WeeklyQuizAssemblyError("pose scorer returned the wrong pose identity")
+    if result.get("schema_version") != "foldarium.pose-score/v1" or result.get("status") != "succeeded":
+        raise WeeklyQuizAssemblyError("pose scorer did not return a succeeded v1 score")
+    scores = result.get("scores")
+    provenance = result.get("provenance")
+    if not isinstance(scores, Mapping) or not isinstance(provenance, Mapping):
+        raise WeeklyQuizAssemblyError("pose scorer omitted score provenance")
+    affinity = scores.get("smina_affinity_kcal_mol")
+    if isinstance(affinity, bool) or not isinstance(affinity, (int, float)) \
+            or not math.isfinite(float(affinity)):
+        raise WeeklyQuizAssemblyError("pose scorer returned an invalid smina affinity")
+    if provenance.get("mode") != "score_only":
+        raise WeeklyQuizAssemblyError("pose scorer did not use smina score-only mode")
+    scoring_function = provenance.get("scoring_function")
+    if not isinstance(scoring_function, str) or not scoring_function:
+        raise WeeklyQuizAssemblyError("pose scorer omitted its scoring function")
+    interactions = result.get("interaction_summary")
+    if not isinstance(interactions, Mapping) or interactions.get("engine") != "prolif":
+        raise WeeklyQuizAssemblyError("pose scorer omitted its ProLIF interaction summary")
+    interaction_count = interactions.get("count")
+    interaction_policy = interactions.get("policy")
+    if (
+        isinstance(interaction_count, bool)
+        or not isinstance(interaction_count, int)
+        or interaction_count < 0
+        or not isinstance(interaction_policy, str)
+        or not interaction_policy
+    ):
+        raise WeeklyQuizAssemblyError("pose scorer returned an invalid ProLIF count")
+    return {
+        "smina_score": {
+            "metric": SMINA_SCORE_METRIC,
+            "value": float(affinity),
+            "units": "kcal/mol",
+            "protocol": "score_only",
+            "scoring_function": scoring_function,
+        },
+        "interaction_count": {
+            "metric": PROLIF_COUNT_METRIC,
+            "value": interaction_count,
+            "policy": interaction_policy,
+        },
+        "scoring": deepcopy(dict(result)),
+    }
 
 
 def _position(atom: Any, transform: Any, gemmi: Any) -> tuple[float, float, float]:
@@ -364,7 +449,7 @@ def _select_receptor_medoid(
     target_id: str,
     aligner: Callable[[Any, Any], Mapping[str, Any]] = best_receptor_superposition,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Choose the method-blind prediction closest to all other receptors."""
+    """Choose the prediction closest to all other receptors without method preference."""
 
     if not choices:
         raise WeeklyQuizAssemblyError("cannot select a receptor medoid without choices")
@@ -510,8 +595,9 @@ def stage_weekly_quiz(
     campaign_id: str,
     downloader: Callable[..., bytes],
     required_methods: frozenset[str] = REQUIRED_METHODS,
+    choice_scorer: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Download private complexes and write a common-frame, method-blind local stage."""
+    """Download private complexes and write a common-frame weekly local stage."""
 
     if not isinstance(round_id, str) or not round_id or not isinstance(campaign_id, str) or not campaign_id:
         raise WeeklyQuizAssemblyError("round_id and campaign_id are required")
@@ -620,6 +706,7 @@ def stage_weekly_quiz(
                 transform = alignment["transform"]
             ligand = _prediction_ligand(choice["model"], heavy_atom_count, ligand_chains)
             ligands.append(ligand)
+            ligand_confidence = _ligand_confidence(ligand)
             pose_relative = f"assets/{target_id}/pose-{index}.pdb"
             coordinates = _write_ligand(root / pose_relative, ligand, transform, gemmi)
             pose_coordinates.append(coordinates)
@@ -641,22 +728,39 @@ def stage_weekly_quiz(
                 gemmi=gemmi,
                 numpy=numpy,
             )
-            choice_rows.append(
-                {
-                    "run_id": choice["run_id"],
-                    "sample_id": choice["sample_id"],
-                    "sample_index": choice["sample_index"],
-                    "artifact_sha256": choice["artifact_sha256"],
-                    "method": choice["method"],
-                    "method_version": choice["method_version"],
-                    "pose_path": pose_relative,
-                    "protein_path": choice_protein_relative,
-                    "pocket_path": choice_pocket_relative,
-                    "alignment": {
-                        key: value for key, value in alignment.items() if key != "transform"
+            row = {
+                "run_id": choice["run_id"],
+                "sample_id": choice["sample_id"],
+                "sample_index": choice["sample_index"],
+                "artifact_sha256": choice["artifact_sha256"],
+                "method": choice["method"],
+                "method_version": choice["method_version"],
+                "confidence": ligand_confidence,
+                "pose_path": pose_relative,
+                "protein_path": choice_protein_relative,
+                "pocket_path": choice_pocket_relative,
+                "alignment": {
+                    key: value for key, value in alignment.items() if key != "transform"
+                },
+            }
+            if choice_scorer is not None:
+                pose_id = choice_order_digest(
+                    round_id,
+                    target_id,
+                    {
+                        "run_id": choice["run_id"],
+                        "sample_id": choice["sample_id"],
+                        "artifact_sha256": choice["artifact_sha256"],
                     },
-                }
-            )
+                )
+                scoring = choice_scorer(
+                    protein_path=root / choice_protein_relative,
+                    ligand_path=root / pose_relative,
+                    ligand_smiles=ligand_smiles,
+                    pose_id=pose_id,
+                )
+                row.update(_choice_scoring_fields(scoring, expected_pose_id=pose_id))
+            choice_rows.append(row)
         atom_counts = {len(coordinates) for coordinates in pose_coordinates}
         if atom_counts != {heavy_atom_count}:
             raise WeeklyQuizAssemblyError(f"target {target_id} ligand atom counts are inconsistent")
@@ -728,7 +832,7 @@ def stage_weekly_quiz(
         )
         if reference_choice_index is None:
             raise WeeklyQuizAssemblyError("selected receptor medoid disappeared during assembly")
-        # The shared receptor is the method-blind prediction medoid. It is only
+        # The shared receptor is the prediction-set medoid. It is only
         # an all-overlay comparison frame and is never an experimental answer.
         protein_relative = choice_rows[reference_choice_index]["protein_path"]
         pocket_relative = f"assets/{target_id}/overlay-pocket.pdb"
@@ -846,14 +950,14 @@ def publish_staged_weekly_quiz(
             choice_pocket_object = public_coordinator.store_bytes(
                 choice_pocket.read_bytes(), "chemical/x-pdb"
             )
-            choices.append(
-                {
+            published_choice = {
                     "run_id": choice.get("run_id"),
                     "sample_id": choice.get("sample_id"),
                     "sample_index": choice.get("sample_index"),
                     "artifact_sha256": choice.get("artifact_sha256"),
                     "method": choice.get("method"),
                     "method_version": choice.get("method_version"),
+                    "confidence": choice.get("confidence"),
                     "pose_uri": pose_object["object_uri"],
                     "protein_uri": choice_protein_object["object_uri"],
                     "pocket_uri": choice_pocket_object["object_uri"],
@@ -862,7 +966,10 @@ def publish_staged_weekly_quiz(
                     "is_rep": choice.get("is_rep"),
                     "alignment": choice.get("alignment"),
                 }
-            )
+            for metric_field in ("smina_score", "interaction_count", "scoring"):
+                if choice.get(metric_field) is not None:
+                    published_choice[metric_field] = choice[metric_field]
+            choices.append(published_choice)
         manifest_items.append(
             {
                 "id": item.get("id"),
@@ -914,7 +1021,11 @@ def publish_staged_weekly_quiz(
 
 __all__ = [
     "POCKET_RADIUS_ANGSTROM",
+    "LIGAND_CONFIDENCE_AGGREGATION",
+    "LIGAND_CONFIDENCE_METRIC",
+    "PROLIF_COUNT_METRIC",
     "REQUIRED_METHODS",
+    "SMINA_SCORE_METRIC",
     "WEEKLY_QUIZ_STAGE_VERSION",
     "WeeklyQuizAssemblyError",
     "publish_staged_weekly_quiz",

@@ -24,6 +24,25 @@ def source_items() -> list[dict]:
                     "sample_id": "sample-1",
                     "method": "openfold3",
                     "method_version": "0.4.4",
+                    "confidence": {
+                        "metric": "ligand_plddt",
+                        "value": 82.5,
+                        "scale_min": 0,
+                        "scale_max": 100,
+                        "aggregation": "arithmetic-mean-selected-ligand-heavy-atoms",
+                    },
+                    "smina_score": {
+                        "metric": "smina_affinity",
+                        "value": -7.1,
+                        "units": "kcal/mol",
+                        "protocol": "score_only",
+                        "scoring_function": "vina",
+                    },
+                    "interaction_count": {
+                        "metric": "prolif_unique_residue_interaction_type",
+                        "value": 9,
+                        "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                    },
                     "pose_uri": "supabase://bucket/of3-1.pdb",
                 },
                 {
@@ -31,6 +50,25 @@ def source_items() -> list[dict]:
                     "sample_id": "sample-1",
                     "method": "boltz2",
                     "method_version": "2.2.1",
+                    "confidence": {
+                        "metric": "ligand_plddt",
+                        "value": 90.0,
+                        "scale_min": 0,
+                        "scale_max": 100,
+                        "aggregation": "arithmetic-mean-selected-ligand-heavy-atoms",
+                    },
+                    "smina_score": {
+                        "metric": "smina_affinity",
+                        "value": -6.3,
+                        "units": "kcal/mol",
+                        "protocol": "score_only",
+                        "scoring_function": "vina",
+                    },
+                    "interaction_count": {
+                        "metric": "prolif_unique_residue_interaction_type",
+                        "value": 7,
+                        "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                    },
                     "pose_uri": "supabase://bucket/boltz-1.pdb",
                 },
             ],
@@ -43,15 +81,53 @@ class BlindManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(QuizManifestError, "at least one item"):
             build_blind_manifest("2026-08-08", [])
 
-    def test_removes_method_and_run_identity(self) -> None:
+    def test_exposes_method_and_confidence_but_removes_run_identity(self) -> None:
         blind, private = build_blind_manifest("week-2026-08-08", source_items())
         encoded = str(blind)
-        self.assertNotIn("openfold3", encoded)
-        self.assertNotIn("boltz2", encoded)
+        self.assertIn("openfold3", encoded)
+        self.assertIn("boltz2", encoded)
+        self.assertIn("ligand_plddt", encoded)
+        self.assertIn("smina_affinity", encoded)
+        self.assertIn("prolif_unique_residue_interaction_type", encoded)
         self.assertNotIn("run-of3", encoded)
         self.assertEqual(len(blind["items"][0]["choices"]), 2)
         self.assertEqual(private["blind_manifest_sha256"], manifest_sha256(blind))
         self.assertIn("method", private["items"][0]["choices"][0])
+
+    def test_choice_id_is_stable_when_public_confidence_changes(self) -> None:
+        items = source_items()
+        blind_before, _ = build_blind_manifest("week", items)
+        items[0]["choices"][0]["confidence"]["value"] = 75.0
+        blind_after, _ = build_blind_manifest("week", items)
+
+        self.assertEqual(
+            {choice["id"] for choice in blind_before["items"][0]["choices"]},
+            {choice["id"] for choice in blind_after["items"][0]["choices"]},
+        )
+
+    def test_confidence_must_lie_on_its_declared_scale(self) -> None:
+        items = source_items()
+        items[0]["choices"][0]["confidence"]["value"] = 101.0
+        with self.assertRaisesRegex(QuizManifestError, "outside its scale"):
+            build_blind_manifest("week", items)
+
+    def test_public_confidence_requires_method_provenance(self) -> None:
+        items = source_items()
+        del items[0]["choices"][0]["method"]
+        del items[0]["choices"][0]["method_version"]
+        with self.assertRaisesRegex(QuizManifestError, "confidence requires choice.method"):
+            build_blind_manifest("week", items)
+
+    def test_pose_metrics_are_strictly_validated(self) -> None:
+        items = source_items()
+        items[0]["choices"][0]["smina_score"]["value"] = float("nan")
+        with self.assertRaisesRegex(QuizManifestError, "smina_score is invalid"):
+            build_blind_manifest("week", items)
+
+        items = source_items()
+        items[0]["choices"][0]["interaction_count"]["value"] = -1
+        with self.assertRaisesRegex(QuizManifestError, "interaction_count is invalid"):
+            build_blind_manifest("week", items)
 
     def test_is_replay_deterministic(self) -> None:
         self.assertEqual(

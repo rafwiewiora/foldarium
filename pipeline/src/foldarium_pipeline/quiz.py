@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
@@ -18,8 +19,6 @@ REVEAL_ONLY_FIELDS = frozenset(
         "score",
         "reference",
         "reference_uri",
-        "method",
-        "method_version",
         "run_id",
     }
 )
@@ -33,6 +32,11 @@ BLIND_CHOICE_FIELDS = frozenset(
         "media_type",
         "cluster_id",
         "is_rep",
+        "method",
+        "method_version",
+        "confidence",
+        "smina_score",
+        "interaction_count",
     }
 )
 
@@ -75,9 +79,10 @@ def build_blind_manifest(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return ``(blind, private_index)`` from completed but unscored predictions.
 
-    Choice IDs are content-derived and method-neutral.  The private index retains
-    method/run/sample identities for Wednesday evaluation; it must be stored in a
-    private content-addressed object, never in the public manifest.
+    Choice IDs are content-derived and stable when display metadata changes.  The
+    public manifest may expose method and confidence, while the private index
+    retains run/sample identities for Wednesday evaluation; it must be stored in
+    a private content-addressed object, never in the public manifest.
     """
 
     round_id = _nonempty(round_id, "round_id")
@@ -111,6 +116,91 @@ def build_blind_manifest(
                     public_choice[key] = deepcopy(choice[key])
             if "pose_uri" not in public_choice:
                 raise QuizManifestError("every blind choice requires pose_uri")
+            if "method" in public_choice:
+                public_choice["method"] = _nonempty(
+                    public_choice["method"], "choice.method"
+                )
+            if "method_version" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.method_version requires choice.method")
+                public_choice["method_version"] = _nonempty(
+                    public_choice["method_version"], "choice.method_version"
+                )
+            if "confidence" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.confidence requires choice.method")
+                confidence = _object(public_choice["confidence"], "choice.confidence")
+                metric = _nonempty(confidence.get("metric"), "choice.confidence.metric")
+                value = confidence.get("value")
+                scale_min = confidence.get("scale_min")
+                scale_max = confidence.get("scale_max")
+                aggregation = _nonempty(
+                    confidence.get("aggregation"), "choice.confidence.aggregation"
+                )
+                numbers = (value, scale_min, scale_max)
+                if any(
+                    isinstance(number, bool) or not isinstance(number, (int, float))
+                    for number in numbers
+                ):
+                    raise QuizManifestError(
+                        "choice.confidence value and scale must be numeric"
+                    )
+                if not all(math.isfinite(float(number)) for number in numbers):
+                    raise QuizManifestError("choice.confidence values must be finite")
+                if not float(scale_min) <= float(value) <= float(scale_max):
+                    raise QuizManifestError("choice.confidence value is outside its scale")
+                public_choice["confidence"] = {
+                    "metric": metric,
+                    "value": float(value),
+                    "scale_min": float(scale_min),
+                    "scale_max": float(scale_max),
+                    "aggregation": aggregation,
+                }
+            if "smina_score" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.smina_score requires choice.method")
+                score = _object(public_choice["smina_score"], "choice.smina_score")
+                value = score.get("value")
+                if (
+                    score.get("metric") != "smina_affinity"
+                    or isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or score.get("units") != "kcal/mol"
+                    or score.get("protocol") != "score_only"
+                ):
+                    raise QuizManifestError("choice.smina_score is invalid")
+                public_choice["smina_score"] = {
+                    "metric": "smina_affinity",
+                    "value": float(value),
+                    "units": "kcal/mol",
+                    "protocol": "score_only",
+                    "scoring_function": _nonempty(
+                        score.get("scoring_function"),
+                        "choice.smina_score.scoring_function",
+                    ),
+                }
+            if "interaction_count" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.interaction_count requires choice.method")
+                count = _object(
+                    public_choice["interaction_count"], "choice.interaction_count"
+                )
+                value = count.get("value")
+                if (
+                    count.get("metric") != "prolif_unique_residue_interaction_type"
+                    or isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise QuizManifestError("choice.interaction_count is invalid")
+                public_choice["interaction_count"] = {
+                    "metric": "prolif_unique_residue_interaction_type",
+                    "value": value,
+                    "policy": _nonempty(
+                        count.get("policy"), "choice.interaction_count.policy"
+                    ),
+                }
             if "cluster_id" in public_choice:
                 public_choice["cluster_id"] = _nonempty(
                     public_choice["cluster_id"], "choice.cluster_id"
@@ -126,8 +216,8 @@ def build_blind_manifest(
             public_choices.append(public_choice)
             private_choices.append(private_choice)
 
-        # Deterministic pseudorandom order prevents method grouping without
-        # making a replay produce different vote identifiers.
+        # Deterministic pseudorandom order avoids a fixed method/sample ordering
+        # while keeping replays and vote identifiers stable.
         order = sorted(
             range(len(public_choices)),
             key=lambda index: hashlib.sha256(

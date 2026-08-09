@@ -94,6 +94,21 @@ submitting work. Therefore enable registration and GPU submission together only
 after approving the displayed bounded budget; a registration-only deployment is
 an intentional operator hold point, not an automatic future-submit queue.
 
+### Saturday pose metrics
+
+Weekly fixed-pose metrics run in the separate CPU-only
+`foldarium-weekly-scoring` app documented in [SCORING.md](SCORING.md). That app
+has no Supabase secret, GPU, schedule, or publication path and cannot replace the
+`foldarium-predictions` deployment. It scores the exact pose-specific predicted
+protein and ligand together, returning smina score-only affinity plus a simple
+ProLIF interaction count with complete provenance.
+
+`assemble_weekly_quiz_round` remains metric-free by default. Pass its explicit
+`include_pose_metrics=True` argument only after the scoring app and one real
+cofolded-pair canary have been reviewed. The assembler resolves the deployed
+function by app/function name, binds successful results into the v3 stage and
+manifest digests, and fails closed before opening if any pose cannot be scored.
+
 ### Wednesday reveal
 
 The Wednesday evaluator is a CPU-only Modal function. Its image pins

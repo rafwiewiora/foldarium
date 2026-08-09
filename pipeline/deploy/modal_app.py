@@ -14,6 +14,7 @@ deployment SDK.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -30,6 +31,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised without deployment e
 
 
 APP_NAME = "foldarium-predictions"
+WEEKLY_SCORING_APP_NAME = "foldarium-weekly-scoring"
+WEEKLY_SCORING_FUNCTION_NAME = "score_pose"
 
 # Official OpenFold3 0.4-pixi (OpenFold3 0.4.4) OCI index. Keep this immutable;
 # upgrading the model runtime should be an explicit, reviewed change with a new
@@ -687,6 +690,7 @@ if modal is not None:
         opens_at: str,
         closes_at: str,
         open_round: bool = False,
+        include_pose_metrics: bool = False,
     ) -> dict[str, Any]:
         """Assemble complete method pairs and optionally open the blind round."""
 
@@ -719,6 +723,27 @@ if modal is not None:
         if public.storage_bucket == private.storage_bucket:
             raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
 
+        choice_scorer = None
+        if include_pose_metrics:
+            remote_scorer = modal.Function.from_name(
+                WEEKLY_SCORING_APP_NAME,
+                WEEKLY_SCORING_FUNCTION_NAME,
+            )
+
+            def score_choice(*, protein_path, ligand_path, ligand_smiles, pose_id):
+                protein = Path(protein_path).read_bytes()
+                ligand = Path(ligand_path).read_bytes()
+                return remote_scorer.remote(
+                    protein,
+                    ligand,
+                    ligand_smiles,
+                    pose_id,
+                    hashlib.sha256(protein).hexdigest(),
+                    hashlib.sha256(ligand).hexdigest(),
+                )
+
+            choice_scorer = score_choice
+
         with tempfile.TemporaryDirectory(prefix="foldarium-weekly-quiz-") as temporary:
             stage = stage_weekly_quiz(
                 complete,
@@ -726,6 +751,7 @@ if modal is not None:
                 round_id=round_id,
                 campaign_id=campaign_id,
                 downloader=private.download_content_object,
+                choice_scorer=choice_scorer,
             )
             published = publish_staged_weekly_quiz(
                 temporary,
@@ -747,6 +773,7 @@ if modal is not None:
             "cluster_count_max": max(cluster_counts),
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
+            "pose_metrics_included": include_pose_metrics,
         }
         print(
             "foldarium.weekly_quiz_assembly "

@@ -1,6 +1,7 @@
 """Fail-closed Wednesday evaluation and weekly-quiz reveal orchestration.
 
-Saturday's public assets intentionally contain ligand-only, method-blind poses.
+Saturday's public assets intentionally hide released-coordinate answers and scores;
+co-folding method and ligand confidence may be shown during voting.
 Wednesday evaluation instead resolves the original predicted complex from each
 private ``(run_id, sample_id)`` identity, then scores it against the released
 PDB coordinates.  All network and database access is injected except for the

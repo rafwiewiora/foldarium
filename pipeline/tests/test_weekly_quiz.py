@@ -291,6 +291,29 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(content).hexdigest(), expected_sha256)
             return content
 
+        scoring_calls = []
+
+        def score_choice(*, protein_path, ligand_path, ligand_smiles, pose_id):
+            self.assertTrue(Path(protein_path).is_file())
+            self.assertTrue(Path(ligand_path).is_file())
+            self.assertEqual(ligand_smiles, "CCCCCCCCCCCCCCC")
+            scoring_calls.append(pose_id)
+            return {
+                "pose_id": pose_id,
+                "schema_version": "foldarium.pose-score/v1",
+                "status": "succeeded",
+                "scores": {"smina_affinity_kcal_mol": -7.25},
+                "provenance": {
+                    "mode": "score_only",
+                    "scoring_function": "vina",
+                },
+                "interaction_summary": {
+                    "engine": "prolif",
+                    "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                    "count": 8,
+                },
+            }
+
         with tempfile.TemporaryDirectory() as temporary:
             stage = stage_weekly_quiz(
                 [boltz, openfold],
@@ -298,9 +321,29 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 round_id="weekly-2026-08-08",
                 campaign_id="weekly-2026-08-08",
                 downloader=download,
+                choice_scorer=score_choice,
             )
+            self.assertEqual(stage["schema_version"], 3)
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
+            self.assertEqual(len(scoring_calls), 2)
+            self.assertEqual(
+                {choice["method"] for choice in stage["items"][0]["choices"]},
+                {"openfold3", "boltz2"},
+            )
+            for choice in stage["items"][0]["choices"]:
+                self.assertEqual(
+                    choice["confidence"],
+                    {
+                        "metric": "ligand_plddt",
+                        "value": 70.0,
+                        "scale_min": 0.0,
+                        "scale_max": 100.0,
+                        "aggregation": "arithmetic-mean-selected-ligand-heavy-atoms",
+                    },
+                )
+                self.assertEqual(choice["smina_score"]["value"], -7.25)
+                self.assertEqual(choice["interaction_count"]["value"], 8)
             self.assertEqual(stage["items"][0]["clustering"]["cluster_count"], 1)
             self.assertEqual(
                 sum(choice["is_rep"] for choice in stage["items"][0]["choices"]),
@@ -342,13 +385,29 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(summary["choice_count"], 2)
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
-            self.assertNotIn("method", json.dumps(blind))
+            self.assertNotIn("run_id", json.dumps(blind))
             self.assertNotIn("clustering", blind["items"][0])
             self.assertEqual(len(blind["items"][0]["choices"]), 2)
             self.assertTrue(all("cluster_id" in choice for choice in blind["items"][0]["choices"]))
             self.assertTrue(all("is_rep" in choice for choice in blind["items"][0]["choices"]))
             self.assertTrue(all("protein_uri" in choice for choice in blind["items"][0]["choices"]))
             self.assertTrue(all("pocket_uri" in choice for choice in blind["items"][0]["choices"]))
+            self.assertEqual(
+                {choice["method"] for choice in blind["items"][0]["choices"]},
+                {"openfold3", "boltz2"},
+            )
+            self.assertTrue(
+                all(choice["confidence"]["metric"] == "ligand_plddt"
+                    for choice in blind["items"][0]["choices"])
+            )
+            self.assertTrue(
+                all(choice["smina_score"]["metric"] == "smina_affinity"
+                    for choice in blind["items"][0]["choices"])
+            )
+            self.assertTrue(
+                all(choice["interaction_count"]["value"] == 8
+                    for choice in blind["items"][0]["choices"])
+            )
             self.assertTrue(
                 blind["items"][0]["choices"][0]["pose_uri"].startswith(
                     "supabase://quiz-public/"
