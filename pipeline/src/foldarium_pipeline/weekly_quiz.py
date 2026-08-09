@@ -39,6 +39,7 @@ LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
 LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
 PROLIF_COUNT_METRIC = "prolif_unique_residue_interaction_type"
+WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -893,6 +894,7 @@ def publish_staged_weekly_quiz(
     opens_at: str,
     closes_at: str,
     open_round: bool = False,
+    round_environment: str = "production",
 ) -> dict[str, Any]:
     """Upload sanitized assets; optionally atomically open the blind voting round."""
 
@@ -914,6 +916,10 @@ def publish_staged_weekly_quiz(
         opens_at.replace("Z", "+00:00")
     ):
         raise WeeklyQuizAssemblyError("closes_at must be after opens_at")
+    if round_environment not in WEEKLY_QUIZ_ENVIRONMENTS:
+        raise WeeklyQuizAssemblyError(
+            "round_environment must be production, preview, or development"
+        )
 
     # Service-role uploads also succeed for private buckets, but the browser
     # resolves every URI below through Supabase's unauthenticated public object
@@ -1001,6 +1007,7 @@ def publish_staged_weekly_quiz(
             closes_at=closes_at,
             blind_manifest=blind,
             metadata=metadata,
+            environment=round_environment,
         )
     (root / "blind-manifest.json").write_text(
         json.dumps(blind, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -1011,6 +1018,7 @@ def publish_staged_weekly_quiz(
     return {
         "status": "opened" if open_round else "uploaded-not-opened",
         "round_id": stage["round_id"],
+        "environment": round_environment,
         "item_count": len(blind["items"]),
         "choice_count": sum(len(item["choices"]) for item in blind["items"]),
         "blind_manifest_sha256": manifest_sha256(blind),
@@ -1027,6 +1035,7 @@ __all__ = [
     "REQUIRED_METHODS",
     "SMINA_SCORE_METRIC",
     "WEEKLY_QUIZ_STAGE_VERSION",
+    "WEEKLY_QUIZ_ENVIRONMENTS",
     "WeeklyQuizAssemblyError",
     "publish_staged_weekly_quiz",
     "select_complete_method_pairs",

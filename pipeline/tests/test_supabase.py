@@ -1011,7 +1011,10 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     "/rest/v1/rpc/get_current_weekly_quiz_round",
                     request.full_url,  # type: ignore[attr-defined]
                 )
-                self.test_case.assertEqual(request.data, b"{}")  # type: ignore[attr-defined]
+                self.test_case.assertIn(  # type: ignore[attr-defined]
+                    json.loads(request.data).get("p_environment"),
+                    {"production", "preview", "development"},
+                )
                 return FakeResponse(json.dumps([current]).encode())
 
         opener = CurrentRoundOpener()
@@ -1022,8 +1025,51 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(
             coordinator.current_weekly_quiz_round("wwpdb-2026-08-08"), current
         )
+        self.assertEqual(
+            json.loads(opener.calls[0][0].data),  # type: ignore[attr-defined]
+            {"p_environment": "production"},
+        )
         with self.assertRaisesRegex(SupabasePublicationError, "expected campaign"):
             coordinator.current_weekly_quiz_round("wwpdb-2026-08-15")
+
+        coordinator.current_weekly_quiz_round(
+            "wwpdb-2026-08-08", environment="preview"
+        )
+        self.assertEqual(
+            json.loads(opener.calls[-1][0].data),  # type: ignore[attr-defined]
+            {"p_environment": "preview"},
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "environment must be"):
+            coordinator.current_weekly_quiz_round(
+                "wwpdb-2026-08-08", environment="staging"
+            )
+
+    def test_opens_weekly_round_in_explicit_environment(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        manifest = {
+            "schema_version": 1,
+            "round_id": "preview-weekly-2026-08-08-v3",
+            "items": [{"id": "item-1", "choices": [{"id": "choice-1"}]}],
+        }
+        coordinator.open_weekly_quiz_round(
+            round_id="preview-weekly-2026-08-08-v3",
+            campaign_id="wwpdb-2026-08-08",
+            opens_at="2026-08-08T03:00:00Z",
+            closes_at="2026-08-12T00:00:00Z",
+            blind_manifest=manifest,
+            environment="preview",
+        )
+        request = opener.calls[0][0]
+        self.assertTrue(  # type: ignore[attr-defined]
+            request.full_url.endswith("/rest/v1/rpc/open_weekly_quiz_round")
+        )
+        payload = json.loads(request.data)  # type: ignore[attr-defined]
+        self.assertEqual(payload["p_environment"], "preview")
+        self.assertEqual(payload["p_round_id"], "preview-weekly-2026-08-08-v3")
+        self.assertEqual(len(payload["p_blind_manifest_sha256"]), 64)
 
     def test_downloads_only_exact_run_sample_predicted_complex_with_digest(self) -> None:
         content = b"data_original_complex\n#\n"

@@ -177,6 +177,7 @@ test('read-only Preview loads public weekly data but cannot write or create auth
       url: 'https://example.supabase.co',
       publishableKey: 'sb_publishable_test',
       writable: false,
+      deploymentEnvironment: 'preview',
     },
     {
       createClient: () => { acquisitions++; return supabase.client; },
@@ -195,6 +196,10 @@ test('read-only Preview loads public weekly data but cannot write or create auth
   );
   await assert.rejects(backend.flush({ strict: true }), /Preview is read-only/i);
   assert.equal(acquisitions, 1);
+  assert.deepEqual(supabase.rpcs[0], {
+    name: 'get_current_weekly_quiz_round',
+    args: { p_environment: 'preview' },
+  });
   assert.deepEqual(
     supabase.rpcs.map(row => row.name),
     ['get_current_weekly_quiz_round', 'get_weekly_quiz_vote_totals'],
@@ -256,7 +261,10 @@ test('loads the current blind round and submits one server-validated weekly vote
     { vote_id: 'vote-id' },
   );
   assert.deepEqual(rpcs, [
-    { name: 'get_current_weekly_quiz_round', args: undefined },
+    {
+      name: 'get_current_weekly_quiz_round',
+      args: { p_environment: 'production' },
+    },
     { name: 'get_my_weekly_quiz_votes', args: { p_round_id: '2026-08-08' } },
     { name: 'get_weekly_quiz_vote_totals', args: { p_round_id: '2026-08-08' } },
     {

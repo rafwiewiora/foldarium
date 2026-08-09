@@ -380,8 +380,11 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 opens_at="2026-08-08T03:00:00Z",
                 closes_at="2026-08-12T00:00:00Z",
                 open_round=True,
+                round_environment="preview",
             )
             self.assertEqual(summary["status"], "opened")
+            self.assertEqual(summary["environment"], "preview")
+            self.assertEqual(private.opened["environment"], "preview")
             self.assertEqual(summary["choice_count"], 2)
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]

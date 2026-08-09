@@ -40,6 +40,7 @@ TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES = frozenset(
     {"msa_preprocessing_failed", "output_validation_failed"}
 )
 MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS = 10
+WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 
 
 class SupabaseConfigurationError(ValueError):
@@ -54,6 +55,15 @@ def _safe_identifier(value: Any, field: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
         raise SupabasePublicationError(f"{field} must be a safe identifier")
     return value
+
+
+def _weekly_quiz_environment(value: Any) -> str:
+    environment = _safe_identifier(value, "weekly quiz environment")
+    if environment not in WEEKLY_QUIZ_ENVIRONMENTS:
+        raise SupabasePublicationError(
+            "weekly quiz environment must be production, preview, or development"
+        )
+    return environment
 
 
 def _json_object(value: Any, field: str) -> dict[str, Any]:
@@ -703,7 +713,9 @@ class SupabaseCoordinator(SupabasePublisher):
         row["metadata"] = _json_object(row.get("metadata"), "weekly round metadata")
         return row
 
-    def current_weekly_quiz_round(self, campaign_id: str) -> dict[str, Any]:
+    def current_weekly_quiz_round(
+        self, campaign_id: str, *, environment: str = "production"
+    ) -> dict[str, Any]:
         """Return the one current public round and bind it to an expected campaign.
 
         A Saturday campaign can acquire an immutable replacement round after a
@@ -713,7 +725,10 @@ class SupabaseCoordinator(SupabasePublisher):
         """
 
         campaign_id = _safe_identifier(campaign_id, "campaign_id")
-        rows = self._rpc("get_current_weekly_quiz_round", {})
+        environment = _weekly_quiz_environment(environment)
+        rows = self._rpc(
+            "get_current_weekly_quiz_round", {"p_environment": environment}
+        )
         if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
             count = len(rows) if isinstance(rows, list) else 0
             raise SupabasePublicationError(
@@ -1548,6 +1563,7 @@ class SupabaseCoordinator(SupabasePublisher):
         closes_at: str,
         blind_manifest: Mapping[str, Any],
         metadata: Mapping[str, Any] | None = None,
+        environment: str = "production",
     ) -> Any:
         """Atomically expose a pre-redacted blind manifest for its voting window."""
 
@@ -1561,6 +1577,7 @@ class SupabaseCoordinator(SupabasePublisher):
             "p_blind_manifest": _json_object(blind_manifest, "blind_manifest"),
             "p_blind_manifest_sha256": manifest_sha256(blind_manifest),
             "p_metadata": _json_object(metadata or {}, "metadata"),
+            "p_environment": _weekly_quiz_environment(environment),
         }
         return self._rpc("open_weekly_quiz_round", payload)
 

@@ -202,7 +202,11 @@ export function createQuizBackend({
   uuid = () => crypto.randomUUID(),
   now = () => new Date(),
   pagePath = globalThis.location?.pathname || '/',
+  weeklyEnvironment = 'production',
 }) {
+  if (!['production', 'preview', 'development'].includes(weeklyEnvironment)) {
+    throw new Error('Weekly quiz deployment environment is invalid.');
+  }
   let flushing = null;
   let flushOutcome = null;
   let flushAgain = false;
@@ -438,7 +442,9 @@ export function createQuizBackend({
       return (await leaderboardRpc('get_leaderboard')) ?? [];
     },
     async getWeeklyRound() {
-      const rows = await leaderboardRpc('get_current_weekly_quiz_round');
+      const rows = await leaderboardRpc('get_current_weekly_quiz_round', {
+        p_environment: weeklyEnvironment,
+      });
       if (rows == null) return null;
       if (!Array.isArray(rows)) throw new Error('Weekly quiz round response is invalid.');
       return rows[0] ?? null;
@@ -564,7 +570,14 @@ export function initQuizBackend(config = {}, dependencies = {}) {
     }
     return clientPromise;
   };
-  const writableBackend = createQuizBackend({ ...dependencies, getClient });
+  const weeklyEnvironment = ['production', 'preview', 'development'].includes(
+    config.deploymentEnvironment,
+  ) ? config.deploymentEnvironment : 'production';
+  const writableBackend = createQuizBackend({
+    ...dependencies,
+    getClient,
+    weeklyEnvironment,
+  });
   const backend = config.writable === false
     ? readOnlyBackend(writableBackend)
     : writableBackend;

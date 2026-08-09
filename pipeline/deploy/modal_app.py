@@ -691,6 +691,7 @@ if modal is not None:
         closes_at: str,
         open_round: bool = False,
         include_pose_metrics: bool = False,
+        round_environment: str = "production",
     ) -> dict[str, Any]:
         """Assemble complete method pairs and optionally open the blind round."""
 
@@ -760,6 +761,7 @@ if modal is not None:
                 opens_at=opens_at,
                 closes_at=closes_at,
                 open_round=open_round,
+                round_environment=round_environment,
             )
         cluster_counts = [
             int(item["clustering"]["cluster_count"])
@@ -774,6 +776,7 @@ if modal is not None:
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
             "pose_metrics_included": include_pose_metrics,
+            "environment": round_environment,
         }
         print(
             "foldarium.weekly_quiz_assembly "
