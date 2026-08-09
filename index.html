@@ -164,6 +164,7 @@
   .dialog-form input:focus,.dialog-form textarea:focus{outline:none;border-color:var(--accent)}
   .dialog-actions{display:flex;justify-content:flex-end;gap:8px}
   .dialog-status{min-height:1.3em;margin:0;color:var(--muted);font-size:12px;line-height:1.4}
+  .dialog-status:empty{display:none}
   .privacy-note{margin:0;padding:9px 10px;border:1px solid var(--line);border-radius:7px;
     background:#f6f8fa;color:var(--muted);font-size:11px;line-height:1.45}
   .participant-setup{display:flex;flex-direction:column;gap:8px;padding:11px;border:1px solid var(--line);
@@ -224,8 +225,7 @@
       <img class="brand-mark" src="assets/foldarium-mark.svg" alt=""/>
       <div class="brand-copy"><h1>Foldarium</h1><p class="sub"><strong>Pose Quiz</strong></p></div>
     </div>
-    <p class="sub">Enter password to continue</p>
-    <input id="gate-pw" type="password" name="password" placeholder="Password" autofocus/>
+    <input id="gate-pw" type="password" name="password" placeholder="Password" aria-label="Password" autofocus/>
     <p class="err" id="gate-err" aria-live="polite"></p>
     <button class="primary" type="submit">Unlock</button>
   </form>
@@ -236,15 +236,15 @@
       <img class="brand-mark" src="assets/foldarium-mark.svg" alt=""/>
       <div class="brand-copy">
         <h1>Foldarium</h1>
-        <div class="sub"><strong>Pose Quiz</strong> · which predicted pose is correct?<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
+        <div class="sub"><strong>Pose Quiz</strong> · Pick the correct predicted pose.<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
       </div>
     </div>
 
     <section class="participant-setup" id="participant-setup">
-      <label>Your name — required before starting
+      <label>Your name
         <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
       </label>
-      <p class="dialog-status" id="name-status" role="status" aria-live="polite">Enter your name to enable Start.</p>
+      <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
     </section>
 
     <div id="setup">
@@ -275,7 +275,7 @@
 
     <button class="primary" id="lock" disabled>Submit answer</button>
     <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
-    <button class="primary" id="start" style="display:none">Start quiz →</button>
+    <button class="primary" id="start" style="display:none">Start →</button>
     <div style="display:flex;gap:6px">
       <button class="ghost" id="prev" style="display:none;flex:1">← Prev</button>
       <button class="primary" id="next" style="display:none;flex:1">Next question →</button>
@@ -298,8 +298,8 @@
       </div>
     </details>
     <section class="weekly-results" id="weekly-results" aria-live="polite">
-      <div class="q">Results / leaderboard</div>
-      <div class="hint" id="weekly-results-copy">Results and vote totals will be available Wednesday.</div>
+      <div class="q">Results &amp; leaderboard</div>
+      <div class="hint" id="weekly-results-copy">Available Wednesday.</div>
     </section>
   </div>
   <div id="stage">
@@ -337,15 +337,15 @@
 <div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden></div>
 <dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
   <form class="dialog-form" id="suggestion-form">
-    <h2 id="suggestion-title">Suggest an improvement</h2>
-    <label>What should we improve?
+    <h2 id="suggestion-title">Suggestions</h2>
+    <label>Your suggestion
       <textarea id="suggestion-text" maxlength="4000" required></textarea>
     </label>
-    <p class="privacy-note">Your suggestion is saved with the current quiz/app state, active Grid pane, shared camera, and a bounded viewer snapshot so the team can reproduce the context.</p>
+    <p class="privacy-note">Includes your current view so we can reproduce the issue.</p>
     <p class="dialog-status" id="suggestion-status" role="status" aria-live="polite"></p>
     <div class="dialog-actions">
       <button class="ghost" id="suggestion-cancel" type="button">Cancel</button>
-      <button class="primary" id="suggestion-submit" type="submit">Send suggestion</button>
+      <button class="primary" id="suggestion-submit" type="submit">Send</button>
     </div>
   </form>
 </dialog>
@@ -414,7 +414,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080904');
+      await loadScript('app.js?v=2026080905');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

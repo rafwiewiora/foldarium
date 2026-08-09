@@ -619,6 +619,8 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
     clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
     visibleIndexForChoice: () => 3,
+    clearTransientPoseSelection: () => {},
+    plugin: {},
     activateCanonicalPoseChoice: async (...args) => { calls.push(args); },
     console,
   });
@@ -640,6 +642,8 @@ test('Weekly One at a time selects the exact pose clicked in Molstar', async () 
     choiceFromPoseInteraction: () => exact,
     canonicalInteractionIsEmpty: () => false,
     visibleIndexForChoice: () => 2,
+    clearTransientPoseSelection: () => {},
+    plugin: {},
     onPick: async (...args) => { calls.push(args); },
     console,
   });
@@ -649,6 +653,27 @@ test('Weekly One at a time selects the exact pose clicked in Molstar', async () 
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[2, exact, { preserveScene: true }]]);
   assert.match(app, /if \(preserveScene\) selectShownPose\(\);/);
+});
+
+test('pose clicks clear only Molstar selection marking after the native click', async () => {
+  const app = await readApp();
+  let scheduled = null;
+  let deselections = 0;
+  const clear = evaluateDeclaration(app, 'function clearTransientPoseSelection(targetPlugin)', {
+    window: { requestAnimationFrame: callback => { scheduled = callback; } },
+    globalThis: {},
+    setTimeout,
+  });
+  const targetPlugin = {
+    managers: { interactivity: { lociSelects: { deselectAll: () => { deselections += 1; } } } },
+  };
+
+  clear(targetPlugin);
+  assert.equal(deselections, 0, 'the native Molstar click should finish first');
+  scheduled();
+  assert.equal(deselections, 1, 'the transient magenta selection marker should be removed');
+  assert.doesNotMatch(app, /managers\?\.structure\?\.focus.*clear/,
+    'ligand focus and its pocket interactions must remain intact');
 });
 
 test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async () => {
@@ -678,6 +703,7 @@ test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async
     addPose: async () => ({ obj: { data: { repr: {} } } }),
     registerPoseClickTarget: () => {},
     choiceFromPoseInteraction: () => choice,
+    clearTransientPoseSelection: () => {},
     locked: () => false,
     activatePane: (...args) => { calls.push(['pane', ...args]); },
     selectedPaneId: null,

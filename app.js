@@ -373,6 +373,14 @@ function choiceFromPoseInteraction(event) {
     ? (poseChoiceByRepresentation.get(representation) || null)
     : null;
 }
+function clearTransientPoseSelection(targetPlugin) {
+  const clear = () => {
+    try { targetPlugin?.managers?.interactivity?.lociSelects?.deselectAll?.(); } catch (e) {}
+  };
+  const schedule = window.requestAnimationFrame || globalThis.requestAnimationFrame;
+  if (typeof schedule === 'function') schedule(clear);
+  else setTimeout(clear, 0);
+}
 function canonicalInteractionIsEmpty(event) {
   const current = event?.current;
   return !current || current?.loci?.kind === 'empty-loci'
@@ -435,6 +443,7 @@ function onCanonicalPoseInteraction(event) {
     }
     return;
   }
+  clearTransientPoseSelection(plugin);
   const index = visibleIndexForChoice(choice);
   if (index < 0) return;
   if (displayMode === 'one') {
@@ -746,6 +755,7 @@ async function buildGridCell(cell, revision) {
     }
     cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
       if (locked() || !sameChoice(choiceFromPoseInteraction(event), c)) return;
+      clearTransientPoseSelection(cell.plugin);
       activatePane(cell.paneId, 'ligand-click');
       selectedPaneId = cell.paneId;
       void onPick(cell.entry.choiceIndex, c).catch(error => {
@@ -1104,7 +1114,7 @@ function renderUI() {
     const nb = document.createElement('button');
     nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
     nb.style.setProperty('--choice-color', '#5a6675');
-    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span><span class="tag" data-tag></span>`;
+    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None are correct</span><span class="tag" data-tag></span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
   }
@@ -1214,8 +1224,8 @@ function renderWeeklyResultsStatus() {
   const revealed = WEEKLY_ROUND?.public_status === 'revealed';
   panel.dataset.status = revealed ? 'revealed' : 'pending';
   copy.textContent = revealed
-    ? 'Wednesday results are available. Reveal each choice to see released-coordinate scores and vote totals.'
-    : 'Results and vote totals will be available Wednesday after released-coordinate evaluation.';
+    ? 'Results are available. Reveal a choice for scores and vote totals.'
+    : 'Available Wednesday after released-coordinate evaluation.';
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
@@ -1275,11 +1285,6 @@ function syncStartGate() {
   const input = $('#participant-name');
   const displayName = normalizedParticipantName();
   button.disabled = !displayName || displayName.length > 80 || !input.checkValidity();
-  if (!button.disabled && $('#name-status').textContent === 'Enter your name to enable Start.') {
-    $('#name-status').textContent = 'Ready to start your recorded quiz.';
-  } else if (button.disabled && !remoteSessionId) {
-    $('#name-status').textContent = 'Enter your name to enable Start.';
-  }
 }
 
 async function startQuiz() {
@@ -1295,7 +1300,7 @@ async function startQuiz() {
   const displayName = normalizedParticipantName();
   input.value = displayName;
   if (!input.checkValidity() || !displayName) {
-    status.textContent = 'Enter your name (1–80 characters) before starting.';
+    status.textContent = 'Enter a name.';
     input.focus();
     return;
   }
@@ -1306,7 +1311,7 @@ async function startQuiz() {
     return;
   }
   button.disabled = true;
-  status.textContent = 'Creating your private quiz session…';
+  status.textContent = 'Starting…';
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Quiz persistence is unavailable.');
@@ -1367,16 +1372,16 @@ async function submitSuggestion(event) {
   const status = $('#suggestion-status');
   const suggestionText = input.value.trim();
   if (!remoteSessionId) {
-    status.textContent = 'Start a named quiz before sending a suggestion.';
+    status.textContent = 'Start the quiz first.';
     return;
   }
   if (!input.checkValidity() || !suggestionText) {
-    status.textContent = 'Enter a suggestion of up to 4,000 characters.';
+    status.textContent = 'Enter a suggestion.';
     input.focus();
     return;
   }
   button.disabled = true;
-  status.textContent = 'Saving your suggestion with the current viewer state…';
+  status.textContent = 'Saving…';
   try {
     recordAppEvent('suggestion_submitted');
     const appState = currentReplayableAppState();
@@ -1568,7 +1573,7 @@ async function finalizeWeeklyVote() {
     $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
     return;
   }
-  verdict.textContent = 'Recording vote…';
+  verdict.textContent = 'Recording…';
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
@@ -1596,7 +1601,7 @@ async function finalizeWeeklyVote() {
   cur.revealed = true;
   cur.showAnswer = false;
   renderUI();
-  verdict.innerHTML = '<b style="color:var(--good)">Vote recorded.</b> The answer stays blind until Wednesday results.';
+  verdict.innerHTML = '<b style="color:var(--good)">Vote recorded.</b> Results Wednesday.';
   $('#next').style.display = '';
   $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
 }
@@ -1696,7 +1701,7 @@ function syncButtons() {
     b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
   });
   const uc = $('#uncluster');
-  uc.textContent = clustered ? 'Uncluster poses' : 'Re-cluster';
+  uc.textContent = clustered ? 'Uncluster' : 'Recluster';
   uc.classList.toggle('on', !clustered);
   uc.style.display = cur && cur.clusters.some(c => c.members.length > 1) ? '' : 'none';
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)

@@ -35,13 +35,14 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(app, /question \$\{idx \+ 1\} \/ \$\{ITEMS\.length\}/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);
-  assert.match(html, /Your name — required before starting/);
+  assert.match(html, /<label>Your name\s*<input id="participant-name"/);
+  assert.doesNotMatch(html, /required before starting/);
   assert.match(app, /function syncStartGate\(\)/);
   assert.match(html, /id="mode"/);
   assert.match(html, /id="choices"/);
   assert.match(html, /id="lock"/);
   assert.match(html, /id="weekly-results"/);
-  assert.match(html, /Results and vote totals will be available Wednesday/);
+  assert.match(html, /Available Wednesday\./);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /Wednesday results are available\./);
   assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);

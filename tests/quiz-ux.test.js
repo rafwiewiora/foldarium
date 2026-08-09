@@ -108,7 +108,7 @@ test('left pose selections use calm cards with pose-color rails', async () => {
   assert.match(app, /b\.style\.setProperty\('--choice-color', hex\(c\.color\)\)/);
   assert.match(app, /nb\.style\.setProperty\('--choice-color', '#5a6675'\)/);
   assert.match(app, /class="pose-count"/);
-  assert.match(app, /None of these are correct<\/span><span class="tag" data-tag><\/span>/);
+  assert.match(app, /None are correct<\/span><span class="tag" data-tag><\/span>/);
 });
 
 test('weekly entry hides irrelevant setup and uses light research controls', async () => {
