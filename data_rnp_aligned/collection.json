@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "foldarium-crystal-aligned/v1",
+  "schemaVersion": "foldarium-crystal-aligned/v2",
   "coordinateFrame": "experimental-system",
   "systems": [
     {
@@ -197,6 +197,8 @@
     "status": "validated",
     "systemCount": 38,
     "poseCount": 452,
+    "metric": "OpenStructure 2.8-compatible BiSyRMSD",
+    "postAlignmentToleranceAngstrom": 0.005,
     "failures": []
   }
 }

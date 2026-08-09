@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "foldarium-crystal-aligned/v1",
+  "schemaVersion": "foldarium-crystal-aligned/v2",
   "systemId": "7nag__1__1_A__1_C__1_C",
   "target": "7nag__1__1.A__1.C",
   "ligandInstance": "1.C",
@@ -18,13 +18,17 @@
       "1.A": "A"
     },
     "receptorSourceSha256": "53bf1a10561424e2e898744e998fe319d87353cdc2d07432e213811a8722ba61",
-    "ligandSourceSha256": "25db7afebee78dadcb5a380424b11dd72ed46d1b2623ef8c589bd7964a77bbef"
+    "ligandSourceSha256": "25db7afebee78dadcb5a380424b11dd72ed46d1b2623ef8c589bd7964a77bbef",
+    "benchmarkLigandInstance": "1.C",
+    "rmsdScoredLigandInstances": [
+      "1.C"
+    ]
   },
   "predictions": [
     {
       "sample": 0,
       "method": "af3",
-      "publishedRmsdAngstrom": 3.274,
+      "publishedRmsdAngstrom": 3.273557662963867,
       "rankingScore": 0.7435962780347973,
       "confidence": 57.505,
       "source": {
@@ -32,46 +36,52 @@
         "sha256": "7e69d1d2a53c2aecae184fe96b621b41c3106efa71b534acf2bc428c76c31590",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 1.1742,
-        "ligandCentroidDistanceAngstrom": 1.6802,
-        "ligandAssignmentRmsdAngstrom": 2.9297,
-        "geometryExcessAngstrom": -0.3443,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 1.136067,
+        "reportedBindingSiteBackboneRmsdAngstrom": 1.1360679864883425,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.273557,
+        "reportedRmsdDeltaAngstrom": 0.0,
         "rotation": [
           [
-            -0.2046686647,
-            -0.9025725369,
-            0.3787790296
+            -0.19973360165643023,
+            -0.9021636300020028,
+            0.38237059650417554
           ],
           [
-            0.9458663738,
-            -0.2819488039,
-            -0.1607534597
+            0.9559527987089026,
+            -0.26507150254466416,
+            -0.12606087886148365
           ],
           [
-            0.2518879523,
-            0.3253731513,
-            0.9114190978
+            0.21508308861918005,
+            0.34034964850918026,
+            0.9153695328935252
           ]
         ],
         "translation": [
-          -28.8826788178,
-          34.9801832485,
-          -1.7511235827
-        ]
+          -28.925188480198962,
+          34.97099636274141,
+          -1.7748228049554413
+        ],
+        "postAlignmentRmsdAngstrom": 3.27353,
+        "postAlignmentRmsdDeltaAngstrom": 2.8e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-0.pdb",
       "fullPredictionFile": null
@@ -79,7 +89,7 @@
     {
       "sample": 1,
       "method": "af3",
-      "publishedRmsdAngstrom": 3.38,
+      "publishedRmsdAngstrom": 3.37998104095459,
       "rankingScore": 0.7379989734568599,
       "confidence": 58.002,
       "source": {
@@ -87,46 +97,52 @@
         "sha256": "59b54f6f8d093e81b24c521047dc97b4485df49c8c09b8422d8503b3bd4d10d2",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 1.0888,
-        "ligandCentroidDistanceAngstrom": 1.3346,
-        "ligandAssignmentRmsdAngstrom": 3.0375,
-        "geometryExcessAngstrom": -0.3425,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 1.052158,
+        "reportedBindingSiteBackboneRmsdAngstrom": 1.0521587133407593,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.379981,
+        "reportedRmsdDeltaAngstrom": 0.0,
         "rotation": [
           [
-            0.3642767411,
-            0.0780769245,
-            0.9280120957
+            0.35305239367515606,
+            0.09369284721169563,
+            0.9309004553128161
           ],
           [
-            0.9268047465,
-            0.0672963671,
-            -0.3694646951
+            0.9257088626636902,
+            0.10933991015877786,
+            -0.36208822907182053
           ],
           [
-            -0.0912985097,
-            0.9946734101,
-            -0.0478475629
+            -0.13570964927424808,
+            0.9895789177361431,
+            -0.04812958202627854
           ]
         ],
         "translation": [
-          -28.0954643866,
-          35.7612227811,
-          -2.5227004725
-        ]
+          -28.202681353665806,
+          35.7423885523523,
+          -2.610831422450339
+        ],
+        "postAlignmentRmsdAngstrom": 3.380007,
+        "postAlignmentRmsdDeltaAngstrom": 2.6e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-1.pdb",
       "fullPredictionFile": null
@@ -134,7 +150,7 @@
     {
       "sample": 2,
       "method": "af3",
-      "publishedRmsdAngstrom": 7.652,
+      "publishedRmsdAngstrom": 7.652347564697266,
       "rankingScore": 0.7343428218491835,
       "confidence": 56.123,
       "source": {
@@ -142,46 +158,52 @@
         "sha256": "1f0d6a18ea6eb082ba66016952b1aae755c911f8604aa504aa4ac5defe223196",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 1.1049,
-        "ligandCentroidDistanceAngstrom": 2.6274,
-        "ligandAssignmentRmsdAngstrom": 4.3604,
-        "geometryExcessAngstrom": -3.2916,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 1.237722,
+        "reportedBindingSiteBackboneRmsdAngstrom": 1.2377243041992188,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 7.652347,
+        "reportedRmsdDeltaAngstrom": 1e-06,
         "rotation": [
           [
-            0.3397914238,
-            0.7672045702,
-            0.5440026983
+            0.341669677518703,
+            0.7567136315580907,
+            0.5573565387419722
           ],
           [
-            0.4237455412,
-            0.3914975235,
-            -0.8168043862
+            0.39315127319250365,
+            0.4235796184725037,
+            -0.8160958174147204
           ],
           [
-            -0.8396317673,
-            0.5080618432,
-            -0.1920720149
+            -0.8536356997287415,
+            0.49796062758902304,
+            -0.1527786160421906
           ]
         ],
         "translation": [
-          -29.455122168,
-          33.7934948372,
-          -2.9857935797
-        ]
+          -29.623596611282554,
+          33.78303484358439,
+          -2.9421844790809786
+        ],
+        "postAlignmentRmsdAngstrom": 7.652315,
+        "postAlignmentRmsdDeltaAngstrom": 3.2e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-2.pdb",
       "fullPredictionFile": null
@@ -189,7 +211,7 @@
     {
       "sample": 3,
       "method": "boltz",
-      "publishedRmsdAngstrom": 5.966,
+      "publishedRmsdAngstrom": 5.966330051422119,
       "rankingScore": 0.80072420835495,
       "confidence": 29.82,
       "source": {
@@ -197,46 +219,52 @@
         "sha256": "6ad4d4ff4f5f3475c69ffd0584d25f44eed008f7f55ec6f96376ccf4e7ddfd97",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "full_chain",
-        "matchedCaCount": 140,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.729,
-        "ligandCentroidDistanceAngstrom": 3.227,
-        "ligandAssignmentRmsdAngstrom": 5.3892,
-        "geometryExcessAngstrom": -0.5768,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.629268,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.6292688250541687,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 5.966329,
+        "reportedRmsdDeltaAngstrom": 1e-06,
         "rotation": [
           [
-            -0.1596685326,
-            -0.2228341945,
-            0.9616916769
+            -0.1675029558328674,
+            -0.24018202494477728,
+            0.9561670119182524
           ],
           [
-            0.1717933695,
-            0.9530525132,
-            0.2493550585
+            0.1731869280522048,
+            0.9476189561518436,
+            0.2683739963065186
           ],
           [
-            -0.9721075033,
-            0.2050264099,
-            -0.1138910591
+            -0.9705405956162232,
+            0.21054906514899896,
+            -0.11713258908514634
           ]
         ],
         "translation": [
-          -28.7658402713,
-          36.560556556,
-          -2.4565499936
-        ]
+          -29.01758264278576,
+          36.642728507924026,
+          -2.681684299753404
+        ],
+        "postAlignmentRmsdAngstrom": 5.966303,
+        "postAlignmentRmsdDeltaAngstrom": 2.7e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-3.pdb",
       "fullPredictionFile": null
@@ -244,7 +272,7 @@
     {
       "sample": 4,
       "method": "boltz",
-      "publishedRmsdAngstrom": 4.762,
+      "publishedRmsdAngstrom": 4.761618614196777,
       "rankingScore": 0.7973238825798035,
       "confidence": 33.22,
       "source": {
@@ -252,46 +280,52 @@
         "sha256": "42b3f23fa1d0bd0d5006290176836bc49d371778b913b795e8bc04ac8a5d8d0e",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.6982,
-        "ligandCentroidDistanceAngstrom": 2.7252,
-        "ligandAssignmentRmsdAngstrom": 4.3405,
-        "geometryExcessAngstrom": -0.4215,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.476828,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.4768286049365997,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 4.761616,
+        "reportedRmsdDeltaAngstrom": 2e-06,
         "rotation": [
           [
-            -0.0080231799,
-            0.8084670542,
-            0.5884867465
+            -0.01220766859244831,
+            0.8076055750251918,
+            0.5895966485791512
           ],
           [
-            -0.8438549367,
-            -0.3212241669,
-            0.429795161
+            -0.8531041821299039,
+            -0.3159901226952531,
+            0.415166830071366
           ],
           [
-            0.5365113926,
-            -0.4931491223,
-            0.6848061541
+            0.5215977638564072,
+            -0.4979191476005608,
+            0.6928291962617679
           ]
         ],
         "translation": [
-          -28.3746164244,
-          35.6967068006,
-          -1.926675209
-        ]
+          -28.53141549605703,
+          35.785913890872955,
+          -2.023112400106595
+        ],
+        "postAlignmentRmsdAngstrom": 4.761576,
+        "postAlignmentRmsdDeltaAngstrom": 4.3e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-4.pdb",
       "fullPredictionFile": null
@@ -299,7 +333,7 @@
     {
       "sample": 5,
       "method": "boltz",
-      "publishedRmsdAngstrom": 7.245,
+      "publishedRmsdAngstrom": 7.245092391967773,
       "rankingScore": 0.7926280498504639,
       "confidence": 43.69,
       "source": {
@@ -307,46 +341,52 @@
         "sha256": "bfe30a779be810b06d41ec281f8c8e9d26b4d35ffb318daceb6f2cecb0b277fc",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.7007,
-        "ligandCentroidDistanceAngstrom": 1.8253,
-        "ligandAssignmentRmsdAngstrom": 3.3831,
-        "geometryExcessAngstrom": -3.8619,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.497088,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.4970884025096893,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 7.245092,
+        "reportedRmsdDeltaAngstrom": 1e-06,
         "rotation": [
           [
-            0.2387737879,
-            -0.902489777,
-            0.3584679632
+            0.2272251418577478,
+            -0.9081067888306477,
+            0.3517254539941859
           ],
           [
-            -0.7886114669,
-            -0.3956154911,
-            -0.4707232068
+            -0.8024549653956355,
+            -0.3792290551468767,
+            -0.46070744756764725
           ],
           [
-            0.5666383612,
-            -0.1702955831,
-            -0.8061763963
+            0.5517560723903414,
+            -0.1775595218851891,
+            -0.8148851776589676
           ]
         ],
         "translation": [
-          -27.411313759,
-          32.4189158578,
-          -2.3041291215
-        ]
+          -27.585658396908126,
+          32.49704069584711,
+          -2.4439037125563114
+        ],
+        "postAlignmentRmsdAngstrom": 7.245127,
+        "postAlignmentRmsdDeltaAngstrom": 3.5e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-5.pdb",
       "fullPredictionFile": null
@@ -354,7 +394,7 @@
     {
       "sample": 6,
       "method": "protenix",
-      "publishedRmsdAngstrom": 3.315,
+      "publishedRmsdAngstrom": 3.314833402633667,
       "rankingScore": 0.983847439289093,
       "confidence": 96.995,
       "source": {
@@ -362,46 +402,52 @@
         "sha256": "c8e5ec15035803c33eed429a39d6f5c8724961300fcd62b4c8ddc4d882ec508c",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B0",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A0",
-        "crystalAnchorChain": "1.A",
-        "scope": "full_chain",
-        "matchedCaCount": 140,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.3718,
-        "ligandCentroidDistanceAngstrom": 2.2629,
-        "ligandAssignmentRmsdAngstrom": 3.2374,
-        "geometryExcessAngstrom": -0.0776,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A0"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.241561,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.2415260076522827,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.314893,
+        "reportedRmsdDeltaAngstrom": 6e-05,
         "rotation": [
           [
-            0.3359104826,
-            -0.8758265049,
-            0.3465430435
+            0.3391295919593279,
+            -0.8734968163617797,
+            0.3492770127897558
           ],
           [
-            -0.8019722491,
-            -0.0729948424,
-            0.5928846976
+            -0.8110434910948956,
+            -0.08335655420556892,
+            0.5790165286272733
           ],
           [
-            -0.4939682777,
-            -0.4770740889,
-            -0.7269082847
+            -0.4766545661274041,
+            -0.47964048690327343,
+            -0.7367125816172049
           ]
         ],
         "translation": [
-          -28.5540522991,
-          33.5881705933,
-          -3.1954763452
-        ]
+          -28.622917903516285,
+          33.63385508813896,
+          -3.2529980321955376
+        ],
+        "postAlignmentRmsdAngstrom": 3.314906,
+        "postAlignmentRmsdDeltaAngstrom": 7.3e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-6.pdb",
       "fullPredictionFile": null
@@ -409,7 +455,7 @@
     {
       "sample": 7,
       "method": "protenix",
-      "publishedRmsdAngstrom": 4.237,
+      "publishedRmsdAngstrom": 4.236809253692627,
       "rankingScore": 0.9837392568588256,
       "confidence": 96.919,
       "source": {
@@ -417,46 +463,52 @@
         "sha256": "0b89b06c8e81f92665da4db556789e38fa94ab13765035c4d7ed472268031f14",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B0",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A0",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.7732,
-        "ligandCentroidDistanceAngstrom": 2.743,
-        "ligandAssignmentRmsdAngstrom": 4.1536,
-        "geometryExcessAngstrom": -0.0834,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A0"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.925345,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.9254938960075378,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 4.236802,
+        "reportedRmsdDeltaAngstrom": 7e-06,
         "rotation": [
           [
-            -0.1070343889,
-            -0.4881515716,
-            0.8661707007
+            -0.11539591981807212,
+            -0.46318422847210944,
+            0.8787173334947012
           ],
           [
-            0.7821432721,
-            -0.5791890037,
-            -0.2297650972
+            0.7998950942020613,
+            -0.5678281256798811,
+            -0.1942654317122544
           ],
           [
-            0.6138367384,
-            0.6528768193,
-            0.4437976085
+            0.5889411005871618,
+            0.680464246071437,
+            0.4360238409280094
           ]
         ],
         "translation": [
-          -28.6959824485,
-          34.4367388035,
-          -1.7633704719
-        ]
+          -28.995087260175982,
+          34.53885228604777,
+          -2.0764699263409145
+        ],
+        "postAlignmentRmsdAngstrom": 4.236779,
+        "postAlignmentRmsdDeltaAngstrom": 3e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-7.pdb",
       "fullPredictionFile": null
@@ -464,7 +516,7 @@
     {
       "sample": 8,
       "method": "protenix",
-      "publishedRmsdAngstrom": 4.008,
+      "publishedRmsdAngstrom": 4.0084733963012695,
       "rankingScore": 0.9834281802177428,
       "confidence": 96.986,
       "source": {
@@ -472,46 +524,52 @@
         "sha256": "9d9ff544d55701db2866108af3bfc0c3952e046982db84f4ec657448ae463b1f",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B0",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A0",
-        "crystalAnchorChain": "1.A",
-        "scope": "crystal_pocket",
-        "matchedCaCount": 59,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.732,
-        "ligandCentroidDistanceAngstrom": 1.5883,
-        "ligandAssignmentRmsdAngstrom": 3.3724,
-        "geometryExcessAngstrom": -0.6356,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A0"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.774722,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.7747891545295715,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 4.008584,
+        "reportedRmsdDeltaAngstrom": 0.000111,
         "rotation": [
           [
-            -0.4706705884,
-            0.5695382702,
-            0.6738659777
+            -0.47443751066410844,
+            0.5452804950945049,
+            0.6910703510818095
           ],
           [
-            -0.1513198491,
-            0.7003297422,
-            -0.6975962697
+            -0.18575536964000056,
+            0.7053579388502449,
+            -0.6840797619801663
           ],
           [
-            -0.8692361592,
-            -0.4303073448,
-            -0.2434421667
+            -0.8604673097362567,
+            -0.4529231278820122,
+            -0.23335948471151463
           ]
         ],
         "translation": [
-          -28.8820623816,
-          33.3789587335,
-          -3.305329814
-        ]
+          -29.106574589300852,
+          33.496054720165425,
+          -3.5265694225594633
+        ],
+        "postAlignmentRmsdAngstrom": 4.008565,
+        "postAlignmentRmsdDeltaAngstrom": 9.2e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-8.pdb",
       "fullPredictionFile": null
@@ -519,7 +577,7 @@
     {
       "sample": 9,
       "method": "chai",
-      "publishedRmsdAngstrom": 3.533,
+      "publishedRmsdAngstrom": 3.5327608585357666,
       "rankingScore": 0.8218988,
       "confidence": 87.93,
       "source": {
@@ -527,46 +585,52 @@
         "sha256": "736b7bbce49f345bd1108edf673587da07c5ee38b7f47b7bd55a3a7cb82c6357",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "full_chain",
-        "matchedCaCount": 140,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.5151,
-        "ligandCentroidDistanceAngstrom": 1.806,
-        "ligandAssignmentRmsdAngstrom": 3.2145,
-        "geometryExcessAngstrom": -0.3185,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.365316,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.3653168082237243,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.53276,
+        "reportedRmsdDeltaAngstrom": 0.0,
         "rotation": [
           [
-            -0.2790626904,
-            -0.0496460603,
-            0.9589886775
+            -0.28073527746126176,
+            -0.006875441077068967,
+            0.9597606119750612
           ],
           [
-            0.6084588747,
-            -0.7817423605,
-            0.1365894565
+            0.6019276676514087,
+            -0.780141125496318,
+            0.17047846557578045
           ],
           [
-            0.742900944,
-            0.6216221927,
-            0.2483627123
+            0.7475766093882839,
+            0.6255657860044246,
+            0.22315165353674482
           ]
         ],
         "translation": [
-          -29.1905775732,
-          35.5784552209,
-          -1.268806363
-        ]
+          -29.468106418561028,
+          35.53916820263138,
+          -1.1701064191577863
+        ],
+        "postAlignmentRmsdAngstrom": 3.532767,
+        "postAlignmentRmsdDeltaAngstrom": 7e-06
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-9.pdb",
       "fullPredictionFile": null
@@ -574,7 +638,7 @@
     {
       "sample": 10,
       "method": "chai",
-      "publishedRmsdAngstrom": 3.189,
+      "publishedRmsdAngstrom": 3.188807725906372,
       "rankingScore": 0.814914,
       "confidence": 87.299,
       "source": {
@@ -582,46 +646,52 @@
         "sha256": "b59d861a9961ce4ea084cb8afcaf877127a1696300184db311a87102a76d3dd0",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "full_chain",
-        "matchedCaCount": 140,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.3802,
-        "ligandCentroidDistanceAngstrom": 1.6922,
-        "ligandAssignmentRmsdAngstrom": 3.0716,
-        "geometryExcessAngstrom": -0.1174,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.347735,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.3477353453636169,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.188806,
+        "reportedRmsdDeltaAngstrom": 1e-06,
         "rotation": [
           [
-            -0.7990198412,
-            -0.5864817945,
-            -0.1326891031
+            -0.8111968291631174,
+            -0.5667458727938527,
+            -0.144079214416371
           ],
           [
-            0.0250168862,
-            -0.2529008386,
-            0.967168714
+            0.00785030676105497,
+            -0.2569167951411835,
+            0.9664016416884552
           ],
           [
-            -0.6007840284,
-            0.7694675241,
-            0.2167447362
+            -0.5847205119024487,
+            0.7828108814046455,
+            0.21285921853427217
           ]
         ],
         "translation": [
-          -28.985854363,
-          32.8887720938,
-          -1.6113658258
-        ]
+          -29.151451958646142,
+          32.88016496364594,
+          -1.5189754304516292
+        ],
+        "postAlignmentRmsdAngstrom": 3.188793,
+        "postAlignmentRmsdDeltaAngstrom": 1.4e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-10.pdb",
       "fullPredictionFile": null
@@ -629,7 +699,7 @@
     {
       "sample": 11,
       "method": "chai",
-      "publishedRmsdAngstrom": 3.316,
+      "publishedRmsdAngstrom": 3.315922498703003,
       "rankingScore": 0.81022567,
       "confidence": 87.423,
       "source": {
@@ -637,46 +707,52 @@
         "sha256": "d006554705e76c027fad1123f76edef1dd005a0b0b04877247d9209f63768f3b",
         "predictedLigandChain": "B",
         "resolvedPredictedLigandChain": "B",
-        "symmetryCopyReassigned": false,
         "resolvedCrystalLigandChain": "1.C",
-        "equivalentCrystalCopyUsed": false
+        "equivalentCrystalCopyUsed": false,
+        "indexMatchedLigandChain": "B",
+        "sameChemistryIndexCorrected": false
       },
       "alignment": {
-        "predictedAnchorChain": "A",
-        "crystalAnchorChain": "1.A",
-        "scope": "full_chain",
-        "matchedCaCount": 140,
-        "sequenceIdentity": 0.972222,
-        "receptorRmsdAngstrom": 0.452,
-        "ligandCentroidDistanceAngstrom": 1.7241,
-        "ligandAssignmentRmsdAngstrom": 3.0817,
-        "geometryExcessAngstrom": -0.2343,
+        "scorer": "OpenStructure 2.8 BiSyRMSD-compatible",
+        "scope": "4A target binding site",
+        "chainMapping": {
+          "1.A": "A"
+        },
+        "matchedBindingSiteResidueCount": 11,
+        "bindingSiteBackboneRmsdAngstrom": 0.335621,
+        "reportedBindingSiteBackboneRmsdAngstrom": 0.335620641708374,
+        "ligandSymmetryCount": 4,
+        "recomputedRmsdAngstrom": 3.315922,
+        "reportedRmsdDeltaAngstrom": 1e-06,
         "rotation": [
           [
-            0.358122929,
-            -0.7498840117,
-            -0.5562570779
+            0.36521109553047637,
+            -0.7634525484375214,
+            -0.5326922770096096
           ],
           [
-            0.3804588823,
-            0.6612700649,
-            -0.6465082677
+            0.3933469946676287,
+            0.6451816688070574,
+            -0.6549952335866914
           ],
           [
-            0.8526423674,
-            0.0198964884,
-            0.5221160054
+            0.8437410725378803,
+            0.029678620581050058,
+            0.5359292695804484
           ]
         ],
         "translation": [
-          -27.3703644421,
-          35.265180334,
-          -1.3621387385
-        ]
+          -27.607365496784574,
+          35.31082864315089,
+          -1.252083654946305
+        ],
+        "postAlignmentRmsdAngstrom": 3.31596,
+        "postAlignmentRmsdDeltaAngstrom": 3.7e-05
       },
       "validation": {
         "status": "validated",
-        "rmsdGeometryToleranceAngstrom": 2.0
+        "metric": "binding-site-superposed symmetry-corrected ligand RMSD",
+        "toleranceAngstrom": 0.005
       },
       "poseFile": "pose-11.pdb",
       "fullPredictionFile": null

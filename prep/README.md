@@ -35,7 +35,10 @@ ligand shape overlap). `process_cameo.py` is the core (collect models, pick the 
 Source: the RnP Zenodo release (`prediction_files.tar.gz`, 5 methods) + `all_similarity_scores.parquet`.
 
 Full-archive rebuild pipeline:
-1. `rnp_matcher_v2.py` — map each scored ligand-instance-chain to its CIF pose chain by heavy-atom count.
+1. `rnp_matcher_v2.py` — legacy quiz indexing maps each scored ligand-instance-chain to a same-chemistry
+   CIF chain by heavy-atom count. This is sufficient for pose pooling, but it is **not authoritative score
+   provenance** when a prediction contains repeated copies of the ligand; crystal-frame exports must use
+   the released `model_ligand_chain_rmsd` column as described below.
 2. `build_index_coords_v2.py` — one stream over the 39 GB tar (all 5 methods incl. boltz2) → index + coords.
 3. `build_rnp_quiz_plan_v2.py` — pool **top-3 ranking poses per method**, align to an AF3 reference,
    greedy-cluster ligands (RMSD<2 Å), apply the **single-pocket** filter (centroid spread <8 Å).
@@ -54,23 +57,45 @@ Analyses (not part of the build): `pocket_bias_analysis.py` (single- vs multi-po
 The release prediction CIFs are stored in each model's own Cartesian frame. The
 published ligand RMSDs are evaluator outputs; the source archive is not a
 directly overlayable crystal/prediction ensemble. `rnp/export_crystal_aligned.py`
-builds that derived data product without modifying ligand coordinates
+creates the initial derived data product, and
+`rnp/validate_post_alignment_rmsd.py --rewrite` resolves the authoritative R&P
+ligand-copy provenance and replaces the initial transform with the reproduced
+OpenStructure 2.8 BiSyRMSD transform. Neither step modifies ligand coordinates
 independently:
 
 - the experimental system is the canonical frame;
 - each complete prediction is moved by one receptor-derived rigid transform;
 - a ligand-only PDB is emitted for fast browser overlays;
-- `alignment.json` records the raw archive member and SHA-256, receptor chain
-  mapping, rotation/translation, fit diagnostics, and validation status;
-- chemically identical ligand copies are treated as scorer-equivalent, with
-  both the indexed and resolved chain IDs retained in the manifest;
-- a system fails closed unless every selected pose passes the sequence,
-  receptor-fit, and published-RMSD geometry checks.
+- `alignment.json` records the raw archive member and SHA-256, the official
+  `model_ligand_chain_rmsd`, receptor chain mapping, rotation/translation,
+  BiSyRMSD diagnostics, and validation status;
+- graph isomorphisms provide the same chemical-symmetry correction as R&P,
+  while all 4 Å binding-site chain mappings are enumerated;
+- the validator recalculates RMSD from the coordinates actually written to
+  each browser PDB and fails unless it agrees with R&P within 0.005 Å;
+- both the legacy heavy-atom-count match and authoritative scored ligand copy
+  remain in the manifest so any correction is explicit;
+- if R&P's released merge associates a row with one crystal instance but its
+  RMSD was scored against an equivalent copy, the scored copy is exported and
+  identified separately instead of silently showing the wrong crystal pose.
 
 The default export includes full aligned prediction CIFs. Pass
-`--no-include-full-predictions` for a lightweight browser-data build. The script
-requires Python 3.9+, Gemmi, NumPy, and SciPy; run `--help` for the required
-archive, index, selection, cache, and output paths.
+`--no-include-full-predictions` for a lightweight browser-data build. After the
+initial export, run:
+
+```bash
+python prep/rnp/validate_post_alignment_rmsd.py \
+  --aligned-dir data_rnp_aligned \
+  --raw-dir /path/to/extracted-member-cache \
+  --ground-dir /path/to/ground-truth-cache \
+  --score-tables-dir /path/to/extracted/predictions \
+  --rewrite \
+  --output /path/to/bisyrmsd-audit.json
+```
+
+Omit `--rewrite` for a read-only repeat audit. The exporter requires Python
+3.9+, Gemmi, NumPy, and SciPy. The BiSyRMSD validator additionally requires
+Biopython, NetworkX, and RDKit; run either script with `--help` for all inputs.
 
 ## Downstream (at play time, in the root `app.js`)
 - **Strict thresholds**: correct <1.5 Å, wrong >3 Å (buckets re-derived per session).
