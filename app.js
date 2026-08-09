@@ -981,6 +981,7 @@ async function buildLayer() {
   if (displayMode === 'grid') {
     // Cover the canonical viewer before it is rebuilt with the Grid pose set;
     // otherwise One-at-a-time briefly flashes as Show all during the transition.
+    $('#stage').classList.add('grid-active');
     $('#gridview').classList.add('on', 'loading-grid');
     try {
       await buildCanonicalLayer(gridEntries().map(entry => entry.choice));

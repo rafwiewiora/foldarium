@@ -146,9 +146,9 @@ function gridLayerSandbox(overrides = {}) {
     buildSingleLayer: async () => { calls.push('single'); },
     buildGrid: async () => { calls.push('grid'); },
     hideGrid: () => { calls.push('hideGrid'); },
-    $: () => ({ classList: {
+    $: selector => ({ classList: {
       contains: () => false,
-      add: (...names) => calls.push(`cover:${names.join(',')}`),
+      add: (...names) => calls.push(`${selector}:${names.join(',')}`),
     } }),
     console: { warn: (...args) => calls.push(`warn:${args[1]}`) },
     ...overrides,
@@ -164,7 +164,8 @@ test('Grid rebuilds the hidden canonical scene before the Grid tiles so traces s
   await buildLayer();
 
   assert.deepEqual(sandbox.calls, [
-    'cover:on,loading-grid',
+    '#stage:grid-active',
+    '#gridview:on,loading-grid',
     'canonical:pose-a.pdb,pose-b.pdb',
     'grid',
   ]);
@@ -179,7 +180,12 @@ test('a failed canonical rebuild still leaves the Grid tiles to load', async () 
 
   await buildLayer();
 
-  assert.deepEqual(sandbox.calls, ['cover:on,loading-grid', 'warn:pose download failed', 'grid']);
+  assert.deepEqual(sandbox.calls, [
+    '#stage:grid-active',
+    '#gridview:on,loading-grid',
+    'warn:pose download failed',
+    'grid',
+  ]);
 });
 
 test('leaving Grid keeps rebuilding the single view before disposing Grid viewers', async () => {
