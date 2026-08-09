@@ -51,6 +51,17 @@
   .grid-head:disabled{cursor:default}
   .grid-dot{width:10px;height:10px;border-radius:3px;flex:none}
   .grid-meta{color:#667587;font-weight:500;white-space:nowrap}
+  .pose-info{position:relative;display:inline-grid;place-items:center;flex:none;margin-left:auto;width:18px;height:18px;
+    border:1px solid currentColor;border-radius:50%;color:var(--muted);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
+    cursor:help;outline:none}
+  .pose-info:hover,.pose-info:focus-visible{color:var(--accent)}
+  .pose-info::after{content:attr(data-tooltip);position:absolute;z-index:30;right:0;bottom:calc(100% + 8px);
+    width:max-content;max-width:min(330px,72vw);padding:8px 10px;border:1px solid var(--line);border-radius:7px;
+    background:#0d1117f2;color:var(--ink);font:500 11px/1.45 ui-sans-serif,system-ui,sans-serif;
+    white-space:normal;box-shadow:0 8px 28px #0008;opacity:0;visibility:hidden;transform:translateY(3px);
+    transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
+  .pose-info:hover::after,.pose-info:focus-visible::after{opacity:1;visibility:visible;transform:translateY(0)}
+  .grid-head .pose-info::after{top:calc(100% + 8px);bottom:auto}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
   #gridpages{overflow-x:auto}

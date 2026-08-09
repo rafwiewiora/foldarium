@@ -15,26 +15,24 @@ function weeklyPoseEvidence(choice) {
   if (!choice?._method) return '';
   const confidence = choice._confidence;
   const confidenceValue = confidence?.metric === 'ligand_plddt' && Number.isFinite(confidence.value)
-    ? ` · ligand pLDDT ${confidence.value.toFixed(1)}/${Number(confidence.scale_max || 100).toFixed(0)}`
+    ? ` · ligand pLDDT ${confidence.value.toFixed(1)}`
     : '';
   const smina = choice._sminaScore;
   const sminaValue = smina?.metric === 'smina_affinity' && Number.isFinite(smina.value)
     ? ` · smina ${smina.value.toFixed(1)} kcal/mol`
     : '';
-  const interactions = choice._interactionCount;
-  const interactionValue = interactions?.metric === 'prolif_unique_residue_interaction_type'
-      && Number.isInteger(interactions.value) && interactions.value >= 0
-    ? ` · ProLIF contacts ${interactions.value}`
+  return `${methodName(choice._method)}${confidenceValue}${sminaValue}`;
+}
+function weeklyLigandPlddt(choice) {
+  const confidence = choice?._confidence;
+  return confidence?.metric === 'ligand_plddt' && Number.isFinite(confidence.value)
+    ? `ligand pLDDT ${confidence.value.toFixed(1)}`
     : '';
-  return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
 }
 function weeklyEntryEvidence(entry) {
   if (cur?.item?.source !== 'weekly') return '';
   const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
-  return members.map(member => {
-    const evidence = weeklyPoseEvidence(member);
-    return evidence && members.length > 1 ? `${member.label} ${evidence}` : evidence;
-  }).filter(Boolean).join(' ; ');
+  return members.map(weeklyPoseEvidence).filter(Boolean).join(' ; ');
 }
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
 const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
@@ -217,10 +215,17 @@ function clusterForChoice(choice) {
 // choice ID), but the geometry shows every member: faint members first and the
 // representative last so its colour and silhouette stay visually dominant.
 function weeklyPoseLayers(choices) {
-  if (cur?.item?.source !== 'weekly' || !clustered || displayMode === 'all'
-      || cur.revealed && cur.showAnswer) {
+  if (cur?.item?.source !== 'weekly' || cur.revealed && cur.showAnswer) {
     return choices.map(choice => ({ choice, ghost: false }));
   }
+  if (displayMode === 'all') {
+    const focused = cur.contextChoice;
+    return choices.map(choice => ({
+      choice,
+      ghost: !!focused && !sameChoice(choice, focused),
+    }));
+  }
+  if (!clustered) return choices.map(choice => ({ choice, ghost: false }));
   return choices.flatMap(choice => {
     const cluster = clusterForChoice(choice);
     if (!cluster || cluster.members.length < 2) return [{ choice, ghost: false }];
@@ -321,6 +326,19 @@ function choiceFromPoseInteraction(event) {
     ? (poseChoiceByRepresentation.get(representation) || null)
     : null;
 }
+function canonicalInteractionIsEmpty(event) {
+  const current = event?.current;
+  return !current || current?.loci?.kind === 'empty-loci'
+    || (!current.repr && !current.loci);
+}
+async function clearWeeklyShowAllContext() {
+  if (!cur?.contextChoice) return;
+  await viewerRebuild.enqueue(() => {
+    cur.contextChoice = null;
+    selectedPaneId = null;
+  });
+  recordAppEvent('pose_context_cleared');
+}
 function visibleIndexForChoice(choice) {
   const visible = visibleChoices();
   if (!clustered) return visible.findIndex(candidate => sameChoice(candidate, choice));
@@ -331,7 +349,15 @@ function onCanonicalPoseInteraction(event) {
   if (interactionBlocked() || cur?.item?.source !== 'weekly'
       || displayMode !== 'all' || cur.revealed) return;
   const choice = choiceFromPoseInteraction(event);
-  if (!choice || sameChoice(choice, cur.contextChoice)) return;
+  if (!choice) {
+    if (cur.contextChoice && canonicalInteractionIsEmpty(event)) {
+      void clearWeeklyShowAllContext().catch(error => {
+        console.warn('Could not reset the Show all pose context:', error.message);
+      });
+    }
+    return;
+  }
+  if (sameChoice(choice, cur.contextChoice)) return;
   const index = visibleIndexForChoice(choice);
   if (index < 0) return;
   void onPick(index, choice).catch(error => {
@@ -419,8 +445,10 @@ function gridHeader(entry) {
   const c = entry.choice, answer = cur.revealed && cur.showAnswer;
   const bits = [];
   if (clustered && entry.memberCount > 1) bits.push(`${entry.memberCount} poses`);
-  const weeklyEvidence = weeklyEntryEvidence(entry);
-  if (weeklyEvidence) bits.push(weeklyEvidence);
+  if (cur.item.source === 'weekly') {
+    const confidence = weeklyLigandPlddt(c);
+    if (confidence) bits.push(confidence);
+  }
   if (answer) {
     bits.push(`${c.rmsd.toFixed(2)} Å`);
     if (cur.item.source === 'rnp' && c._method) bits.push(methodName(c._method));
@@ -431,6 +459,26 @@ function gridHeader(entry) {
   const color = answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color;
   return `<span class="grid-dot" style="background:${hex(color)}"></span><span>Pose ${displayedPoseLabel(c)}</span>`
     + (bits.length ? `<span class="grid-meta">· ${bits.join(' · ')}</span>` : '');
+}
+function attachPoseInfo(root, evidence) {
+  if (!evidence) return;
+  const info = document.createElement('span');
+  info.className = 'pose-info';
+  info.textContent = 'i';
+  info.tabIndex = 0;
+  info.setAttribute('aria-label', `Pose information: ${evidence}`);
+  info.dataset.tooltip = evidence;
+  const stopSelection = event => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  info.addEventListener('pointerdown', stopSelection);
+  info.addEventListener('click', stopSelection);
+  info.addEventListener('keydown', event => {
+    if (event.key === 'Escape') info.blur();
+    event.stopPropagation();
+  });
+  root.appendChild(info);
 }
 function disposeGridViewers() {
   if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
@@ -581,6 +629,7 @@ async function buildGrid(preserveCamera = true) {
     }
     const head = document.createElement('button');
     head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry); head.disabled = locked();
+    attachPoseInfo(head, weeklyEntryEvidence(entry));
     head.onclick = () => {
       if (locked()) return;
       activatePane(paneId, 'click');
@@ -699,6 +748,7 @@ async function buildCanonicalLayer(shown) {
   try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
   const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
   try {
+    syncStageBadge();
     await buildProtein(shown);           // swap protein only if it changed (AF3 one-at-a-time, or toggle)
     await clearLayer();
     poseChoiceByRepresentation = new WeakMap();
@@ -859,8 +909,8 @@ function renderUI() {
       nm = `Pose ${label}` + (count > 1
         ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
     } else nm = `Pose ${c.label}`;
-    const evidence = weeklyEntryEvidence(entry);
-    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag>${evidence}</span>`;
+    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span>`;
+    attachPoseInfo(b, weeklyEntryEvidence(entry));
     b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
     box.appendChild(b);
   });
@@ -931,7 +981,7 @@ function showIntro() {
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
   if (!DEV) $('#badge').textContent = quizSource === 'weekly'
-    ? 'binding pocket · ligand hidden · methods + pose metrics shown'
+    ? 'binding pocket · ligand hidden · pose information on hover'
     : 'binding pocket · ligand hidden · poses anonymised';
   $('#setup').style.display = '';
   $('#participant-setup').style.display = DEV ? 'none' : '';
@@ -947,7 +997,7 @@ function showIntro() {
     $('#setuphint').innerHTML = status === 'revealed'
       ? 'Wednesday results — methods, reference scores, and vote totals are now revealable.'
       : (status === 'open'
-        ? `Voting is open until ${closes}. Methods and pose-only metrics are shown now; released-coordinate results arrive Wednesday.`
+        ? `Voting is open until ${closes}. Method and pose metrics are available from each “i”; released-coordinate results arrive Wednesday.`
         : 'Voting is closed while Wednesday results are being prepared.');
     const v = $('#verdict'); v.style.display = '';
     v.innerHTML = status === 'revealed'
@@ -1459,6 +1509,23 @@ function syncButtons() {
                    : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
       : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.');
   $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
+  syncStageBadge();
+}
+
+function syncStageBadge() {
+  if (DEV) return;
+  const badge = $('#badge');
+  if (!badge) return;
+  if (cur?.item?.source === 'weekly' && displayMode === 'one') {
+    const choices = visibleChoices();
+    const choice = choices[Math.min(shownOne, choices.length - 1)];
+    const confidence = weeklyLigandPlddt(choice);
+    badge.textContent = `Pose ${displayedPoseLabel(choice)}${confidence ? ` · ${confidence}` : ''}`;
+    return;
+  }
+  badge.textContent = cur?.item?.source === 'weekly'
+    ? 'binding pocket · ligand hidden · pose information on hover'
+    : 'binding pocket · ligand hidden · poses anonymised';
 }
 
 // dev reveal toggle: flip the green/red correctness + RMSD list on/off, reusing the showAnswer machinery.

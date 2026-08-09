@@ -93,7 +93,7 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /\$\('#mode'\)\.style\.display = inPlay \? '' : 'none';/);
   assert.match(app, /\$\{rawPoseCount\} predicted poses/);
   assert.match(app, /pose clusters/);
-  assert.match(app, /methods \+ pose metrics shown/);
+  assert.match(app, /pose information on hover/);
   assert.doesNotMatch(app, /Choices stay method-anonymous/);
   assert.match(app, /The protein and pocket change with the pose/);
   assert.match(app, /linked viewer per pose cluster/);
@@ -378,6 +378,30 @@ test('Weekly Show all renders cluster representatives without ghost members', as
   ]);
 });
 
+test('Weekly Show all fades every non-focused pose after a ligand click', async () => {
+  const app = await readApp();
+  const first = { pose_file: 'first.pdb' };
+  const focused = { pose_file: 'focused.pdb' };
+  const third = { pose_file: 'third.pdb' };
+  const layers = evaluateDeclaration(app, 'function weeklyPoseLayers(choices)', {
+    cur: {
+      item: { source: 'weekly' },
+      contextChoice: focused,
+      revealed: false,
+      showAnswer: false,
+    },
+    clustered: true,
+    displayMode: 'all',
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+  })([first, focused, third]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(layers)), [
+    { choice: first, ghost: true },
+    { choice: focused, ghost: false },
+    { choice: third, ghost: true },
+  ]);
+});
+
 test('Weekly cluster acceptance applies to every raw member while labels stay unambiguous', async () => {
   const app = await readApp();
   const members = [
@@ -430,13 +454,13 @@ test('Weekly exposes method-specific ligand confidence for every raw pose', asyn
 
   assert.equal(
     weeklyEntryEvidence(entry),
-    'D-1 OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF contacts 9 ; '
-      + 'D-2 Boltz-2 · ligand pLDDT 75.0/100 · smina -6.3 kcal/mol · ProLIF contacts 7',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol ; '
+      + 'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol',
   );
   sandbox.clustered = false;
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF contacts 9',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol',
   );
   assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
   assert.match(app, /_confidence: choice\.confidence \|\| null/);
@@ -545,6 +569,8 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
     },
     displayMode: 'all',
     choiceFromPoseInteraction: () => exact,
+    canonicalInteractionIsEmpty: () => false,
+    clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
     visibleIndexForChoice: () => 3,
     onPick: async (...args) => { calls.push(args); },
@@ -555,6 +581,95 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   await Promise.resolve();
 
   assert.deepEqual(calls, [[3, exact]]);
+});
+
+test('Weekly Show all clears only visual pose context when empty Molstar space is clicked', async () => {
+  const app = await readApp();
+  const selected = { pose_file: 'selected.pdb' };
+  const calls = [];
+  const cur = {
+    item: { source: 'weekly' },
+    revealed: false,
+    selected,
+    contextChoice: selected,
+  };
+  const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
+    interactionBlocked: () => false,
+    cur,
+    displayMode: 'all',
+    choiceFromPoseInteraction: () => null,
+    canonicalInteractionIsEmpty: event => event.current.loci.kind === 'empty-loci',
+    clearWeeklyShowAllContext: async () => {
+      calls.push('reset');
+      cur.contextChoice = null;
+    },
+    sameChoice: () => false,
+    visibleIndexForChoice: () => -1,
+    onPick: async () => { calls.push('pick'); },
+    console,
+  });
+
+  handler({ current: { loci: { kind: 'empty-loci' } } });
+  await Promise.resolve();
+
+  assert.deepEqual(calls, ['reset']);
+  assert.equal(cur.contextChoice, null);
+  assert.equal(cur.selected, selected, 'resetting the visual context must preserve the pending vote');
+});
+
+test('Weekly pose metrics are attached to a hover-only information affordance', async () => {
+  const [app, html] = await Promise.all([readApp(), readHtml()]);
+
+  assert.match(app, /attachPoseInfo\(b, weeklyEntryEvidence\(entry\)\)/);
+  assert.match(app, /attachPoseInfo\(head, weeklyEntryEvidence\(entry\)\)/);
+  assert.doesNotMatch(app, /<span class="tag" data-tag>\$\{evidence\}<\/span>/);
+  assert.match(app, /event\.stopPropagation\(\)/);
+  assert.match(html, /\.pose-info:hover::after,\.pose-info:focus-visible::after/);
+});
+
+test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the info tooltip', async () => {
+  const app = await readApp();
+  const choice = {
+    label: 'C',
+    color: 0x5B8FF9,
+    _confidence: { metric: 'ligand_plddt', value: 72.54, scale_max: 100 },
+  };
+  const weeklyLigandPlddt = evaluateDeclaration(
+    app,
+    'function weeklyLigandPlddt(choice)',
+    { Number },
+  );
+  const header = evaluateDeclaration(app, 'function gridHeader(entry)', {
+    cur: { item: { source: 'weekly' }, revealed: false, showAnswer: false },
+    clustered: true,
+    weeklyLigandPlddt,
+    hex: color => `#${color.toString(16)}`,
+    displayedPoseLabel: current => current.label,
+    acceptedChoiceCorrect: () => false,
+    gridChoiceSelected: () => false,
+    GOOD: 1,
+    BAD: 2,
+  })({ choice, memberCount: 2 });
+
+  assert.match(header, /Pose C/);
+  assert.match(header, /2 poses/);
+  assert.match(header, /ligand pLDDT 72\.5/);
+  assert.doesNotMatch(header, /OpenFold|Boltz|smina|ProLIF|\/100/);
+
+  const registry = elementRegistry();
+  const badgeSandbox = {
+    DEV: false,
+    cur: { item: { source: 'weekly' } },
+    displayMode: 'one',
+    visibleChoices: () => [choice],
+    shownOne: 0,
+    displayedPoseLabel: current => current.label,
+    weeklyLigandPlddt,
+    $: registry.$,
+  };
+  const syncStageBadge = evaluateDeclaration(app, 'function syncStageBadge()', badgeSandbox);
+  syncStageBadge();
+  assert.equal(registry.elements.get('#badge').textContent, 'Pose C · ligand pLDDT 72.5');
 });
 
 test('Weekly Show all rebuilds the exact clicked protein and pocket sticks', async () => {
