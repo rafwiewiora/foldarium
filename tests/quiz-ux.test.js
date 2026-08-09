@@ -68,6 +68,12 @@ test('question context is arranged at the top of the viewer', async () => {
   assert.match(html, /#gridview\.on\{display:block;top:84px\}/);
 });
 
+test('active-pose badge is legible and clears the Molstar reset control', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /\.badge\{position:absolute;top:14px;right:64px;[\s\S]*?font-size:13px;[\s\S]*?padding:7px 12px/);
+});
+
 test('quiz chrome uses Geist Sans without changing the molecular viewer', async () => {
   const html = await readHtml();
 
