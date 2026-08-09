@@ -1,17 +1,43 @@
 // Pose Quiz — binding pocket (ligand removed) + shuffled, CLUSTERED ligand poses. Player picks the cluster they think
 // is correct (or, in Hard mode, "none of these are correct"). Two quizzes: CAMEO (AlphaFold3 only) and
-// Runs-n-Poses (poses pooled from multiple co-folding methods, ANONYMISED — the method is never rendered).
+// Runs-n-Poses (poses pooled from multiple co-folding methods, ANONYMISED during play). The weekly
+// prospective quiz intentionally shows each method and its ligand confidence because calibration differs.
 // Reuses the viewer's Mol* setup + its proven delete-and-rebuild pattern. Pose carbons are coloured by a
 // NON-semantic per-cluster palette (random each question) only for identification — never correctness.
 
 const PALETTE = [0x5B8FF9, 0xF6BD16, 0x9270CA, 0x5AD8A6, 0xE8964A, 0x6DC8EC,
   0xFF99C3, 0x8C6D31, 0xB5BD61, 0x17BECF, 0xBC80BD, 0xFDB462, 0x80B1D3, 0xFCCDE5, 0xB3DE69];
 const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-// Co-folding method display names — shown ONLY on the answer reveal (methods are anonymised during play).
+// RnP keeps these names hidden until reveal; Weekly shows them with per-pose ligand confidence during play.
 const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
+function weeklyPoseEvidence(choice) {
+  if (!choice?._method) return '';
+  const confidence = choice._confidence;
+  const confidenceValue = confidence?.metric === 'ligand_plddt' && Number.isFinite(confidence.value)
+    ? ` · ligand pLDDT ${confidence.value.toFixed(1)}/${Number(confidence.scale_max || 100).toFixed(0)}`
+    : '';
+  const smina = choice._sminaScore;
+  const sminaValue = smina?.metric === 'smina_affinity' && Number.isFinite(smina.value)
+    ? ` · smina ${smina.value.toFixed(1)} kcal/mol`
+    : '';
+  const interactions = choice._interactionCount;
+  const interactionValue = interactions?.metric === 'prolif_unique_residue_interaction_type'
+      && Number.isInteger(interactions.value) && interactions.value >= 0
+    ? ` · ProLIF ${interactions.value}`
+    : '';
+  return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
+}
+function weeklyEntryEvidence(entry) {
+  if (cur?.item?.source !== 'weekly') return '';
+  const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
+  return members.map(member => {
+    const evidence = weeklyPoseEvidence(member);
+    return evidence && members.length > 1 ? `${member.label} ${evidence}` : evidence;
+  }).filter(Boolean).join(' ; ');
+}
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
-const GHOST_POSE_ALPHA = 0.12, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
+const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
 const ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT = false;
 // Convincing thresholds: a pose is CORRECT only if rmsd < 1.5 A; a clean WRONG distractor is > 3 A.
 // game-able = has a <1.5 AND a >3 pose; all-wrong = EVERY pose > 3; 1.5-3 A limbo items are dropped.
@@ -191,7 +217,8 @@ function clusterForChoice(choice) {
 // choice ID), but the geometry shows every member: faint members first and the
 // representative last so its colour and silhouette stay visually dominant.
 function weeklyPoseLayers(choices) {
-  if (cur?.item?.source !== 'weekly' || !clustered || cur.revealed && cur.showAnswer) {
+  if (cur?.item?.source !== 'weekly' || !clustered || displayMode === 'all'
+      || cur.revealed && cur.showAnswer) {
     return choices.map(choice => ({ choice, ghost: false }));
   }
   return choices.flatMap(choice => {
@@ -241,6 +268,37 @@ async function pinCameraSnapshot(targetPlugin, snapshot) {
       snapshot,
     });
   } else setSnapshot(snapshot);
+}
+// Keep the current viewpoint pinned while Mol* replaces structures. The
+// builders can publish an automatic focus between awaits; restoring only after
+// the whole rebuild lets that intermediate camera render as a visible flash.
+// Re-pinning from the camera event happens before the next frame instead.
+function holdCameraSnapshot(targetPlugin, snapshot) {
+  const camera = targetPlugin?.canvas3d?.camera;
+  if (!camera || !snapshot) return () => {};
+  let released = false, applying = false;
+  let signature = null;
+  try { signature = JSON.stringify(snapshot); } catch (e) {}
+  const apply = () => {
+    if (released || applying) return;
+    try {
+      const current = camera.getSnapshot?.();
+      if (signature !== null && JSON.stringify(current) === signature) return;
+      applying = true;
+      camera.setState?.(snapshot, 0);
+    } catch (e) {
+      // Camera preservation is best-effort; a failed pin must not break the
+      // protein/pose swap itself.
+    } finally {
+      applying = false;
+    }
+  };
+  const subscription = cameraChanges(targetPlugin)?.subscribe?.(apply) || null;
+  apply();
+  return () => {
+    released = true;
+    subscription?.unsubscribe?.();
+  };
 }
 const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
 function focusLigandSpheres(targetPlugin, spheres) {
@@ -361,9 +419,11 @@ function gridHeader(entry) {
   const c = entry.choice, answer = cur.revealed && cur.showAnswer;
   const bits = [];
   if (clustered && entry.memberCount > 1) bits.push(`${entry.memberCount} poses`);
+  const weeklyEvidence = weeklyEntryEvidence(entry);
+  if (weeklyEvidence) bits.push(weeklyEvidence);
   if (answer) {
     bits.push(`${c.rmsd.toFixed(2)} Å`);
-    if ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method) bits.push(methodName(c._method));
+    if (cur.item.source === 'rnp' && c._method) bits.push(methodName(c._method));
     if (cur.item.source === 'weekly') bits.push(`${c._weeklyVoteCount || 0} votes`);
     if (gridChoiceSelected(c)) bits.push('YOU');
     if (c.af3_sample === cur.item.plddt_pick_sample) bits.push('AI');
@@ -554,7 +614,7 @@ function protUrls() {
   if (cur.item.source === 'weekly') {
     const vis = visibleChoices();
     const shown = vis[Math.min(shownOne, vis.length - 1)];
-    // Show all starts from the method-blind receptor medoid without pocket
+    // Show all starts from the prediction-set receptor medoid without pocket
     // sticks. Clicking a pose keeps the overlay but swaps to that exact
     // prediction's protein/pocket. One-at-a-time and Grid are already exact.
     if (displayMode === 'all' && !answer) {
@@ -637,33 +697,38 @@ async function buildHbonds(poseUrls) {
 async function buildCanonicalLayer(shown) {
   let preservedCamera = null;
   try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
-  await buildProtein(shown);             // swap protein only if it changed (AF3 one-at-a-time, or toggle)
-  await clearLayer();
-  poseChoiceByRepresentation = new WeakMap();
-  const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
-  for (const layer of weeklyPoseLayers(shown)) {
-    const c = layer.choice;
-    const s = await loadStruct(c.pose_file, 'pdb');
-    layerData.push(s.data);
-    const representation = await addPose(s.struct,
-      answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
-      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
-    registerPoseClickTarget(representation, c);
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    await buildProtein(shown);           // swap protein only if it changed (AF3 one-at-a-time, or toggle)
+    await clearLayer();
+    poseChoiceByRepresentation = new WeakMap();
+    const answer = cur.revealed && cur.showAnswer;      // green/red reveal vs the anonymised "my view"
+    for (const layer of weeklyPoseLayers(shown)) {
+      const c = layer.choice;
+      const s = await loadStruct(c.pose_file, 'pdb');
+      layerData.push(s.data);
+      const representation = await addPose(s.struct,
+        answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      registerPoseClickTarget(representation, c);
+    }
+    // crystal reference (true pose) — only after reveal, when toggled on
+    const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;
+    const hbondPoses = weeklyOverlayContext
+      ? (cur.contextChoice ? [cur.contextChoice.pose_file] : [])
+      : shown.map(c => c.pose_file);
+    if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
+      const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
+      layerData.push(xl.data);
+      await addPose(xl.struct, XTAL);
+      hbondPoses.push(cur.item.xtal_lig_file); // also show the crystal reference's H-bonds when it's visible
+    }
+    await buildHbonds(hbondPoses);      // H-bond overlay for whatever pose(s) are currently shown
+    await pinCameraSnapshot(plugin, preservedCamera);
+    viewerTraceRecorder?.captureState();
+  } finally {
+    releaseCamera();
   }
-  // crystal reference (true pose) — only after reveal, when toggled on
-  const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;
-  const hbondPoses = weeklyOverlayContext
-    ? (cur.contextChoice ? [cur.contextChoice.pose_file] : [])
-    : shown.map(c => c.pose_file);
-  if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
-    const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
-    layerData.push(xl.data);
-    await addPose(xl.struct, XTAL);
-    hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
-  }
-  await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
-  await pinCameraSnapshot(plugin, preservedCamera);
-  viewerTraceRecorder?.captureState();
 }
 async function buildSingleLayer() {
   const answer = cur.revealed && cur.showAnswer;
@@ -773,8 +838,8 @@ function renderUI() {
   const rawPoseCount = cur.clusters.reduce((total, cluster) => total + cluster.members.length, 0);
   const poseSummary = cur.item.source === 'weekly'
     ? (cur.item.clustering_available
-      ? `${rawPoseCount} blind poses · ${cur.clusters.length} method-blind clusters`
-      : `${rawPoseCount} blind predicted poses`)
+      ? `${rawPoseCount} predicted poses · ${cur.clusters.length} pose clusters`
+      : `${rawPoseCount} predicted poses`)
     : `${cur.clusters.length} distinct pose clusters`;
   $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${poseSummary}</small>`;
   const box = $('#choices'); box.innerHTML = '';
@@ -794,7 +859,8 @@ function renderUI() {
       nm = `Pose ${label}` + (count > 1
         ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
     } else nm = `Pose ${c.label}`;
-    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
+    const evidence = weeklyEntryEvidence(entry);
+    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag>${evidence}</span>`;
     b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
     box.appendChild(b);
   });
@@ -864,6 +930,9 @@ function easyPlayable(choices, source) {
 function showIntro() {
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
+  if (!DEV) $('#badge').textContent = quizSource === 'weekly'
+    ? 'binding pocket · ligand hidden · methods + pose metrics shown'
+    : 'binding pocket · ligand hidden · poses anonymised';
   $('#setup').style.display = '';
   $('#participant-setup').style.display = DEV ? 'none' : '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
@@ -874,15 +943,15 @@ function showIntro() {
   if (quizSource === 'weekly') {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
-    $('#ligand').innerHTML = `${pool.length} blind weekly ensembles`;
+    $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = status === 'revealed'
       ? 'Wednesday results — methods, reference scores, and vote totals are now revealable.'
       : (status === 'open'
-        ? `Voting is open until ${closes}. Choices stay method-anonymous and unscored until Wednesday.`
+        ? `Voting is open until ${closes}. Methods and pose-only metrics are shown now; released-coordinate results arrive Wednesday.`
         : 'Voting is closed while Wednesday results are being prepared.');
     const v = $('#verdict'); v.style.display = '';
     v.innerHTML = status === 'revealed'
-      ? 'Inspect the same anonymous choices, make or restore your pick, then reveal the released-coordinate result.'
+      ? 'Inspect the same predicted choices, make or restore your pick, then reveal the released-coordinate result.'
       : (status === 'open'
         ? 'Choose the pose you believe is correct, or “none.” Locking records a vote but does not reveal the answer.'
         : 'The blind manifest remains visible, but no new votes are accepted after the deadline.');
@@ -1313,8 +1382,8 @@ function renderRevealList(picked, af3) {
     const accepted = acceptedChoiceCorrect(c);
     const el = document.createElement('div');
     el.className = 'choice ' + (accepted ? 'correct' : 'wrong');
-    // RnP only: reveal which co-folding method this pose came from (anonymised during play). Rendered as a
-    // small muted, monospace-ish metadata tag so it reads as provenance, not a choice label. CAMEO = all AF3.
+    // RnP reveals its anonymised method here; Weekly repeats the method that was already public during play.
+    // Render it as a small metadata tag so it reads as provenance, not a choice label. CAMEO = all AF3.
     const methodTag = ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method)
       ? ` <span class="method" style="color:var(--faint);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">· ${methodName(c._method)}</span>`
       : '';
@@ -1381,10 +1450,10 @@ function syncButtons() {
     && cur.item.clustering_available;
   $('#modehint').textContent = cur?.item.source === 'weekly'
     ? (displayMode === 'grid'
-      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per method-blind pose cluster; faint sticks show its other members' : 'One linked viewer per raw blind pose'}. Each pane uses the representative pose's exact predicted protein; drag or zoom any pane to move them together.`
+      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per pose cluster; faint sticks show its other members' : 'One linked viewer per raw predicted pose'}. Each pane uses the representative pose's exact predicted protein; drag or zoom any pane to move them together.`
       : (displayMode === 'one'
         ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? '; faint sticks show the other members of its cluster' : ''}.`
-        : `${weeklyHasClusters && clustered ? 'Cluster representatives and their faint member poses' : 'All raw blind poses'} are overlaid on the shared receptor medoid. Select a pose to inspect its exact predicted protein and pocket.`))
+        : `${weeklyHasClusters && clustered ? 'Cluster representatives' : 'All raw predicted poses'} are overlaid on the shared receptor medoid. Select a pose to inspect its exact predicted protein and pocket.`))
     : (displayMode === 'grid'
       ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
                    : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
@@ -1593,10 +1662,15 @@ async function init() {
           correct: typeof reveal.correct === 'boolean' ? reveal.correct : null,
           accepted_correct: typeof reveal.accepted_correct === 'boolean'
             ? reveal.accepted_correct : null,
-          _method: reveal.method || null,
+          _method: choice.method || reveal.method || null,
+          _methodVersion: choice.method_version || reveal.method_version || null,
+          _confidence: choice.confidence || null,
+          _sminaScore: choice.smina_score || null,
+          _interactionCount: choice.interaction_count || null,
           cluster: choice.cluster_id || `choice-${index}`,
           is_rep: typeof choice.is_rep === 'boolean' ? choice.is_rep : true,
-          plddt: 0,
+          plddt: choice.confidence?.metric === 'ligand_plddt'
+            && Number.isFinite(choice.confidence.value) ? choice.confidence.value : 0,
         };
       });
       const ligand = typeof item.ligand === 'string'

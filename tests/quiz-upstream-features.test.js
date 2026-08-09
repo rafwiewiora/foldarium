@@ -91,10 +91,12 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /function gridEntriesFor\(method\)/);
   assert.match(app, /const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'\.split\(''\);/);
   assert.match(app, /\$\('#mode'\)\.style\.display = inPlay \? '' : 'none';/);
-  assert.match(app, /\$\{rawPoseCount\} blind predicted poses/);
-  assert.match(app, /method-blind clusters/);
+  assert.match(app, /\$\{rawPoseCount\} predicted poses/);
+  assert.match(app, /pose clusters/);
+  assert.match(app, /methods \+ pose metrics shown/);
+  assert.doesNotMatch(app, /Choices stay method-anonymous/);
   assert.match(app, /The protein and pocket change with the pose/);
-  assert.match(app, /method-blind pose cluster/);
+  assert.match(app, /linked viewer per pose cluster/);
   assert.match(html, /\.seg\{display:flex;flex:none;/);
   assert.match(html, /data-m="grid"/);
 });
@@ -346,6 +348,7 @@ test('Weekly clustered layers keep one selectable representative and ghost every
   const layers = evaluateDeclaration(app, 'function weeklyPoseLayers(choices)', {
     cur: { item: { source: 'weekly' }, clusters: [cluster], revealed: false, showAnswer: false },
     clustered: true,
+    displayMode: 'one',
     clusterForChoice: () => cluster,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   })([representative]);
@@ -353,6 +356,24 @@ test('Weekly clustered layers keep one selectable representative and ghost every
   assert.deepEqual(JSON.parse(JSON.stringify(layers)), [
     { choice: firstGhost, ghost: true },
     { choice: secondGhost, ghost: true },
+    { choice: representative, ghost: false },
+  ]);
+});
+
+test('Weekly Show all renders cluster representatives without ghost members', async () => {
+  const app = await readApp();
+  const representative = { pose_file: 'rep.pdb' };
+  const ghost = { pose_file: 'ghost.pdb' };
+  const cluster = { rep: representative, members: [representative, ghost] };
+  const layers = evaluateDeclaration(app, 'function weeklyPoseLayers(choices)', {
+    cur: { item: { source: 'weekly' }, clusters: [cluster], revealed: false, showAnswer: false },
+    clustered: true,
+    displayMode: 'all',
+    clusterForChoice: () => cluster,
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+  })([representative]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(layers)), [
     { choice: representative, ghost: false },
   ]);
 });
@@ -374,6 +395,53 @@ test('Weekly cluster acceptance applies to every raw member while labels stay un
   ]);
   assert.match(app, /const label = cl\.label;/,
     'clustered choices, including Grid, should render one letter without a member suffix');
+});
+
+test('Weekly exposes method-specific ligand confidence for every raw pose', async () => {
+  const app = await readApp();
+  const cur = { item: { source: 'weekly' } };
+  const methodName = method => ({ openfold3: 'OpenFold3', boltz2: 'Boltz-2' })[method];
+  const weeklyPoseEvidence = evaluateDeclaration(
+    app,
+    'function weeklyPoseEvidence(choice)',
+    { methodName, Number },
+  );
+  const sandbox = { cur, clustered: true, weeklyPoseEvidence };
+  const weeklyEntryEvidence = evaluateDeclaration(
+    app,
+    'function weeklyEntryEvidence(entry)',
+    sandbox,
+  );
+  const openfold = {
+    label: 'D-1',
+    _method: 'openfold3',
+    _confidence: { metric: 'ligand_plddt', value: 82.54, scale_max: 100 },
+    _sminaScore: { metric: 'smina_affinity', value: -7.14 },
+    _interactionCount: { metric: 'prolif_unique_residue_interaction_type', value: 9 },
+  };
+  const boltz = {
+    label: 'D-2',
+    _method: 'boltz2',
+    _confidence: { metric: 'ligand_plddt', value: 74.96, scale_max: 100 },
+    _sminaScore: { metric: 'smina_affinity', value: -6.26 },
+    _interactionCount: { metric: 'prolif_unique_residue_interaction_type', value: 7 },
+  };
+  const entry = { choice: openfold, cluster: { members: [openfold, boltz] } };
+
+  assert.equal(
+    weeklyEntryEvidence(entry),
+    'D-1 OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF 9 ; '
+      + 'D-2 Boltz-2 · ligand pLDDT 75.0/100 · smina -6.3 kcal/mol · ProLIF 7',
+  );
+  sandbox.clustered = false;
+  assert.equal(
+    weeklyEntryEvidence(entry),
+    'OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF 9',
+  );
+  assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
+  assert.match(app, /_confidence: choice\.confidence \|\| null/);
+  assert.match(app, /_sminaScore: choice\.smina_score \|\| null/);
+  assert.match(app, /_interactionCount: choice\.interaction_count \|\| null/);
 });
 
 test('Weekly Show all starts on the shared receptor and adopts a clicked pose context', async () => {
@@ -424,6 +492,44 @@ test('Weekly Show all maps a ligand representation click to its exact raw pose',
 
   assert.equal(resolve({ current: { repr: representation } }), exact);
   assert.equal(resolve({ current: { repr: {} } }), null);
+});
+
+test('camera stays pinned throughout a protein and pose rebuild', async () => {
+  const app = await readApp();
+  let current = { position: [1, 2, 3], target: [0, 0, 0] };
+  let changed = null;
+  let unsubscribed = false;
+  const states = [];
+  const camera = {
+    getSnapshot: () => current,
+    setState(snapshot, duration) {
+      states.push([snapshot, duration]);
+      current = snapshot;
+    },
+    changed: {
+      subscribe(callback) {
+        changed = callback;
+        return { unsubscribe: () => { unsubscribed = true; } };
+      },
+    },
+  };
+  const plugin = { canvas3d: { camera } };
+  const hold = evaluateDeclaration(app, 'function holdCameraSnapshot(targetPlugin, snapshot)', {
+    cameraChanges: target => target.canvas3d.camera.changed,
+  });
+  const original = current;
+  const release = hold(plugin, original);
+
+  current = { position: [9, 9, 9], target: [4, 4, 4] };
+  changed();
+  assert.deepEqual(states, [[original, 0]],
+    'an intermediate Mol* focus must be corrected before it can flash');
+
+  release();
+  current = { position: [8, 8, 8], target: [3, 3, 3] };
+  changed();
+  assert.equal(states.length, 1, 'the camera guard must detach after the rebuild');
+  assert.equal(unsubscribed, true);
 });
 
 test('Weekly Show all routes a ligand click through the normal pose picker', async () => {
