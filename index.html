@@ -55,15 +55,11 @@
     border:1px solid currentColor;border-radius:50%;color:var(--muted);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
     cursor:help;outline:none}
   .pose-info:hover,.pose-info:focus-visible{color:var(--accent)}
-  .pose-info::after{content:attr(data-tooltip);position:absolute;z-index:30;right:0;bottom:calc(100% + 8px);
-    width:max-content;max-width:min(330px,72vw);padding:8px 10px;border:1px solid var(--line);border-radius:7px;
+  .pose-tooltip{position:fixed;z-index:100;width:max-content;max-width:min(330px,calc(100vw - 16px));
+    padding:8px 10px;border:1px solid var(--line);border-radius:7px;
     background:#0d1117f2;color:var(--ink);font:500 11px/1.45 ui-sans-serif,system-ui,sans-serif;
-    white-space:normal;box-shadow:0 8px 28px #0008;opacity:0;visibility:hidden;transform:translateY(3px);
-    transition:opacity .12s,transform .12s,visibility .12s;pointer-events:none}
-  .pose-info:hover::after,.pose-info:focus-visible::after{opacity:1;visibility:visible;transform:translateY(0)}
-  .choice .pose-info::after{right:-6px;width:min(270px,calc(100vw - 40px));max-width:none}
-  .grid-head .pose-info::after{top:calc(100% + 8px);bottom:auto;right:-6px;
-    width:min(220px,calc(var(--grid-card-w,300px) - 28px));max-width:none}
+    white-space:pre-line;box-shadow:0 8px 28px #0008;pointer-events:none}
+  .pose-tooltip[hidden]{display:none}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
   #gridpages{overflow-x:auto}
@@ -218,6 +214,7 @@
   </div>
 </div>
 <button class="ghost mini" id="suggestion-open" type="button" disabled hidden>Suggestions</button>
+<div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden></div>
 <dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
   <form class="dialog-form" id="suggestion-form">
     <h2 id="suggestion-title">Suggest an improvement</h2>

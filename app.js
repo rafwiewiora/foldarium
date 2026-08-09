@@ -24,7 +24,7 @@ function weeklyPoseEvidence(choice) {
   const interactions = choice._interactionCount;
   const interactionValue = interactions?.metric === 'prolif_hbond_residue_count'
       && Number.isInteger(interactions.value) && interactions.value >= 0
-    ? ` · ProLIF H-bonds ${interactions.value}`
+    ? ` · H-bonds ${interactions.value}`
     : '';
   return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
 }
@@ -37,7 +37,7 @@ function weeklyLigandPlddt(choice) {
 function weeklyEntryEvidence(entry) {
   if (cur?.item?.source !== 'weekly') return '';
   const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
-  return members.map(weeklyPoseEvidence).filter(Boolean).join(' ; ');
+  return members.map(weeklyPoseEvidence).filter(Boolean).join('\n');
 }
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
 const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
@@ -341,14 +341,22 @@ function canonicalInteractionIsEmpty(event) {
 async function cameraSnapshotAfterInteraction(targetPlugin) {
   const camera = targetPlugin?.canvas3d?.camera;
   if (!camera) return null;
-  if (window.waitForCameraSettled) {
-    await window.waitForCameraSettled({
-      cameraChanged: cameraChanges(targetPlugin),
-      requestReset: () => {},
-      settleMs: 80,
-    });
+  // Mol* click-focus is a 250 ms CameraTransition. Its stateChanged observable
+  // fires when the transition is requested, not for each animated frame, so a
+  // debounce captures an intermediate zoom. Let the transition actually reach
+  // its target before freezing that exact camera through the scene rebuild.
+  await nextAnimationFrame();
+  for (let frame = 0; camera.transition?.inTransition && frame < 90; frame++) {
+    await nextAnimationFrame();
   }
   try { return camera.getSnapshot?.() || null; } catch (e) { return null; }
+}
+function nextAnimationFrame() {
+  return new Promise(resolve => {
+    const schedule = window.requestAnimationFrame || globalThis.requestAnimationFrame;
+    if (typeof schedule === 'function') schedule(() => resolve());
+    else setTimeout(resolve, 0);
+  });
 }
 async function activateCanonicalPoseChoice(index, choice) {
   const revision = ++canonicalPoseActivationRevision;
@@ -497,6 +505,12 @@ function attachPoseInfo(root, evidence) {
   info.tabIndex = 0;
   info.setAttribute('aria-label', `Pose information: ${evidence}`);
   info.dataset.tooltip = evidence;
+  const showTooltip = () => showPoseInfoTooltip(info, evidence);
+  const hideTooltip = () => hidePoseInfoTooltip(info);
+  info.addEventListener('pointerenter', showTooltip);
+  info.addEventListener('pointerleave', hideTooltip);
+  info.addEventListener('focus', showTooltip);
+  info.addEventListener('blur', hideTooltip);
   const stopSelection = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -504,12 +518,48 @@ function attachPoseInfo(root, evidence) {
   info.addEventListener('pointerdown', stopSelection);
   info.addEventListener('click', stopSelection);
   info.addEventListener('keydown', event => {
-    if (event.key === 'Escape') info.blur();
+    if (event.key === 'Escape') { hideTooltip(); info.blur(); }
     event.stopPropagation();
   });
   root.appendChild(info);
 }
+let poseInfoTooltipOwner = null;
+function poseInfoTooltipPosition(anchor, tooltip, viewport) {
+  const margin = 8, gap = 8;
+  const maxLeft = Math.max(margin, viewport.width - tooltip.width - margin);
+  const left = Math.min(maxLeft, Math.max(margin, anchor.right - tooltip.width));
+  const above = anchor.top - tooltip.height - gap;
+  const below = anchor.bottom + gap;
+  const maxTop = Math.max(margin, viewport.height - tooltip.height - margin);
+  return { left, top: Math.min(maxTop, Math.max(margin, above >= margin ? above : below)) };
+}
+function showPoseInfoTooltip(owner, evidence) {
+  const tooltip = $('#pose-tooltip');
+  if (!tooltip) return;
+  poseInfoTooltipOwner = owner;
+  tooltip.textContent = evidence;
+  tooltip.hidden = false;
+  const position = poseInfoTooltipPosition(
+    owner.getBoundingClientRect(),
+    tooltip.getBoundingClientRect(),
+    { width: window.innerWidth, height: window.innerHeight },
+  );
+  tooltip.style.left = `${position.left}px`;
+  tooltip.style.top = `${position.top}px`;
+}
+function hidePoseInfoTooltip(owner) {
+  if (owner !== poseInfoTooltipOwner) return;
+  const tooltip = $('#pose-tooltip');
+  if (tooltip) tooltip.hidden = true;
+  poseInfoTooltipOwner = null;
+}
+function hideActivePoseInfoTooltip() {
+  const tooltip = $('#pose-tooltip');
+  if (tooltip) tooltip.hidden = true;
+  poseInfoTooltipOwner = null;
+}
 function disposeGridViewers() {
+  hideActivePoseInfoTooltip();
   if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
   if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
   for (const cell of gridViewers) {
@@ -915,6 +965,7 @@ async function loadQuestion(i) {
 }
 
 function renderUI() {
+  hideActivePoseInfoTooltip();
   $('#progress').textContent = DEV ? `item ${idx + 1} / ${ITEMS.length} · dev`
                                    : `question ${idx + 1} / ${ITEMS.length}`;
   const rawPoseCount = cur.clusters.reduce((total, cluster) => total + cluster.members.length, 0);

@@ -454,13 +454,13 @@ test('Weekly exposes method-specific ligand confidence for every raw pose', asyn
 
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · ProLIF H-bonds 3 ; '
-      + 'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol · ProLIF H-bonds 1',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · H-bonds 3\n'
+      + 'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol · H-bonds 1',
   );
   sandbox.clustered = false;
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · ProLIF H-bonds 3',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · H-bonds 3',
   );
   assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
   assert.match(app, /_confidence: choice\.confidence \|\| null/);
@@ -588,26 +588,25 @@ test('Weekly Show all waits for the click zoom before activating pose context', 
   const oldCamera = { position: [1, 1, 1], target: [0, 0, 0] };
   const zoomedCamera = { position: [2, 2, 2], target: [4, 4, 4] };
   let current = oldCamera;
-  let waitOptions = null;
+  let frames = 0;
+  const transition = { inTransition: true };
   const snapshotAfterInteraction = evaluateDeclaration(
     app,
     'async function cameraSnapshotAfterInteraction(targetPlugin)',
     {
-      window: {
-        waitForCameraSettled: async options => {
-          waitOptions = options;
+      nextAnimationFrame: async () => {
+        frames += 1;
+        if (frames === 3) {
           current = zoomedCamera;
-        },
+          transition.inTransition = false;
+        }
       },
-      cameraChanges: () => ({ subscribe() {} }),
     },
   );
-  const plugin = { canvas3d: { camera: { getSnapshot: () => current } } };
+  const plugin = { canvas3d: { camera: { transition, getSnapshot: () => current } } };
 
   assert.equal(await snapshotAfterInteraction(plugin), zoomedCamera);
-  assert.equal(waitOptions.settleMs, 80);
-  assert.doesNotThrow(() => waitOptions.requestReset(),
-    'waiting for the user click zoom must not request another camera reset');
+  assert.equal(frames, 3, 'the rebuild snapshot must wait for Molstar click-focus to finish');
 
   const choice = { pose_file: 'clicked.pdb' };
   const item = { source: 'weekly' };
@@ -650,11 +649,31 @@ test('all Molstar viewers disable the axes helper', async () => {
   });
 });
 
-test('pose information popovers stay within sidebar and Grid cards', async () => {
-  const html = await readHtml();
+test('pose information uses one viewport-level tooltip for every Grid card', async () => {
+  const [app, html] = await Promise.all([readApp(), readHtml()]);
+  const position = evaluateDeclaration(app, 'function poseInfoTooltipPosition(anchor, tooltip, viewport)', { Math });
 
-  assert.match(html, /\.choice \.pose-info::after\{[^}]*width:min\(270px,calc\(100vw - 40px\)\)/);
-  assert.match(html, /\.grid-head \.pose-info::after\{[^}]*width:min\(220px,calc\(var\(--grid-card-w,300px\) - 28px\)\)/);
+  assert.match(html, /\.pose-tooltip\{position:fixed;z-index:100/);
+  assert.match(html, /<div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden><\/div>/);
+  assert.doesNotMatch(html, /\.pose-info::after/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(position(
+      { left: 2, right: 22, top: 2, bottom: 22 },
+      { width: 330, height: 70 },
+      { width: 800, height: 600 },
+    ))),
+    { left: 8, top: 30 },
+    'the first Grid card should open below and stay inside the left viewport edge',
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(position(
+      { left: 778, right: 798, top: 590, bottom: 610 },
+      { width: 330, height: 70 },
+      { width: 800, height: 600 },
+    ))),
+    { left: 462, top: 512 },
+    'rightmost and bottom-row Grid cards should open above and stay inside the viewport',
+  );
 });
 
 test('Weekly Show all clears only visual pose context when empty Molstar space is clicked', async () => {
@@ -699,7 +718,9 @@ test('Weekly pose metrics are attached to a hover-only information affordance', 
   assert.match(app, /attachPoseInfo\(head, weeklyEntryEvidence\(entry\)\)/);
   assert.doesNotMatch(app, /<span class="tag" data-tag>\$\{evidence\}<\/span>/);
   assert.match(app, /event\.stopPropagation\(\)/);
-  assert.match(html, /\.pose-info:hover::after,\.pose-info:focus-visible::after/);
+  assert.match(app, /info\.addEventListener\('pointerenter', showTooltip\)/);
+  assert.match(app, /info\.addEventListener\('focus', showTooltip\)/);
+  assert.match(html, /\.pose-tooltip\{position:fixed/);
 });
 
 test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the info tooltip', async () => {
