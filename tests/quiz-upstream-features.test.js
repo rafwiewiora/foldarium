@@ -932,6 +932,7 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
   const registry = elementRegistry();
   const badgeSandbox = {
     DEV: false,
+    WEEKLY_ROUND: { public_status: 'open' },
     cur: { item: { source: 'weekly' } },
     displayMode: 'one',
     visibleChoices: () => [choice],
@@ -949,8 +950,12 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
   syncStageBadge();
   assert.equal(
     registry.elements.get('#badge').textContent,
-    'prospective blind · crystal reference hidden · pose details on hover',
+    'reference available Wednesday · pose details on hover',
   );
+  badgeSandbox.WEEKLY_ROUND.public_status = 'revealed';
+  syncStageBadge();
+  assert.equal(registry.elements.get('#badge').textContent, 'reference released · pose details on hover');
+  badgeSandbox.WEEKLY_ROUND.public_status = 'open';
 
   badgeSandbox.displayMode = 'all';
   syncStageBadge();

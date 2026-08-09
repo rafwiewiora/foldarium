@@ -1185,7 +1185,7 @@ function showIntro() {
   const pool = filteredPool();
   $('#wrap').classList.add('intro');
   if (!DEV) $('#badge').textContent = quizSource === 'weekly'
-    ? 'prospective blind · crystal reference hidden · pose details on hover'
+    ? 'reference available Wednesday · pose details on hover'
     : 'crystal reference hidden · poses anonymised';
   $('#setup').style.display = '';
   $('#participant-setup').style.display = DEV ? 'none' : '';
@@ -1739,7 +1739,7 @@ function syncStageBadge() {
     return;
   }
   badge.textContent = cur?.item?.source === 'weekly'
-    ? 'prospective blind · crystal reference hidden · pose details on hover'
+    ? `${WEEKLY_ROUND?.public_status === 'revealed' ? 'reference released' : 'reference available Wednesday'} · pose details on hover`
     : 'crystal reference hidden · poses anonymised';
 }
 
