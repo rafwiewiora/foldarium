@@ -430,13 +430,13 @@ test('Weekly exposes method-specific ligand confidence for every raw pose', asyn
 
   assert.equal(
     weeklyEntryEvidence(entry),
-    'D-1 OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF 9 ; '
-      + 'D-2 Boltz-2 · ligand pLDDT 75.0/100 · smina -6.3 kcal/mol · ProLIF 7',
+    'D-1 OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF contacts 9 ; '
+      + 'D-2 Boltz-2 · ligand pLDDT 75.0/100 · smina -6.3 kcal/mol · ProLIF contacts 7',
   );
   sandbox.clustered = false;
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF 9',
+    'OpenFold3 · ligand pLDDT 82.5/100 · smina -7.1 kcal/mol · ProLIF contacts 9',
   );
   assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
   assert.match(app, /_confidence: choice\.confidence \|\| null/);

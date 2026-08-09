@@ -116,11 +116,16 @@ def _score_payload(
             expected_smina_version=SMINA_VERSION,
             container_image=SMINA_IMAGE_REF,
         )
-        interaction_summary = calculate_interaction_summary_from_pose(
-            protein_path,
-            ligand_path,
-            ligand_smiles,
-        )
+        try:
+            interaction_summary = calculate_interaction_summary_from_pose(
+                protein_path,
+                ligand_path,
+                ligand_smiles,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"interaction scoring failed for opaque pose {selected_pose_id}: {exc}"
+            ) from exc
     return {
         "pose_id": selected_pose_id,
         **result,
@@ -145,7 +150,10 @@ if modal is not None:
             ],
         )
         .entrypoint([])
-        .uv_pip_install("rdkit==2026.3.4", "prolif==2.2.0")
+        .uv_pip_install(
+            "rdkit==2026.3.4",
+            "prolif==2.2.0",
+        )
     )
     if _IS_LOCAL:
         scoring_image = scoring_image.add_local_dir(

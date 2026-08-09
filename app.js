@@ -24,7 +24,7 @@ function weeklyPoseEvidence(choice) {
   const interactions = choice._interactionCount;
   const interactionValue = interactions?.metric === 'prolif_unique_residue_interaction_type'
       && Number.isInteger(interactions.value) && interactions.value >= 0
-    ? ` · ProLIF ${interactions.value}`
+    ? ` · ProLIF contacts ${interactions.value}`
     : '';
   return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
 }

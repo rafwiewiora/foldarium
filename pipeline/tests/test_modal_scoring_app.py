@@ -40,7 +40,8 @@ class ModalScoringAdapterTests(unittest.TestCase):
         self.assertIn('"RUN cp \\"$(command -v smina)\\" /usr/local/bin/smina"', source)
         self.assertIn('"ENV PATH=/usr/local/bin:/usr/bin:/bin"', source)
         self.assertIn('"ENV LD_LIBRARY_PATH=/opt/conda/envs/smina/lib"', source)
-        self.assertIn('.uv_pip_install("rdkit==2026.3.4", "prolif==2.2.0")', source)
+        self.assertIn('"rdkit==2026.3.4"', source)
+        self.assertIn('"prolif==2.2.0"', source)
 
     def test_payload_hashes_are_verified_before_scoring(self) -> None:
         module = self.deployment_module()
