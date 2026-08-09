@@ -26,7 +26,7 @@ test('Vercel serves both weekly entry points through the shared quiz shell', asy
 test('weekly-only chrome keeps progress, voting, named start, and a Wednesday results panel', async () => {
   const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
 
-  for (const id of ['quizsrc', 'diff', 'leaderboard-link', 'score']) {
+  for (const id of ['setup', 'leaderboard-link', 'score', 'score-summary']) {
     assert.match(html, new RegExp(`html\\[data-quiz-mode="weekly"\\][^}]*#${id}`));
   }
   assert.match(app, /const WEEKLY_ONLY = window\.FOLDARIUM_QUIZ_MODE === 'weekly'/);

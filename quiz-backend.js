@@ -500,7 +500,7 @@ export function createQuizBackend({
       }
       const normalizedTrace = normalizeViewerTraceResult(viewerTrace);
       if (normalizedTrace.warning) {
-        throw new Error(`Weekly viewer trace is invalid: ${normalizedTrace.warning}`);
+        console.warn(`Weekly viewer trace omitted: ${normalizedTrace.warning}`);
       }
       const normalizedState = appState == null
         ? null : normalizeJsonObject(appState, 'Weekly app state');

@@ -86,20 +86,28 @@ test('left panel has a balanced type and gray hierarchy', async () => {
   assert.match(html, /#side \.choice\{font-size:14px;line-height:1\.4/);
 });
 
-test('left pose selections use stacked menu rows with arrows', async () => {
+test('left pose selections use calm cards with pose-color rails', async () => {
   const [html, app] = await Promise.all([readHtml(), readApp()]);
 
-  assert.match(html, /#choices\{gap:0;[\s\S]*?border-top:1px solid #cfd4d8/);
-  assert.match(html, /#choices \.choice\{min-height:58px;[\s\S]*?border-radius:0/);
-  assert.match(html, /#choices \.choice\{[\s\S]*?background:var\(--choice-color\);[\s\S]*?color:#fff/);
-  assert.doesNotMatch(html, /#choices \.choice\{[^}]*linear-gradient/);
+  assert.match(html, /#choices\{gap:8px;background:transparent\}/);
+  assert.match(html, /#choices \.choice\{min-height:50px;[\s\S]*?border-left:5px solid var\(--choice-color\);[\s\S]*?border-radius:9px;[\s\S]*?background:#fff;color:var\(--ink\)/);
+  assert.doesNotMatch(html, /#choices \.choice\{[^}]*background:var\(--choice-color\)/);
   assert.match(html, /#choices \.sw\{display:none\}/);
-  assert.match(html, /#choices \.choice \.tag\{[\s\S]*?color:#fff/);
-  assert.match(html, /#choices \.choice \.tag::after\{content:"→"/);
+  assert.match(html, /#choices \.pose-count\{[\s\S]*?color:var\(--muted\)/);
+  assert.doesNotMatch(html, /#choices \.choice \.tag::after/);
   assert.match(app, /b\.style\.setProperty\('--choice-color', hex\(c\.color\)\)/);
   assert.match(app, /nb\.style\.setProperty\('--choice-color', '#5a6675'\)/);
-  assert.match(app, /color:rgba\(255,255,255,.82\)/);
+  assert.match(app, /class="pose-count"/);
   assert.match(app, /None of these are correct<\/span><span class="tag" data-tag><\/span>/);
+});
+
+test('weekly entry hides irrelevant setup and uses light research controls', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #setup,[\s\S]*?#score-summary\{display:none!important\}/);
+  assert.match(html, /\.participant-setup\{[\s\S]*?background:#f6f8fa\}/);
+  assert.match(html, /\.dialog-form input,\.dialog-form textarea\{[\s\S]*?background:#fff/);
+  assert.match(html, /\.privacy-note\{[\s\S]*?background:#f6f8fa/);
 });
 
 test('Submit answer matches the bottom viewer controls', async () => {

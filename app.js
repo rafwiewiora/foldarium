@@ -414,20 +414,26 @@ function visibleIndexForChoice(choice) {
 }
 function onCanonicalPoseInteraction(event) {
   if (interactionBlocked() || cur?.item?.source !== 'weekly'
-      || displayMode !== 'all' || cur.revealed) return;
+      || displayMode === 'grid' || cur.revealed) return;
   const choice = choiceFromPoseInteraction(event);
   if (!choice) {
     canonicalPoseActivationRevision++;
-    if (cur.contextChoice && canonicalInteractionIsEmpty(event)) {
+    if (displayMode === 'all' && cur.contextChoice && canonicalInteractionIsEmpty(event)) {
       void clearWeeklyShowAllContext().catch(error => {
         console.warn('Could not reset the Show all pose context:', error.message);
       });
     }
     return;
   }
-  if (sameChoice(choice, cur.contextChoice)) return;
   const index = visibleIndexForChoice(choice);
   if (index < 0) return;
+  if (displayMode === 'one') {
+    void onPick(index, choice, { preserveScene: true }).catch(error => {
+      console.warn('Could not select the clicked pose:', error.message);
+    });
+    return;
+  }
+  if (sameChoice(choice, cur.contextChoice)) return;
   void activateCanonicalPoseChoice(index, choice).catch(error => {
     console.warn('Could not inspect the clicked pose:', error.message);
   });
@@ -595,6 +601,7 @@ function disposeGridViewers() {
   if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
   for (const cell of gridViewers) {
     cell.disposed = true;
+    try { cell.poseClickSubscription?.unsubscribe?.(); } catch (e) {}
     try { cell.detachReplay?.(); } catch (e) {}
     try { cell.viewer?.dispose(); } catch (e) {}
   }
@@ -693,15 +700,24 @@ async function buildGridCell(cell, revision) {
       : [{ choice: c, ghost: false }];
     for (const layer of poseMembers) {
       const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
-      await addPose(pose.struct,
+      const poseRepresentation = await addPose(pose.struct,
         cell.spec.answer ? (acceptedChoiceCorrect(layer.choice) ? GOOD : BAD) : c.color,
         cell.plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
       if (cell.spec.showSurface && !layer.ghost) {
         await addRep(pose.struct, 'all', 'molecular-surface', c.color, 0.7, cell.plugin);
       }
+      registerPoseClickTarget(poseRepresentation, c);
       if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
     }
+    cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
+      if (locked() || !sameChoice(choiceFromPoseInteraction(event), c)) return;
+      activatePane(cell.paneId, 'ligand-click');
+      selectedPaneId = cell.paneId;
+      void onPick(cell.entry.choiceIndex, c).catch(error => {
+        console.warn('Could not select the clicked Grid pose:', error.message);
+      });
+    }) || null;
     if (cell.spec.showHbonds && urls.pocket) {
       await buildInteractions(urls.pocket, [c.pose_file], cell.plugin);
     }
@@ -713,6 +729,8 @@ async function buildGridCell(cell, revision) {
       });
     }
   } catch (e) {
+    try { cell.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
+    cell.poseClickSubscription = null;
     try { cell.viewer?.dispose(); } catch (_) {}
     cell.viewer = null; cell.plugin = null;
     if (!cell.disposed && revision === gridBuildRevision) {
@@ -755,7 +773,7 @@ async function buildGrid(preserveCamera = true) {
     };
     const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
-      detachReplay: null,
+      detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         clustered, showHbonds, showProteinEnsemble, showSurface } };
   });
@@ -1039,7 +1057,7 @@ function renderUI() {
       const label = cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
       nm = `Pose ${label}` + (count > 1
-        ? ` <span style="color:rgba(255,255,255,.82)">(${count} poses)</span>` : '');
+        ? ` <span class="pose-count">${count} poses</span>` : '');
     } else nm = `Pose ${c.label}`;
     b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
     attachPoseInfo(b, weeklyEntryEvidence(entry));
@@ -1355,12 +1373,15 @@ async function submitSuggestion(event) {
   }
 }
 
-async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = {}) {
+async function onPick(k, exactChoice = null, {
+  rebuildCameraSnapshot = null,
+  preserveScene = false,
+} = {}) {
   if (interactionBlocked()) return;
   const answerChoices = displayMode === 'grid' ? allGridEntries().map(entry => entry.choice) : visibleChoices();
   if (k !== 'none' && displayMode === 'one') {
     const selected = cur.revealed ? null : visibleChoices()[k];
-    await viewerRebuild.enqueue(() => {
+    const selectShownPose = () => {
       shownOne = k;
       if (!cur.revealed) {
         cur.selected = selected;
@@ -1376,7 +1397,9 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
           if (tag) tag.textContent = on ? 'Selected ✓' : '';
         });
       }
-    });
+    };
+    if (preserveScene) selectShownPose();
+    else await viewerRebuild.enqueue(selectShownPose);
     recordAppEvent('pose_navigated');
     return;
   }
@@ -1655,21 +1678,8 @@ function syncButtons() {
   proteinEnsemble.classList.toggle('on', showProteinEnsemble);
   proteinEnsemble.textContent = showProteinEnsemble ? 'Hide ghost proteins' : 'Ghost proteins';
   proteinEnsemble.style.display = canShowProteinEnsemble ? '' : 'none';
-  const weeklyHasClusters = cur?.item.source === 'weekly'
-    && cur.clusters.some(cluster => cluster.members.length > 1);
-  const weeklyClusteringAvailable = cur?.item.source === 'weekly'
-    && cur.item.clustering_available;
-  $('#modehint').textContent = cur?.item.source === 'weekly'
-    ? (displayMode === 'grid'
-      ? `${clustered && weeklyClusteringAvailable ? 'One linked viewer per pose cluster; faint sticks show its other members' : 'One linked viewer per raw predicted pose'}. Each pane uses the representative pose's exact predicted protein; drag or zoom any pane to move them together.`
-      : (displayMode === 'one'
-        ? `The protein and pocket change with the pose, using that exact co-folding prediction${weeklyHasClusters && clustered ? '; faint sticks show the other members of its cluster' : ''}.`
-        : `${weeklyHasClusters && clustered ? 'Cluster representatives' : 'All raw predicted poses'} are overlaid on the shared receptor medoid. Select a pose to inspect its exact predicted protein and pocket.`))
-    : (displayMode === 'grid'
-      ? (clustered ? 'One linked viewer per distinct cluster. Uncluster to inspect every raw pose on this page.'
-                   : 'One linked viewer per raw pose on this page. Drag or zoom any tile to move them together.')
-      : 'Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.');
-  $('#modehint').style.display = (displayMode === 'one' || locked()) ? 'none' : '';
+  $('#modehint').textContent = '';
+  $('#modehint').style.display = 'none';
   syncStageBadge();
 }
 

@@ -95,8 +95,8 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /pose clusters/);
   assert.match(app, /pose information on hover/);
   assert.doesNotMatch(app, /Choices stay method-anonymous/);
-  assert.match(app, /The protein and pocket change with the pose/);
-  assert.match(app, /linked viewer per pose cluster/);
+  assert.doesNotMatch(app, /The protein and pocket change with the pose/);
+  assert.doesNotMatch(app, /linked viewer per pose cluster/);
   assert.match(html, /\.seg\{display:flex;/);
   assert.match(html, /data-m="grid"/);
 });
@@ -629,6 +629,86 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   assert.deepEqual(calls, [[3, exact]]);
 });
 
+test('Weekly One at a time selects the exact pose clicked in Molstar', async () => {
+  const app = await readApp();
+  const exact = { pose_file: 'exact.pdb' };
+  const calls = [];
+  const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
+    interactionBlocked: () => false,
+    cur: { item: { source: 'weekly' }, revealed: false, contextChoice: null },
+    displayMode: 'one',
+    choiceFromPoseInteraction: () => exact,
+    canonicalInteractionIsEmpty: () => false,
+    visibleIndexForChoice: () => 2,
+    onPick: async (...args) => { calls.push(args); },
+    console,
+  });
+
+  handler({ current: { repr: {} } });
+  await Promise.resolve();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[2, exact, { preserveScene: true }]]);
+  assert.match(app, /if \(preserveScene\) selectShownPose\(\);/);
+});
+
+test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async () => {
+  const app = await readApp();
+  const choice = { pose_file: 'grid-pose.pdb', color: 0x5B8FF9 };
+  const calls = [];
+  let clickHandler = null;
+  const camera = { changed: {}, getSnapshot: () => ({}), setState: () => {} };
+  const plugin = {
+    canvas3d: { camera, requestCameraReset() {} },
+    behaviors: {
+      interaction: {
+        click: {
+          subscribe(handler) {
+            clickHandler = handler;
+            return { unsubscribe() {} };
+          },
+        },
+      },
+    },
+  };
+  const sandbox = {
+    molstar: { Viewer: { create: async () => ({ plugin, handleResize() {}, dispose() {} }) } },
+    OPTS: {}, gridBuildRevision: 5, configurePlugin: () => {}, viewerTraceRecorder: null,
+    gridProteinUrls: () => ({ prot: 'protein.pdb', pocket: null, color: 0x9aa6b2 }),
+    loadStruct: async url => ({ struct: { url } }), addRep: async () => {}, addSticks: async () => {},
+    addPose: async () => ({ obj: { data: { repr: {} } } }),
+    registerPoseClickTarget: () => {},
+    choiceFromPoseInteraction: () => choice,
+    locked: () => false,
+    activatePane: (...args) => { calls.push(['pane', ...args]); },
+    selectedPaneId: null,
+    onPick: async (...args) => { calls.push(['pick', ...args]); },
+    acceptedChoiceCorrect: () => false,
+    sameChoice: (left, right) => left?.pose_file === right?.pose_file,
+    GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
+    structureSphere: () => null, buildInteractions: async () => {},
+    cameraChanges: target => target.canvas3d.camera.changed,
+    window: { waitForCameraSettled: async () => {} }, GOOD: 1, BAD: 2,
+  };
+  const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
+  const cell = {
+    entry: { choice, choiceIndex: 4, cluster: { members: [choice] } },
+    paneId: 'pane-0-4', card: fakeElement(), head: fakeElement('button'), host: fakeElement(),
+    viewer: null, plugin: null, disposed: false,
+    spec: { item: { source: 'weekly' }, proteinMode: 'crystal', answer: false,
+      clustered: true, showHbonds: false, showProteinEnsemble: false, showSurface: false },
+  };
+
+  await buildGridCell(cell, 5);
+  assert.equal(typeof clickHandler, 'function');
+  clickHandler({ current: { repr: {} } });
+  await Promise.resolve();
+
+  assert.deepEqual(calls, [
+    ['pane', 'pane-0-4', 'ligand-click'],
+    ['pick', 4, choice],
+  ]);
+});
+
 test('Weekly Show all waits for the click zoom before activating pose context', async () => {
   const app = await readApp();
   const oldCamera = { position: [1, 1, 1], target: [0, 0, 0] };
@@ -866,6 +946,7 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
     gridProteinUrls: () => ({ prot: 'rep-protein.pdb', pocket: 'rep-pocket.pdb', color: 3 }),
     loadStruct: async url => ({ struct: { url } }), addRep: async () => {}, addSticks: async () => {},
     addPose: async (_struct, _color, _plugin, options) => { poseCalls.push(options || null); },
+    registerPoseClickTarget: () => {},
     acceptedChoiceCorrect: choice => choice.correct === true,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
@@ -911,6 +992,7 @@ test('Surface mode adds representative protein and ligand surfaces in Grid', asy
       reps.push({ url: struct.url, selector, type, color, alpha });
     },
     addSticks: async () => {}, addPose: async () => {},
+    registerPoseClickTarget: () => {},
     acceptedChoiceCorrect: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,

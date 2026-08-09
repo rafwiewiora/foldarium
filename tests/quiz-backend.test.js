@@ -431,6 +431,44 @@ test('rejects malformed named research events before any RPC', async () => {
   assert.deepEqual(rpcs, []);
 });
 
+test('weekly votes survive an invalid optional viewer trace', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('00000000-0000-4000-8000-000000000299'),
+  });
+  const appState = { schema_version: 1, source: 'weekly', item_id: 'item-1' };
+
+  const warnings = await captureWarnings(() => backend.submitWeeklyVoteAttempt({
+    sessionId: '00000000-0000-4000-8000-000000000201',
+    roundId: 'weekly-2026-08-08',
+    itemId: 'item-1',
+    questionIndex: 0,
+    choiceId: 'choice-1',
+    pickedNone: false,
+    viewerTrace: { version: 2, snapshots: [] },
+    appState,
+  }));
+
+  assert.match(String(warnings[0]?.[0]), /Weekly viewer trace omitted: invalid version-1 shape/);
+  assert.deepEqual(rpcs, [{
+    name: 'submit_weekly_quiz_vote_attempt',
+    args: {
+      p_vote_attempt_id: '00000000-0000-4000-8000-000000000299',
+      p_session_id: '00000000-0000-4000-8000-000000000201',
+      p_round_id: 'weekly-2026-08-08',
+      p_item_id: 'item-1',
+      p_question_index: 0,
+      p_choice_id: 'choice-1',
+      p_picked_none: false,
+      p_viewer_trace: null,
+      p_app_state: appState,
+      p_active_pane_id: null,
+    },
+  }]);
+});
+
 test('leaderboard RPC errors reject without creating a local fallback', async () => {
   const { client, setRpcResult } = fakeSupabase();
   const storage = memoryStorage();
