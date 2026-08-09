@@ -259,6 +259,52 @@ test('switching display mode renders choices after the queued mutation', async (
   assert.equal(sandbox.cur.selected, null, 'leaving Grid clears the Grid-exact selection');
 });
 
+test('cluster toggles preserve the exact One-at-a-time pose and Show-all context', async () => {
+  const app = await readApp();
+  const a1 = { pose_file: 'a1.pdb' };
+  const a2 = { pose_file: 'a2.pdb' };
+  const b1 = { pose_file: 'b1.pdb' };
+  const clusters = [
+    { rep: a1, members: [a1, a2] },
+    { rep: b1, members: [b1] },
+  ];
+  const sandbox = {
+    cur: { clusters, contextChoice: null, poseFocusChoice: null },
+    displayMode: 'one',
+    clustered: false,
+    shownOne: 1,
+    Math,
+    sameChoice: (left, right) => left?.pose_file === right?.pose_file,
+  };
+  sandbox.visibleChoices = evaluateDeclaration(app, 'function visibleChoices()', sandbox);
+  sandbox.clusterForChoice = evaluateDeclaration(app, 'function clusterForChoice(choice)', sandbox);
+  const before = evaluateDeclaration(app, 'function poseFocusBeforeClusterToggle()', sandbox);
+  const restore = evaluateDeclaration(app, 'function restorePoseFocusAfterClusterToggle(exactChoice)', sandbox);
+
+  const exact = before();
+  assert.equal(exact, a2);
+  sandbox.clustered = true;
+  restore(exact);
+  assert.equal(sandbox.shownOne, 0, 'reclustering should show the cluster containing the raw pose');
+  assert.equal(sandbox.cur.poseFocusChoice, a2, 'the exact raw member remains remembered');
+
+  const remembered = before();
+  sandbox.clustered = false;
+  restore(remembered);
+  assert.equal(sandbox.shownOne, 1, 'unclustering again should return to the same raw pose');
+
+  sandbox.displayMode = 'all';
+  sandbox.clustered = false;
+  sandbox.cur.contextChoice = a2;
+  const overlayFocus = before();
+  sandbox.clustered = true;
+  restore(overlayFocus);
+  assert.equal(sandbox.cur.contextChoice, a1,
+    'clustered Show all should keep focus on the representative of the clicked pose cluster');
+  assert.equal(sandbox.cur.poseFocusChoice, a2,
+    'Show all should retain the exact raw pose for a later uncluster');
+});
+
 test('Grid page switching rebuilds once with the new page already applied', async () => {
   const app = await readApp();
   const calls = [];

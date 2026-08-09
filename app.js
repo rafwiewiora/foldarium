@@ -217,6 +217,32 @@ function clusterForChoice(choice) {
   return cur?.clusters?.find(cluster => cluster.members.includes(choice)) || null;
 }
 
+function poseFocusBeforeClusterToggle() {
+  if (!cur || displayMode === 'grid') return null;
+  const choices = visibleChoices();
+  const displayed = displayMode === 'all'
+    ? cur.contextChoice
+    : choices[Math.min(shownOne, Math.max(0, choices.length - 1))];
+  if (!displayed) return null;
+  // When a raw member was folded into its cluster, retain it behind the
+  // representative so a later Uncluster returns to that exact member.
+  const remembered = cur.poseFocusChoice;
+  const rememberedCluster = remembered && clusterForChoice(remembered);
+  return clustered && rememberedCluster && sameChoice(rememberedCluster.rep, displayed)
+    ? remembered
+    : displayed;
+}
+
+function restorePoseFocusAfterClusterToggle(exactChoice) {
+  cur.poseFocusChoice = exactChoice || null;
+  const choices = visibleChoices();
+  if (!exactChoice || !choices.length) { shownOne = 0; return; }
+  const target = clustered ? (clusterForChoice(exactChoice)?.rep || exactChoice) : exactChoice;
+  const targetIndex = choices.findIndex(choice => sameChoice(choice, target));
+  shownOne = targetIndex >= 0 ? targetIndex : 0;
+  if (displayMode === 'all' && cur.contextChoice) cur.contextChoice = target;
+}
+
 // A clustered Weekly choice remains one vote (the medoid/representative raw
 // choice ID), but the geometry shows every member: faint members first and the
 // representative last so its colour and silhouette stay visually dominant.
@@ -371,6 +397,7 @@ async function clearWeeklyShowAllContext() {
   if (!cur?.contextChoice) return;
   await viewerRebuild.enqueue(() => {
     cur.contextChoice = null;
+    cur.poseFocusChoice = null;
     selectedPaneId = null;
   });
   recordAppEvent('pose_context_cleared');
@@ -1325,6 +1352,7 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
         cur.selectionExact = !clustered;
         cur.selectedAsCluster = clustered;
         cur.contextChoice = selected;
+        cur.poseFocusChoice = selected;
         selectedPaneId = null;
         document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
       }
@@ -1360,6 +1388,7 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
     cur.selectionExact = !clustered;
     cur.selectedAsCluster = clustered;
     cur.contextChoice = choice;
+    cur.poseFocusChoice = choice;
     cur.answerChoices = answerChoices;
     selectedPaneId = exactChoice
       ? (gridViewers.find(cell => sameChoice(cell.entry.choice, exactChoice))?.paneId || selectedPaneId)
@@ -1935,12 +1964,13 @@ async function init() {
   $('#uncluster').onclick = async () => {
     if (interactionBlocked()) return;
     await viewerRebuild.enqueue(() => {
+      const focusedChoice = poseFocusBeforeClusterToggle();
       clustered = !clustered;
       if (!cur.revealed) {
         cur.selected = null; cur.selectionExact = false; cur.selectedAsCluster = false;
-        cur.contextChoice = null; cur.answerChoices = [];
+        cur.answerChoices = [];
       }
-      shownOne = 0;
+      restorePoseFocusAfterClusterToggle(focusedChoice);
       if (!cur.revealed) rememberView();
       syncButtons();
       renderUI();
@@ -1992,6 +2022,7 @@ async function init() {
     if (e.key === 'ArrowRight') {
       await viewerRebuild.enqueue(() => {
         shownOne = (shownOne + 1) % visibleChoices().length;
+        cur.poseFocusChoice = visibleChoices()[shownOne];
       });
       recordAppEvent('pose_navigated');
     }
@@ -1999,6 +2030,7 @@ async function init() {
       await viewerRebuild.enqueue(() => {
         const n = visibleChoices().length;
         shownOne = (shownOne - 1 + n) % n;
+        cur.poseFocusChoice = visibleChoices()[shownOne];
       });
       recordAppEvent('pose_navigated');
     }
