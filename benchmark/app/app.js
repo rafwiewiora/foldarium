@@ -37,7 +37,7 @@ const COL = {
 };
 
 const STATE = { sys: 0, pose: 'all', rep: 'cartoon', opacity: 0.55, showModelProtein: false, filter: 'all', showTrain: true, showTrainProtein: false,
-                showTrainCloud: false, sortBy: 'default', minCryst: 0, minPred: 0, minGap: -1 };
+                showTrainCloud: false, sortBy: 'default', minCryst: 0, minPred: 0, minGap: -1, pdbSearch: '' };
 
 // Handles for live updates: crystal protein + ligand reps (opacity slider affects both).
 let refPolymerRepr = null;
@@ -140,6 +140,7 @@ function buildControls() {
   // Sort/filter only reorder/trim the system dropdown — re-render the 3D ONLY if the current
   // system actually changed (otherwise dragging a slider would reset the camera every tick).
   const reflow = () => { const prev = STATE.sys; fillSystems(); if (STATE.sys !== prev) render(); };
+  on('#pdbSearch', 'oninput', e => { STATE.pdbSearch = e.target.value; reflow(); });
   on('#sortBy', 'onchange', e => { STATE.sortBy = e.target.value; reflow(); });
   const slider = (id, key, lab) => on(id, 'oninput', e => {
     STATE[key] = +e.target.value; const o = document.getElementById(lab); if (o) o.textContent = e.target.value;
@@ -189,10 +190,17 @@ function passRanges(s) {
   if (STATE.minGap > -1 && !(g >= STATE.minGap)) return false;
   return true;
 }
+function passPdbSearch(s) {
+  const query = STATE.pdbSearch.trim().toUpperCase();
+  if (!query) return true;
+  const id = String(s.id || '').toUpperCase();
+  const pdb = String(s.pdbId || s.pdb || id.split('__')[0]).toUpperCase();
+  return pdb.includes(query) || id.includes(query);
+}
 const SORT_KEY = { cryst: 'train_shape_overlap', pred: 'train_pred_overlap', gap: 'train_memo_gap' };
 function fillSystems() {
   const sysSel = $('#sys'); if (!sysSel) return;
-  let vis = DATA.systems.map((s, i) => ({ s, i })).filter(({ s }) => matchFilter(s) && passRanges(s));
+  let vis = DATA.systems.map((s, i) => ({ s, i })).filter(({ s }) => matchFilter(s) && passRanges(s) && passPdbSearch(s));
   if (STATE.sortBy !== 'default') {
     const k = SORT_KEY[STATE.sortBy];
     vis.sort((a, b) => (b.s[k] ?? -Infinity) - (a.s[k] ?? -Infinity));   // descending

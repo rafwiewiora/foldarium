@@ -37,6 +37,10 @@
     border-radius:7px;padding:9px 10px;font-size:13px;cursor:pointer;font-family:var(--sans)}
   select:hover{border-color:#3a444f}
   select:focus{outline:none;border-color:var(--accent)}
+  input[type="search"]{width:100%;background:#14181e;color:var(--ink);border:1px solid #283038;
+    border-radius:7px;padding:9px 10px;font-size:13px;font-family:var(--mono)}
+  input[type="search"]::placeholder{color:var(--faint)}
+  input[type="search"]:focus{outline:none;border-color:var(--accent)}
 
   .slider{margin-top:4px}
   .slider input{width:100%;accent-color:var(--accent);cursor:pointer}
@@ -99,6 +103,9 @@
     </div>
     <div class="rail-scroll">
      <div class="mode on" id="mode-single">
+      <div class="label">Find by PDB code</div>
+      <input id="pdbSearch" type="search" placeholder="e.g. 7FUM" autocomplete="off" spellcheck="false"/>
+
       <div class="label">Filter <span id="filter-count" style="color:var(--faint);letter-spacing:0"></span></div>
       <select id="filter">
         <option value="all">All systems</option>
