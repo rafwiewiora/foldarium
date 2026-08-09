@@ -74,11 +74,21 @@
     border:1px solid currentColor;border-radius:50%;color:var(--muted);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
     cursor:help;outline:none}
   .pose-info:hover,.pose-info:focus-visible{color:var(--accent)}
-  .pose-tooltip{position:fixed;z-index:100;width:max-content;max-width:min(330px,calc(100vw - 16px));
-    padding:8px 10px;border:1px solid var(--line);border-radius:7px;
-    background:#fffffff5;color:var(--ink);font:500 11px/1.45 ui-sans-serif,system-ui,sans-serif;
-    white-space:pre-line;box-shadow:0 8px 28px #16202b2b;pointer-events:none}
+  .pose-tooltip{position:fixed;z-index:100;width:min(390px,calc(100vw - 16px));
+    padding:6px;border:1px solid #d7e0e7;border-top:3px solid var(--accent);border-radius:10px;
+    background:#fffffff8;color:var(--ink);font:500 11px/1.35 ui-sans-serif,system-ui,sans-serif;
+    box-shadow:0 12px 34px #16202b30;pointer-events:none;backdrop-filter:blur(8px)}
   .pose-tooltip[hidden]{display:none}
+  .pose-tooltip-row{padding:7px}
+  .pose-tooltip-row+.pose-tooltip-row{border-top:1px solid #e4e9ee}
+  .pose-tooltip-method{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+    background:#e9f5fa;color:#116d94;font-size:10px;font-weight:750;letter-spacing:.02em}
+  .pose-tooltip-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:6px}
+  .pose-tooltip-metric{min-width:0;padding:6px 7px;border-radius:6px;background:#f4f7f9}
+  .pose-tooltip-metric small{display:block;overflow:hidden;color:#788491;font-size:8.5px;font-weight:650;
+    letter-spacing:.045em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
+  .pose-tooltip-metric strong{display:block;margin-top:2px;color:#25313d;font-size:11px;font-weight:680;
+    overflow-wrap:anywhere}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
   #gridpages{overflow-x:auto}
@@ -298,7 +308,7 @@
       <div class="lig" id="ligand">—</div>
       <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
     </div>
-    <div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div>
+    <div class="badge" id="badge">crystal reference hidden · poses anonymised</div>
     <div id="gridview"><div id="gridcells"></div></div>
     <div id="view-options" hidden>
       <div class="details-body">
@@ -404,7 +414,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080903');
+      await loadScript('app.js?v=2026080904');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

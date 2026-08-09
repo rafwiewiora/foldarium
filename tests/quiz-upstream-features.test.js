@@ -93,7 +93,7 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.match(app, /\$\('#mode'\)\.style\.display = inPlay \? '' : 'none';/);
   assert.match(app, /\$\{rawPoseCount\} predicted poses/);
   assert.match(app, /pose clusters/);
-  assert.match(app, /pose information on hover/);
+  assert.match(app, /pose details on hover/);
   assert.doesNotMatch(app, /Choices stay method-anonymous/);
   assert.doesNotMatch(app, /The protein and pocket change with the pose/);
   assert.doesNotMatch(app, /linked viewer per pose cluster/);
@@ -782,6 +782,8 @@ test('pose information uses one viewport-level tooltip for every Grid card', asy
   assert.match(html, /\.pose-tooltip\{position:fixed;z-index:100/);
   assert.match(html, /<div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden><\/div>/);
   assert.doesNotMatch(html, /\.pose-info::after/);
+  assert.match(html, /\.pose-tooltip-method\{[\s\S]*?border-radius:999px/);
+  assert.match(html, /\.pose-tooltip-metrics\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
   assert.deepEqual(
     JSON.parse(JSON.stringify(position(
       { left: 2, right: 22, top: 2, bottom: 22 },
@@ -800,6 +802,29 @@ test('pose information uses one viewport-level tooltip for every Grid card', asy
     { left: 462, top: 512 },
     'rightmost and bottom-row Grid cards should open above and stay inside the viewport',
   );
+});
+
+test('pose information is split into structured method and metric rows', async () => {
+  const app = await readApp();
+  const rows = evaluateDeclaration(app, 'function poseInfoTooltipRows(evidence)', { String });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(rows(
+    'Boltz-2 · ligand pLDDT 72.0 · smina -3.9 kcal/mol · H-bonds 1\n'
+      + 'OpenFold3 · ligand pLDDT 76.6 · smina -5.1 kcal/mol · H-bonds 2',
+  ))), [
+    { method: 'Boltz-2', metrics: [
+      { label: 'ligand pLDDT', value: '72.0' },
+      { label: 'smina', value: '-3.9 kcal/mol' },
+      { label: 'H-bonds', value: '1' },
+    ] },
+    { method: 'OpenFold3', metrics: [
+      { label: 'ligand pLDDT', value: '76.6' },
+      { label: 'smina', value: '-5.1 kcal/mol' },
+      { label: 'H-bonds', value: '2' },
+    ] },
+  ]);
+  assert.match(app, /tooltip\.replaceChildren\(\)/);
+  assert.doesNotMatch(app, /tooltip\.innerHTML/);
 });
 
 test('Weekly Show all clears only visual pose context when empty Molstar space is clicked', async () => {
@@ -893,6 +918,13 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
   syncStageBadge();
   assert.equal(registry.elements.get('#badge').textContent, 'Pose C · ligand pLDDT 72.5');
   assert.equal(registry.elements.get('#badge').style.display, '');
+
+  badgeSandbox.displayMode = 'grid';
+  syncStageBadge();
+  assert.equal(
+    registry.elements.get('#badge').textContent,
+    'prospective blind · crystal reference hidden · pose details on hover',
+  );
 
   badgeSandbox.displayMode = 'all';
   syncStageBadge();

@@ -39,6 +39,16 @@ function weeklyEntryEvidence(entry) {
   const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
   return members.map(weeklyPoseEvidence).filter(Boolean).join('\n');
 }
+function poseInfoTooltipRows(evidence) {
+  return String(evidence || '').split('\n').filter(Boolean).map(line => {
+    const [method, ...rawMetrics] = line.split(' · ');
+    const metrics = rawMetrics.map(metric => {
+      const match = /^(ligand pLDDT|smina|H-bonds)\s+(.+)$/.exec(metric);
+      return match ? { label: match[1], value: match[2] } : { label: 'metric', value: metric };
+    });
+    return { method, metrics };
+  });
+}
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
 const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
 const ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT = false;
@@ -574,7 +584,28 @@ function showPoseInfoTooltip(owner, evidence) {
   const tooltip = $('#pose-tooltip');
   if (!tooltip) return;
   poseInfoTooltipOwner = owner;
-  tooltip.textContent = evidence;
+  tooltip.replaceChildren();
+  for (const item of poseInfoTooltipRows(evidence)) {
+    const row = document.createElement('div');
+    row.className = 'pose-tooltip-row';
+    const method = document.createElement('span');
+    method.className = 'pose-tooltip-method';
+    method.textContent = item.method;
+    const metrics = document.createElement('div');
+    metrics.className = 'pose-tooltip-metrics';
+    for (const itemMetric of item.metrics) {
+      const metric = document.createElement('span');
+      metric.className = 'pose-tooltip-metric';
+      const label = document.createElement('small');
+      label.textContent = itemMetric.label;
+      const value = document.createElement('strong');
+      value.textContent = itemMetric.value;
+      metric.append(label, value);
+      metrics.appendChild(metric);
+    }
+    row.append(method, metrics);
+    tooltip.appendChild(row);
+  }
   tooltip.hidden = false;
   const position = poseInfoTooltipPosition(
     owner.getBoundingClientRect(),
@@ -1144,8 +1175,8 @@ function showIntro() {
   const pool = filteredPool();
   $('#wrap').classList.add('intro');
   if (!DEV) $('#badge').textContent = quizSource === 'weekly'
-    ? 'binding pocket · ligand hidden · pose information on hover'
-    : 'binding pocket · ligand hidden · poses anonymised';
+    ? 'prospective blind · crystal reference hidden · pose details on hover'
+    : 'crystal reference hidden · poses anonymised';
   $('#setup').style.display = '';
   $('#participant-setup').style.display = DEV ? 'none' : '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
@@ -1703,8 +1734,8 @@ function syncStageBadge() {
     return;
   }
   badge.textContent = cur?.item?.source === 'weekly'
-    ? 'binding pocket · ligand hidden · pose information on hover'
-    : 'binding pocket · ligand hidden · poses anonymised';
+    ? 'prospective blind · crystal reference hidden · pose details on hover'
+    : 'crystal reference hidden · poses anonymised';
 }
 
 // dev reveal toggle: flip the green/red correctness + RMSD list on/off, reusing the showAnswer machinery.
