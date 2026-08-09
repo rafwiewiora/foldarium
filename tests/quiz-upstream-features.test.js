@@ -404,6 +404,83 @@ test('Weekly Show all starts on the shared receptor and adopts a clicked pose co
   });
 });
 
+test('Weekly Show all maps a ligand representation click to its exact raw pose', async () => {
+  const app = await readApp();
+  const representation = {};
+  const exact = { pose_file: 'exact.pdb' };
+  const poseChoiceByRepresentation = new WeakMap();
+  const register = evaluateDeclaration(
+    app,
+    'function registerPoseClickTarget(representationSelector, choice)',
+    { poseChoiceByRepresentation },
+  );
+  const resolve = evaluateDeclaration(
+    app,
+    'function choiceFromPoseInteraction(event)',
+    { poseChoiceByRepresentation },
+  );
+
+  register({ obj: { data: { repr: representation } } }, exact);
+
+  assert.equal(resolve({ current: { repr: representation } }), exact);
+  assert.equal(resolve({ current: { repr: {} } }), null);
+});
+
+test('Weekly Show all routes a ligand click through the normal pose picker', async () => {
+  const app = await readApp();
+  const exact = { pose_file: 'exact.pdb' };
+  const calls = [];
+  const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
+    interactionBlocked: () => false,
+    cur: {
+      item: { source: 'weekly' },
+      revealed: false,
+      contextChoice: null,
+    },
+    displayMode: 'all',
+    choiceFromPoseInteraction: () => exact,
+    sameChoice: () => false,
+    visibleIndexForChoice: () => 3,
+    onPick: async (...args) => { calls.push(args); },
+    console,
+  });
+
+  handler({ current: { repr: {} } });
+  await Promise.resolve();
+
+  assert.deepEqual(calls, [[3, exact]]);
+});
+
+test('Weekly Show all rebuilds the exact clicked protein and pocket sticks', async () => {
+  const app = await readApp();
+  const loaded = [];
+  const stickCalls = [];
+  const sandbox = {
+    protUrls: () => ({ prot: 'exact-protein.pdb', pocket: 'exact-pocket.pdb' }),
+    weeklyGhostProteinUrls: () => [],
+    currentProteinKey: null,
+    proteinData: [],
+    plugin: {},
+    loadStruct: async url => {
+      loaded.push(url);
+      return { data: { ref: url }, struct: { url } };
+    },
+    addRep: async () => {},
+    addSticks: async (...args) => { stickCalls.push(args); },
+    proteinMode: 'crystal',
+    AF3PROT: 2,
+    PROT: 1,
+    GHOST_PROTEIN_ALPHA: 0.12,
+  };
+  const buildProtein = evaluateDeclaration(app, 'async function buildProtein(shown)', sandbox);
+
+  await buildProtein([]);
+
+  assert.deepEqual(loaded, ['exact-protein.pdb', 'exact-pocket.pdb']);
+  assert.equal(stickCalls.length, 1);
+  assert.equal(stickCalls[0][0].url, 'exact-pocket.pdb');
+});
+
 test('Weekly Grid renders ghost cluster members and representative H-bonds', async () => {
   const app = await readApp();
   const poseCalls = [];

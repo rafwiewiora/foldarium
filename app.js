@@ -51,6 +51,8 @@ let showProteinEnsemble = false; // optional faint receptor backbones for the We
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
+let poseChoiceByRepresentation = new WeakMap();
+let canonicalPoseClickSubscription = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
@@ -249,6 +251,35 @@ function focusLigandSpheres(targetPlugin, spheres) {
   return true;
 }
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function registerPoseClickTarget(representationSelector, choice) {
+  const representation = representationSelector?.obj?.data?.repr;
+  if (representation && typeof representation === 'object') {
+    poseChoiceByRepresentation.set(representation, choice);
+  }
+}
+function choiceFromPoseInteraction(event) {
+  const representation = event?.current?.repr;
+  return representation && typeof representation === 'object'
+    ? (poseChoiceByRepresentation.get(representation) || null)
+    : null;
+}
+function visibleIndexForChoice(choice) {
+  const visible = visibleChoices();
+  if (!clustered) return visible.findIndex(candidate => sameChoice(candidate, choice));
+  const cluster = clusterForChoice(choice);
+  return visible.findIndex(candidate => clusterForChoice(candidate) === cluster);
+}
+function onCanonicalPoseInteraction(event) {
+  if (interactionBlocked() || cur?.item?.source !== 'weekly'
+      || displayMode !== 'all' || cur.revealed) return;
+  const choice = choiceFromPoseInteraction(event);
+  if (!choice || sameChoice(choice, cur.contextChoice)) return;
+  const index = visibleIndexForChoice(choice);
+  if (index < 0) return;
+  void onPick(index, choice).catch(error => {
+    console.warn('Could not inspect the clicked pose:', error.message);
+  });
+}
 function acceptedChoiceCorrect(choice) {
   return cur?.item?.source === 'weekly'
     ? choice?.clusterAccepted === true
@@ -608,13 +639,16 @@ async function buildCanonicalLayer(shown) {
   try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
   await buildProtein(shown);             // swap protein only if it changed (AF3 one-at-a-time, or toggle)
   await clearLayer();
+  poseChoiceByRepresentation = new WeakMap();
   const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
   for (const layer of weeklyPoseLayers(shown)) {
     const c = layer.choice;
     const s = await loadStruct(c.pose_file, 'pdb');
     layerData.push(s.data);
-    await addPose(s.struct, answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
+    const representation = await addPose(s.struct,
+      answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
       layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+    registerPoseClickTarget(representation, c);
   }
   // crystal reference (true pose) — only after reveal, when toggled on
   const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;
@@ -1491,6 +1525,9 @@ function showLeaderboard(me, rows) {
 async function init() {
   viewer = await molstar.Viewer.create('app', OPTS);
   plugin = viewer.plugin;
+  canonicalPoseClickSubscription?.unsubscribe?.();
+  canonicalPoseClickSubscription = plugin.behaviors?.interaction?.click
+    ?.subscribe(onCanonicalPoseInteraction) || null;
   configurePlugin(plugin);
   viewerRebuild = window.createViewerRebuildCoordinator({
     rebuild: buildLayer,
