@@ -126,6 +126,13 @@ test('Submit answer matches the bottom viewer controls', async () => {
   assert.match(html, /#view-options button,#lock\{[\s\S]*?background:#fff;[\s\S]*?color:var\(--muted\);[\s\S]*?border:1px solid var\(--line\);[\s\S]*?font-size:12\.5px/);
 });
 
+test('Weekly Record vote is the prominent primary viewer action', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #lock\{[\s\S]*?min-height:44px;[\s\S]*?background:var\(--accent\);[\s\S]*?color:#fff;[\s\S]*?font-weight:700/);
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #lock:disabled\{background:#dce7ec/);
+});
+
 test('Grid mode does not expose the hidden canonical viewer', async () => {
   const [html, app] = await Promise.all([readHtml(), readApp()]);
 

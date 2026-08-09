@@ -704,10 +704,13 @@ async function buildGridCell(cell, revision) {
         cell.spec.answer ? (acceptedChoiceCorrect(layer.choice) ? GOOD : BAD) : c.color,
         cell.plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      let surfaceRepresentation = null;
       if (cell.spec.showSurface && !layer.ghost) {
-        await addRep(pose.struct, 'all', 'molecular-surface', c.color, 0.7, cell.plugin);
+        surfaceRepresentation = await addRep(
+          pose.struct, 'all', 'molecular-surface', c.color, 0.7, cell.plugin);
       }
       registerPoseClickTarget(poseRepresentation, c);
+      registerPoseClickTarget(surfaceRepresentation, c);
       if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
     }
     cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
@@ -900,11 +903,13 @@ async function buildCanonicalLayer(shown) {
       const representation = await addPose(s.struct,
         answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      let surfaceRepresentation = null;
       if (showSurface && !layer.ghost) {
-        await addRep(s.struct, 'all', 'molecular-surface',
+        surfaceRepresentation = await addRep(s.struct, 'all', 'molecular-surface',
           answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, 0.7);
       }
       registerPoseClickTarget(representation, c);
+      registerPoseClickTarget(surfaceRepresentation, c);
     }
     // crystal reference (true pose) — only after reveal, when toggled on
     const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;

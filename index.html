@@ -167,6 +167,10 @@
   html[data-quiz-mode="weekly"] #leaderboard-link,
   html[data-quiz-mode="weekly"] #score,
   html[data-quiz-mode="weekly"] #score-summary{display:none!important}
+  html[data-quiz-mode="weekly"] #lock{min-height:44px;padding-inline:20px;background:var(--accent);
+    color:#fff;border-color:var(--accent);font-weight:700;box-shadow:0 3px 10px #1687b82b}
+  html[data-quiz-mode="weekly"] #lock:not(:disabled):hover{background:#1178a4;color:#fff;border-color:#1178a4}
+  html[data-quiz-mode="weekly"] #lock:disabled{background:#dce7ec;color:#7d8a94;border-color:#d3dee4;box-shadow:none}
   html[data-quiz-mode="weekly"] #weekly-results{display:block}
   .hint{font-size:12px;color:var(--faint);line-height:1.55}
   #viewer-question{position:absolute;z-index:30;top:16px;left:16px;display:flex;flex-direction:column;
@@ -400,7 +404,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080902');
+      await loadScript('app.js?v=2026080903');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

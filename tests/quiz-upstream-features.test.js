@@ -980,6 +980,7 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
 test('Surface mode adds representative protein and ligand surfaces in Grid', async () => {
   const app = await readApp();
   const reps = [];
+  const registered = [];
   const camera = { changed: {}, getSnapshot: () => ({}), setState: () => {} };
   const plugin = { canvas3d: { camera, requestCameraReset() {} } };
   const choice = { pose_file: 'pose.pdb', color: 0x5B8FF9 };
@@ -990,9 +991,15 @@ test('Surface mode adds representative protein and ligand surfaces in Grid', asy
     loadStruct: async url => ({ struct: { url } }),
     addRep: async (struct, selector, type, color, alpha) => {
       reps.push({ url: struct.url, selector, type, color, alpha });
+      return type === 'molecular-surface' && selector === 'all'
+        ? { obj: { data: { repr: { kind: 'ligand-surface' } } } }
+        : null;
     },
-    addSticks: async () => {}, addPose: async () => {},
-    registerPoseClickTarget: () => {},
+    addSticks: async () => {},
+    addPose: async () => ({ obj: { data: { repr: { kind: 'ligand-sticks' } } } }),
+    registerPoseClickTarget: (selector, targetChoice) => {
+      if (selector) registered.push([selector.obj.data.repr.kind, targetChoice]);
+    },
     acceptedChoiceCorrect: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
@@ -1016,6 +1023,11 @@ test('Surface mode adds representative protein and ligand surfaces in Grid', asy
     { url: 'protein.pdb', selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.7 },
     { url: 'pose.pdb', selector: 'all', type: 'molecular-surface', color: 0x5B8FF9, alpha: 0.7 },
   ]);
+  assert.deepEqual(registered, [
+    ['ligand-sticks', choice],
+    ['ligand-surface', choice],
+  ]);
+  assert.match(app, /registerPoseClickTarget\(surfaceRepresentation, c\)/);
 });
 
 test('Surface toggle rebuilds the canonical protein when disabled', async () => {
