@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Pose Quiz · which predicted pose is correct?</title>
-<link rel="icon" href="data:,"/>
+<title>Foldarium · Pose Quiz</title>
+<link rel="icon" type="image/svg+xml" href="assets/foldarium-mark.svg"/>
 <style>
   @font-face{font-family:"Geist Sans";font-style:normal;font-display:swap;font-weight:100 900;
     src:url("https://cdn.jsdelivr.net/fontsource/fonts/geist:vf@5.3.0/latin-wght-normal.woff2") format("woff2-variations")}
@@ -24,6 +24,11 @@
   #side .setup-label{color:var(--muted)}
   #side .setup-options small,#side .hint{color:var(--faint)}
   #side .choice .tag{color:var(--faint)}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .brand-mark{width:38px;height:38px;flex:none;display:block}
+  .brand-copy{min-width:0}
+  .brand-copy h1{margin:0}
+  .brand-copy .sub strong{color:var(--ink);font-weight:650}
   button,input,summary{font-family:inherit}
   #gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
   #gate[hidden],#wrap[hidden]{display:none!important}
@@ -35,6 +40,7 @@
     border-radius:8px;padding:12px 13px;font-size:15px}
   #gate input:focus{outline:none;border-color:var(--accent)}
   #gate .err{font-size:12px;color:var(--bad);min-height:1.2em;margin:0}
+  #gate .brand-mark{width:46px;height:46px}
   #wrap{display:flex;height:100vh}
   #side{width:380px;flex:none;background:var(--panel);border-right:1px solid var(--line);
     padding:26px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
@@ -200,18 +206,24 @@
 <body>
 <div id="gate">
   <form class="card" id="gate-form" autocomplete="off">
-    <h1>Pose Quiz</h1>
+    <div class="brand">
+      <img class="brand-mark" src="assets/foldarium-mark.svg" alt=""/>
+      <div class="brand-copy"><h1>Foldarium</h1><p class="sub"><strong>Pose Quiz</strong></p></div>
+    </div>
     <p class="sub">Enter password to continue</p>
     <input id="gate-pw" type="password" name="password" placeholder="Password" autofocus/>
     <p class="err" id="gate-err" aria-live="polite"></p>
     <button class="primary" type="submit">Unlock</button>
   </form>
 </div>
-<div id="wrap" hidden>
+<div id="wrap" class="intro" hidden>
   <div id="side">
-    <div>
-      <h1>Pose Quiz</h1>
-      <div class="sub">which predicted pose is correct?<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
+    <div class="brand">
+      <img class="brand-mark" src="assets/foldarium-mark.svg" alt=""/>
+      <div class="brand-copy">
+        <h1>Foldarium</h1>
+        <div class="sub"><strong>Pose Quiz</strong> · which predicted pose is correct?<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
+      </div>
     </div>
 
     <section class="participant-setup" id="participant-setup">

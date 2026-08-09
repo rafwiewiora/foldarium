@@ -1857,7 +1857,7 @@ async function init() {
     }
   }
   if (DEV) {                                            // browse/inspection mode banner + page title
-    document.title = 'Pose Quiz · DEV browse';
+    document.title = 'Foldarium · DEV browse';
     const bd = $('#badge'); if (bd) bd.textContent = 'DEV browse · free Prev/Next · reveal answer + RMSDs on demand';
   }
   try {
@@ -1977,7 +1977,7 @@ async function init() {
   const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
   if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
   if (WEEKLY_ONLY) {
-    document.title = 'Pose Quiz · Weekly blind';
+    document.title = 'Foldarium · Weekly blind';
     document.querySelectorAll('#quizsrc button').forEach(button => {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));

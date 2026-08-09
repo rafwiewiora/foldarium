@@ -86,6 +86,16 @@ test('left panel has a balanced type and gray hierarchy', async () => {
   assert.match(html, /#side \.choice\{font-size:14px;line-height:1\.4/);
 });
 
+test('Foldarium branding is present and the name intro starts centered', async () => {
+  const html = await readHtml();
+
+  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="assets\/foldarium-mark\.svg"/);
+  assert.match(html, /<img class="brand-mark" src="assets\/foldarium-mark\.svg" alt=""/);
+  assert.match(html, /<h1>Foldarium<\/h1>/);
+  assert.match(html, /<div id="wrap" class="intro" hidden>/);
+  assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
+});
+
 test('left pose selections use calm cards with pose-color rails', async () => {
   const [html, app] = await Promise.all([readHtml(), readApp()]);
 
