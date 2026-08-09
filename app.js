@@ -77,6 +77,7 @@ let viewerTransitionBusy = false;
 let displayMode = WEEKLY_ONLY ? 'one' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 let showProteinEnsemble = false; // optional faint receptor backbones for the Weekly visual experiment
+let showSurface = false;
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
@@ -86,10 +87,12 @@ let nextCanonicalCameraSnapshot = null, canonicalPoseActivationRevision = 0;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
-let userView = { displayMode, clustered: true, proteinMode: 'crystal', showHbonds: false, showProteinEnsemble: false };
-const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds, showProteinEnsemble }; };
+let userView = { displayMode, clustered: true, proteinMode: 'crystal', showHbonds: false,
+  showProteinEnsemble: false, showSurface: false };
+const rememberView = () => { userView = { displayMode, clustered, proteinMode, showHbonds,
+  showProteinEnsemble, showSurface }; };
 const applyUserView = () => {
-  ({ displayMode, clustered, proteinMode, showHbonds, showProteinEnsemble } = userView);
+  ({ displayMode, clustered, proteinMode, showHbonds, showProteinEnsemble, showSurface } = userView);
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
 };
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
@@ -118,6 +121,7 @@ function currentReplayableAppState() {
     protein_mode: proteinMode,
     show_hbonds: showHbonds,
     show_protein_ensemble: showProteinEnsemble,
+    show_surface: showSurface,
     show_xtal: showXtal,
     shown_one_index: shownOne,
     grid_page_index: gridMethodIndex,
@@ -149,7 +153,7 @@ function activatePane(paneId, reason = 'interaction') {
 function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
-    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #protein-ensemble, #lock, '
+    '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #surface, #protein-ensemble, #lock, '
     + '#next, #prev, #myview, #showXtal, #start, #gridpages button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
@@ -617,7 +621,8 @@ function startGridLayout() {
   stopGridLayout = () => observer.disconnect();
 }
 function hideGrid() {
-  gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid'); renderGridPages();
+  gridBuildRevision++; disposeGridViewers(); $('#gridview').classList.remove('on', 'loading-grid');
+  $('#stage').classList.remove('grid-active'); renderGridPages();
 }
 function syncGridCameras(cells) {
   const cameraSnapshot = cell => cell.plugin?.canvas3d?.camera?.getSnapshot?.();
@@ -665,6 +670,9 @@ async function buildGridCell(cell, revision) {
     const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+    if (cell.spec.showSurface) {
+      await addRep(pr.struct, 'polymer', 'molecular-surface', urls.color, 0.7, cell.plugin);
+    }
     if (cell.spec.showProteinEnsemble && cell.spec.item.source === 'weekly' && cell.spec.clustered) {
       const proteinUrls = [...new Set((cell.entry.cluster?.members || [])
         .map(member => member.afprotein_file)
@@ -689,6 +697,9 @@ async function buildGridCell(cell, revision) {
         cell.spec.answer ? (acceptedChoiceCorrect(layer.choice) ? GOOD : BAD) : c.color,
         cell.plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      if (cell.spec.showSurface && !layer.ghost) {
+        await addRep(pose.struct, 'all', 'molecular-surface', c.color, 0.7, cell.plugin);
+      }
       if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
     }
     if (cell.spec.showHbonds && urls.pocket) {
@@ -724,7 +735,7 @@ async function buildGrid(preserveCamera = true) {
   const revision = ++gridBuildRevision;
   disposeGridViewers();
   const view = $('#gridview'), cellsBox = $('#gridcells');
-  view.classList.add('on', 'loading-grid'); renderGridPages();
+  view.classList.add('on', 'loading-grid'); $('#stage').classList.add('grid-active'); renderGridPages();
   const cells = gridEntries().map((entry, paneIndex) => {
     const paneId = `pane-${gridMethodIndex}-${paneIndex}`;
     const card = document.createElement('div');
@@ -746,7 +757,7 @@ async function buildGrid(preserveCamera = true) {
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
       detachReplay: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
-        clustered, showHbonds, showProteinEnsemble } };
+        clustered, showHbonds, showProteinEnsemble, showSurface } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
@@ -799,12 +810,14 @@ function protUrls() {
 async function buildProtein(shown) {    // rebuilds ONLY when the protein ensemble changes (no flicker)
   const { prot, pocket } = protUrls();
   const ghostProteinUrls = weeklyGhostProteinUrls(shown, prot);
-  const proteinKey = JSON.stringify([prot, pocket, ghostProteinUrls]);
+  const proteinKey = JSON.stringify([prot, pocket, ghostProteinUrls, showSurface]);
   if (proteinKey === currentProteinKey) return;
   if (proteinData.length) { const b = plugin.build(); for (const x of proteinData) b.delete(x.ref || x); await b.commit(); proteinData = []; }
   const pr = await loadStruct(prot, 'pdb');
   proteinData.push(pr.data);
-  await addRep(pr.struct, 'polymer', 'cartoon', proteinMode === 'af3' ? AF3PROT : PROT, 0.5);
+  const proteinColor = proteinMode === 'af3' ? AF3PROT : PROT;
+  await addRep(pr.struct, 'polymer', 'cartoon', proteinColor, 0.5);
+  if (showSurface) await addRep(pr.struct, 'polymer', 'molecular-surface', proteinColor, 0.7);
   for (const proteinUrl of ghostProteinUrls) {
     const ghostProtein = await loadStruct(proteinUrl, 'pdb');
     proteinData.push(ghostProtein.data);
@@ -869,6 +882,10 @@ async function buildCanonicalLayer(shown) {
       const representation = await addPose(s.struct,
         answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      if (showSurface && !layer.ghost) {
+        await addRep(s.struct, 'all', 'molecular-surface',
+          answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color, 0.7);
+      }
       registerPoseClickTarget(representation, c);
     }
     // crystal reference (true pose) — only after reveal, when toggled on
@@ -880,6 +897,7 @@ async function buildCanonicalLayer(shown) {
       const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
       layerData.push(xl.data);
       await addPose(xl.struct, XTAL);
+      if (showSurface) await addRep(xl.struct, 'all', 'molecular-surface', XTAL, 0.7);
       hbondPoses.push(cur.item.xtal_lig_file); // also show the crystal reference's H-bonds when it's visible
     }
     await buildHbonds(hbondPoses);      // H-bond overlay for whatever pose(s) are currently shown
@@ -972,6 +990,9 @@ async function loadQuestion(i) {
       shownOne = 0;
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
       $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
+      $('#instruction').style.display = ''; $('#choices').style.display = '';
+      $('#answer-details').hidden = true; $('#answer-details').open = false;
+      $('#answer-choices').replaceChildren(); $('#answer-ai').textContent = '';
       try { await plugin.clear(); } catch (e) {}
       proteinData = []; layerData = []; hbondData = [];
       currentProteinKey = null;
@@ -1011,15 +1032,16 @@ function renderUI() {
     const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');
     b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
+    b.style.setProperty('--choice-color', hex(c.color));
     let nm;
     if (clustered) {
       const cl = entry.cluster;
       const label = cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
       nm = `Pose ${label}` + (count > 1
-        ? ` <span style="color:var(--faint)">(${count} poses)</span>` : '');
+        ? ` <span style="color:rgba(255,255,255,.82)">(${count} poses)</span>` : '');
     } else nm = `Pose ${c.label}`;
-    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span>`;
+    b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
     attachPoseInfo(b, weeklyEntryEvidence(entry));
     b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
     box.appendChild(b);
@@ -1027,18 +1049,24 @@ function renderUI() {
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
     nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
-    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span>`;
+    nb.style.setProperty('--choice-color', '#5a6675');
+    nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None of these are correct</span><span class="tag" data-tag></span>`;
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
   }
   if (cur.selected) {                                   // keep the player's pick highlighted
-    if (cur.selected.none) box.querySelector('.choice.none')?.classList.add('sel');
+    let selected;
+    if (cur.selected.none) selected = box.querySelector('.choice.none');
     else {
       const k = uiEntries.findIndex(entry => cur.selectionExact
         ? sameChoice(entry.choice, cur.selected) : entry.choice.cluster === cur.selected.cluster);
-      if (k >= 0) box.querySelectorAll('.choice')[k]?.classList.add('sel');
+      if (k >= 0) selected = box.querySelectorAll('.choice')[k];
     }
+    selected?.classList.add('sel');
+    const tag = selected?.querySelector('[data-tag]');
+    if (tag) tag.textContent = 'Selected ✓';
   }
+  box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
@@ -1056,6 +1084,7 @@ function renderDevNav() {
   $('#myview').style.display = '';
   $('#myview').textContent = cur.showAnswer ? '← Hide answer (my view)' : 'Reveal answer →';
   $('#xtalrow').style.display = (cur.showAnswer && cur.item.xtal_lig_file) ? '' : 'none';
+  $('#answer-details').hidden = !cur.showAnswer;
 }
 
 // items for the current (source, difficulty) selection. Easy = only game-able (a real pick puzzle).
@@ -1090,6 +1119,7 @@ function easyPlayable(choices, source) {
 function showIntro() {
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
+  $('#wrap').classList.add('intro');
   if (!DEV) $('#badge').textContent = quizSource === 'weekly'
     ? 'binding pocket · ligand hidden · pose information on hover'
     : 'binding pocket · ligand hidden · poses anonymised';
@@ -1097,47 +1127,29 @@ function showIntro() {
   $('#participant-setup').style.display = DEV ? 'none' : '';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
-  $('#hbonds').style.display = 'none'; $('#protein-ensemble').style.display = 'none';
+  $('#hbonds').style.display = 'none'; $('#surface').style.display = 'none';
+  $('#protein-ensemble').style.display = 'none';
   $('#myview').style.display = 'none'; $('#xtalrow').style.display = 'none';
+  $('#question-head').style.display = 'none'; $('#ligand').style.display = 'none';
+  $('#instruction').style.display = 'none'; $('#view-options').hidden = true;
+  $('#answer-details').hidden = true; $('#verdict').style.display = 'none';
   $('#progress').textContent = 'ready';
   if (quizSource === 'weekly') {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
     $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = status === 'revealed'
-      ? 'Wednesday results — methods, reference scores, and vote totals are now revealable.'
+      ? `${pool.length} prospective weekly ensembles · Wednesday results are available.`
       : (status === 'open'
-        ? `Voting is open until ${closes}. Method and pose metrics are available from each “i”; released-coordinate results arrive Wednesday.`
-        : 'Voting is closed while Wednesday results are being prepared.');
-    const v = $('#verdict'); v.style.display = '';
-    v.innerHTML = status === 'revealed'
-      ? 'Inspect the same predicted choices, make or restore your pick, then reveal the released-coordinate result.'
-      : (status === 'open'
-        ? 'Choose the pose you believe is correct, or “none.” Locking records a vote but does not reveal the answer.'
-        : 'The blind manifest remains visible, but no new votes are accepted after the deadline.');
+        ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
+        : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`);
     $('#start').style.display = pool.length && status !== 'closed' ? '' : 'none';
     syncStartGate();
     return;
   }
-  $('#ligand').innerHTML = `${pool.length} single-pocket ensembles · ${quizSource === 'rnp' ? 'Runs-n-Poses' : 'CAMEO'}`;
-  // AI baseline accuracy on this pool: pLDDT-pick correct (all-wrong -> always wrong; the model can't say "none")
-  const aiCorrect = pool.filter(it => it.choices.find(c => c.af3_sample === it.plddt_pick_sample)?.correct).length;
-  const pct = pool.length ? Math.round(100 * aiCorrect / pool.length) : 0;
-  $('#setuphint').innerHTML = (difficulty === 'easy'
-    ? 'Easy — every ensemble has a correct pose; pick it.'
-    : 'Hard — some ensembles have a correct pose, some have <b>none</b> (answer “none of these”); you decide which.')
-    + ' <b>Single pocket only</b> (multi-pocket coming later).';
-  const v = $('#verdict'); v.style.display = '';
-  v.innerHTML = `Each question: a binding pocket with the ligand removed + `
-    + (quizSource === 'rnp' ? 'anonymised poses pooled from <b>multiple co-folding methods</b>' : "<b>AlphaFold3</b>'s poses")
-    + ` (clustered). Pick the correct binding pose`
-    + (difficulty === 'hard' ? ', or <b>“none of these are correct.”</b>' : '.')
-    + `<br><br>Opponent = ${oppLabel()}. <b>It scored ${aiCorrect}/${pool.length} (${pct}%)</b> here`
-    + (difficulty === 'hard' ? ` — and it can never answer “none”, so the no-correct-pose items are yours to win.` : '.')
-    + ` Can you beat it?`;
+  $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
   $('#start').style.display = pool.length ? '' : 'none';
   syncStartGate();
-  if (!pool.length) v.innerHTML += '<br><span style="color:var(--bad)">No items for this selection.</span>';
 }
 
 function renderWeeklyResultsStatus() {
@@ -1183,8 +1195,11 @@ function beginQuiz() {
   ITEMS = drawSession();
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
+  $('#wrap').classList.remove('intro');
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
   $('#start').style.display = 'none'; $('#mode').style.display = '';
+  $('#question-head').style.display = ''; $('#ligand').style.display = '';
+  $('#instruction').style.display = ''; $('#view-options').hidden = false;
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
@@ -1354,7 +1369,12 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
         cur.contextChoice = selected;
         cur.poseFocusChoice = selected;
         selectedPaneId = null;
-        document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+        document.querySelectorAll('#choices .choice').forEach(el => {
+          const on = el.dataset.k == k;
+          el.classList.toggle('sel', on);
+          const tag = el.querySelector('[data-tag]');
+          if (tag) tag.textContent = on ? 'Selected ✓' : '';
+        });
       }
     });
     recordAppEvent('pose_navigated');
@@ -1377,7 +1397,12 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
     if (displayMode === 'all' && cur.item.source === 'weekly') {
       await viewerRebuild.enqueue(chooseNone);
     } else chooseNone();
-    document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k === 'none'));
+    document.querySelectorAll('#choices .choice').forEach(el => {
+      const on = el.dataset.k === 'none';
+      el.classList.toggle('sel', on);
+      const tag = el.querySelector('[data-tag]');
+      if (tag) tag.textContent = on ? 'Selected ✓' : '';
+    });
     $('#lock').disabled = false;
     recordAppEvent('choice_selected');
     return;
@@ -1400,7 +1425,12 @@ async function onPick(k, exactChoice = null, { rebuildCameraSnapshot = null } = 
   if (displayMode === 'all' && cur.item.source === 'weekly') {
     await viewerRebuild.enqueue(choosePose);
   } else choosePose();
-  document.querySelectorAll('.choice').forEach(el => el.classList.toggle('sel', el.dataset.k == k));
+  document.querySelectorAll('#choices .choice').forEach(el => {
+    const on = el.dataset.k == k;
+    el.classList.toggle('sel', on);
+    const tag = el.querySelector('[data-tag]');
+    if (tag) tag.textContent = on ? 'Selected ✓' : '';
+  });
   syncGridSelection();
   $('#lock').disabled = false;
   recordAppEvent('choice_selected');
@@ -1442,20 +1472,24 @@ async function finalizeReveal() {
   const opts = answerChoices.length + (difficulty === 'hard' ? 1 : 0);
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealList(picked, af3);
-  $('#lock').style.display = 'none';
-  const youMsg = picked.none
-    ? (youRight ? `<b style="color:var(--good)">Correct — none of these were right.</b>`
-                : `<b style="color:var(--bad)">Wrong</b> — a correct pose was present.`)
-    : (youRight ? `<b style="color:var(--good)">Correct.</b> Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å from crystal.`
-                : `<b style="color:var(--bad)">Wrong.</b> Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å off.`);
+  $('#lock').style.display = 'none'; $('#choices').style.display = 'none';
+  const correct = cur.clusters.flatMap(c => c.members)
+    .filter(acceptedChoiceCorrect).sort((a, b) => a.rmsd - b.rmsd)[0];
+  const detail = youRight
+    ? (picked.none ? 'None of these poses was correct.'
+                   : `Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å from the crystal pose.`)
+    : (correct ? `Correct pose: ${displayedPoseLabel(correct, false)} (${correct.rmsd.toFixed(2)} Å).`
+               : 'None of these poses was correct.');
   const afMethod = (cur.item.source === 'rnp' && af3 && af3._method) ? ` (${methodName(af3._method)})` : '';
   const afMsg = af3
-    ? `${oppLabel()} picked Pose ${displayedPoseLabel(af3, false)}${afMethod} — <b style="color:${af3Right ? 'var(--good)' : 'var(--bad)'}">${af3Right ? 'right' : 'wrong'}</b>`
+    ? `${oppLabel()} picked Pose ${displayedPoseLabel(af3, false)}${afMethod} — ${af3Right ? 'right' : 'wrong'}`
       + (!cur.item.has_correct ? ` (can’t answer “none”)` : '')
     : '';
   const v = $('#verdict'); v.style.display = '';
-  v.innerHTML = youMsg + (afMsg ? '<br>' + afMsg : '') + (youRight && !af3Right ? ` — <b>you beat it.</b>` : '.');
-  $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Final score →';
+  v.innerHTML = `<strong style="color:${youRight ? 'var(--good)' : 'var(--bad)'}">${youRight ? 'Correct' : 'Not quite'}</strong>${detail}`;
+  $('#answer-ai').textContent = afMsg;
+  $('#answer-details').hidden = false; $('#answer-details').open = false;
+  $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next question →' : 'View final score →';
   $('#myview').style.display = ''; $('#myview').textContent = '← Back to my view (hide answer)';
   if (cur.item.xtal_lig_file) $('#xtalrow').style.display = '';
   updateScore(); logAnswer(picked, af3, viewerTrace);
@@ -1532,7 +1566,7 @@ async function toggleAnswer() {
 }
 
 function renderRevealList(picked, af3) {
-  const box = $('#choices'); box.innerHTML = '';
+  const box = $('#answer-choices'); box.innerHTML = '';
   if ((picked && picked.none) || cur.item.source === 'weekly') {
     const selectedNone = !!(picked && picked.none);
     const noneCorrect = !cur.item.has_correct;
@@ -1564,6 +1598,7 @@ function renderRevealList(picked, af3) {
 
 function updateScore() {
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+  $('#score-summary').textContent = `score ${score.you} / ${score.n}`;
   $('#sc-you').textContent = `${score.you} / ${score.n}  (${pct(score.you, score.n)}%)`;
   $('#sc-af3').textContent = `${score.af3} / ${score.n}  (${pct(score.af3, score.n)}%)`;
   const initialOptions = cur
@@ -1586,7 +1621,10 @@ function logAnswer(picked, af3, viewerTrace) {
 }
 
 function syncButtons() {
-  document.querySelectorAll('#mode button').forEach(b => b.classList.toggle('on', b.dataset.m === displayMode));
+  document.querySelectorAll('#mode button').forEach(b => {
+    const on = b.dataset.m === displayMode;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  });
   renderGridPages();
   // Crystal↔AF3 protein toggle: only meaningful for CAMEO (RnP items carry no per-pose AF3 protein).
   // Centralised here so every redraw path keeps it correct regardless of how we got into play.
@@ -1594,7 +1632,10 @@ function syncButtons() {
   $('#mode').style.display = inPlay ? '' : 'none';
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   $('#protmode').style.display = (inPlay && quizSource !== 'rnp' && quizSource !== 'weekly') ? '' : 'none';
-  document.querySelectorAll('#protmode button').forEach(b => b.classList.toggle('on', b.dataset.p === proteinMode));
+  document.querySelectorAll('#protmode button').forEach(b => {
+    const on = b.dataset.p === proteinMode;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  });
   const uc = $('#uncluster');
   uc.textContent = clustered ? 'Uncluster poses' : 'Re-cluster';
   uc.classList.toggle('on', !clustered);
@@ -1602,6 +1643,11 @@ function syncButtons() {
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
   hb.style.display = inPlay ? '' : 'none';
+  hb.setAttribute('aria-pressed', String(showHbonds));
+  const surface = $('#surface');
+  surface.classList.toggle('on', showSurface);
+  surface.style.display = inPlay ? '' : 'none';
+  surface.setAttribute('aria-pressed', String(showSurface));
   const proteinEnsemble = $('#protein-ensemble');
   const canShowProteinEnsemble = inPlay && cur.item.source === 'weekly'
     && ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT && clustered
@@ -1685,9 +1731,11 @@ function finish() {
   researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
+  $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
   $('#hbonds').style.display = 'none'; $('#protein-ensemble').style.display = 'none';
+  $('#surface').style.display = 'none';
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   if (quizSource === 'weekly') {
@@ -1921,7 +1969,8 @@ async function init() {
   if (WEEKLY_ONLY) {
     document.title = 'Pose Quiz · Weekly blind';
     document.querySelectorAll('#quizsrc button').forEach(button => {
-      button.classList.toggle('on', button.dataset.q === 'weekly');
+      const on = button.dataset.q === 'weekly';
+      button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
     });
     renderWeeklyResultsStatus();
   } else {
@@ -1930,11 +1979,23 @@ async function init() {
       quizSource = b.dataset.q;
       if (quizSource === 'weekly') difficulty = 'hard';
       $('#diff').style.display = quizSource === 'weekly' ? 'none' : '';
-      document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x.dataset.d === difficulty));
-      document.querySelectorAll('#quizsrc button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+      document.querySelectorAll('#diff button').forEach(x => {
+        const on = x.dataset.d === difficulty;
+        x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+      });
+      document.querySelectorAll('#quizsrc button').forEach(x => {
+        const on = x === b;
+        x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+      });
+      showIntro();
     });
     document.querySelectorAll('#diff button').forEach(b => b.onclick = () => {
-      difficulty = b.dataset.d; document.querySelectorAll('#diff button').forEach(x => x.classList.toggle('on', x === b)); showIntro();
+      difficulty = b.dataset.d;
+      document.querySelectorAll('#diff button').forEach(x => {
+        const on = x === b;
+        x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on));
+      });
+      showIntro();
     });
   }
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
@@ -1994,6 +2055,15 @@ async function init() {
       syncButtons();
     });
     recordAppEvent('protein_ensemble_toggled');
+  };
+  $('#surface').onclick = async () => {
+    if (interactionBlocked()) return;
+    await viewerRebuild.enqueue(() => {
+      showSurface = !showSurface;
+      if (!cur.revealed) rememberView();
+      syncButtons();
+    });
+    recordAppEvent('surface_toggled');
   };
   $('#lock').onclick = reveal;
   $('#next').onclick = next;

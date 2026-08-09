@@ -675,7 +675,7 @@ test('quiz application loading does not await persistence startup', async () => 
   assert.match(html, /window\.foldariumBackend = createDeferredBackend\(\);/);
   assert.match(html, /window\.foldariumBackend\.attach\(initQuizBackend/);
   assert.match(html, /window\.foldariumBackend\.fail\(e\);/);
-  assert.match(html, /void initPersistence\(\);\s*await loadScript\('app\.js'\);/);
+  assert.match(html, /void initPersistence\(\);\s*await loadScript\('app\.js\?v=\d+'\);/);
   assert.doesNotMatch(html, /await initQuizBackend/);
 });
 

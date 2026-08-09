@@ -243,7 +243,8 @@ test('quiz routes every pre-answer viewer mutation through the coordinator', asy
   assert.match(app, /revealAfterIdle = window\.createRevealAfterIdle\(/);
   assert.match(app, /async function reveal\(\)[\s\S]*?await revealAfterIdle\(\);/);
   assert.equal((onePosePick.match(/viewerRebuild\.enqueue\(/g) || []).length, 3);
-  assert.equal((controls.match(/viewerRebuild\.enqueue\(/g) || []).length, 5);
+  assert.equal((controls.match(/viewerRebuild\.enqueue\(/g) || []).length, 6);
+  assert.match(controls, /\$\('#surface'\)\.onclick[\s\S]*?viewerRebuild\.enqueue\(/);
   assert.equal((keyboard.match(/viewerRebuild\.enqueue\(/g) || []).length, 2);
   assert.doesNotMatch(onePosePick + controls + keyboard, /onePoseRebuild|await buildLayer\(\)/);
 });

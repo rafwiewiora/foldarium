@@ -6,33 +6,46 @@
 <title>Pose Quiz · which predicted pose is correct?</title>
 <link rel="icon" href="data:,"/>
 <style>
+  @font-face{font-family:"Geist Sans";font-style:normal;font-display:swap;font-weight:100 900;
+    src:url("https://cdn.jsdelivr.net/fontsource/fonts/geist:vf@5.3.0/latin-wght-normal.woff2") format("woff2-variations")}
   :root{
-    --bg:#0d1117; --panel:#11161d; --line:#222c38; --ink:#e6edf3; --muted:#8b98a8;
-    --faint:#5a6675; --accent:#3fb6e0; --good:#2BA84A; --bad:#E23B2E; --gold:#F6BD16;
+    --bg:#f3f5f7; --panel:#fff; --line:#dce1e7; --ink:#101418; --muted:#59636f;
+    --faint:#737e8c; --accent:#1687b8; --good:#167c36; --bad:#c93128; --gold:#b77900;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  #side,#viewer-question,#view-options,.badge{font-family:"Geist Sans",ui-sans-serif,system-ui,sans-serif}
+  #side{--ink:#171a1f;--muted:#66717f;--faint:#8a94a3;--line:#e2e6eb;color:var(--ink)}
+  #side h1{font-size:18px;letter-spacing:.065em}
+  #side .sub{font-size:12.5px;color:var(--muted);letter-spacing:.025em;line-height:1.45}
+  #side .q{font-size:11.5px;color:var(--faint);letter-spacing:.075em}
+  #side .choice{font-size:14px;line-height:1.4}
+  #side .setup-label{color:var(--muted)}
+  #side .setup-options small,#side .hint{color:var(--faint)}
+  #side .choice .tag{color:var(--faint)}
+  button,input,summary{font-family:inherit}
   #gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
   #gate[hidden],#wrap[hidden]{display:none!important}
-  #gate .card{width:100%;max-width:340px;background:var(--panel);border:1px solid var(--line);
-    border-radius:12px;padding:22px 20px;display:flex;flex-direction:column;gap:12px}
-  #gate h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
-  #gate .sub{font-size:12px;color:var(--muted);margin:0}
-  #gate input{width:100%;background:#0d1117;border:1px solid var(--line);color:var(--ink);
-    border-radius:8px;padding:11px 12px;font-size:14px}
+  #gate .card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:28px 26px;display:flex;flex-direction:column;gap:16px}
+  #gate h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
+  #gate .sub{font-size:13px;color:var(--muted);margin:0}
+  #gate input{width:100%;background:#fff;border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:12px 13px;font-size:15px}
   #gate input:focus{outline:none;border-color:var(--accent)}
   #gate .err{font-size:12px;color:var(--bad);min-height:1.2em;margin:0}
   #wrap{display:flex;height:100vh}
-  #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
-    padding:18px 18px 14px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+  #side{width:380px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+    padding:26px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
   #stage{flex:1;position:relative;min-width:0;background:#fff}
   #app{position:absolute;inset:0}
+  #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
   #stage.loading-system canvas{opacity:0;transition:none}
   #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
     transition:opacity .14s ease-out}
-  #gridview.on{display:block}
+  #gridview.on{display:block;top:84px}
   #stage.loading-system #gridview{opacity:0;transition:none}
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
     min-height:100%;transition:opacity .14s ease-out}
@@ -64,41 +77,62 @@
     font-size:12px;text-align:center;background:#fff}
   #gridpages{overflow-x:auto}
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
-  h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
-  .sub{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-top:4px}
-  #setup{margin-top:2px}
-  .q{font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
-  .lig{font-size:18px;font-weight:600}
-  .lig small{font-size:12px;color:var(--muted);font-weight:400}
-  .seg{display:flex;flex:none;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-  .seg button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px;font-size:12px;cursor:pointer}
-  .seg button.on{background:#1b2330;color:var(--ink)}
-  .choices{display:flex;flex-direction:column;gap:7px}
-  .choice{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
-    border-radius:8px;cursor:pointer;background:transparent;color:var(--ink);font-size:13px;text-align:left;transition:.12s}
+  h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
+  .sub{font-size:12px;color:var(--muted);letter-spacing:.04em;line-height:1.5;margin-top:5px}
+  #setup{margin-top:4px;display:flex;flex-direction:column;gap:18px}
+  .setup-label{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:7px}
+  .q{font-size:12px;color:var(--faint);font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+  #question-head{display:flex;justify-content:space-between;gap:16px}
+  .lig{font-size:21px;line-height:1.3;font-weight:650}
+  .lig small{font-size:13px;color:var(--muted);font-weight:400}
+  .seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;min-height:48px;background:transparent;color:var(--muted);border:0;padding:10px 12px;
+    font-size:13px;cursor:pointer}
+  .seg button.on{background:#edf3f6;color:var(--ink)}
+  .setup-options button{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left}
+  .setup-options small{font-size:11.5px;color:var(--faint);font-weight:400;line-height:1.3}
+  .instruction{font-size:14px;line-height:1.5;color:var(--muted)}
+  details{background:#fff;border:1px solid var(--line);border-radius:9px}
+  details[hidden]{display:none}
+  summary{min-height:44px;padding:12px 13px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:600}
+  .details-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:10px}
+  button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .choices{display:flex;flex-direction:column;gap:9px}
+  .choice{min-height:44px;display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);
+    border-radius:9px;cursor:pointer;background:#fff;color:var(--ink);font-size:14px;text-align:left;transition:.12s}
   .choice:hover{border-color:var(--accent)}
-  .choice.sel{border-color:var(--accent);background:#15212b}
-  .sw{width:14px;height:14px;border-radius:3px;flex:none;border:1px solid rgba(255,255,255,.25)}
-  .choice .tag{margin-left:auto;font-size:11px;color:var(--muted)}
-  .choice.correct{border-color:var(--good);background:#11261a}
-  .choice.wrong{border-color:var(--bad);background:#261413}
-  .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12px}
-  button.primary{background:var(--accent);color:#06131a;border:0;border-radius:8px;padding:11px;
-    font-size:13px;font-weight:600;cursor:pointer}
+  .choice.sel{border-color:var(--accent);background:#edf8fc;outline:2px solid var(--accent);outline-offset:-2px}
+  .sw{width:15px;height:15px;border-radius:4px;flex:none;border:1px solid rgba(0,0,0,.16)}
+  .choice .tag{margin-left:auto;font-size:12px;color:var(--muted)}
+  .choice.sel .tag{color:var(--accent);font-weight:600}
+  .choice.correct{border-color:var(--good);background:#eef8f1}
+  .choice.wrong{border-color:var(--bad);background:#fff1f0}
+  .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px}
+  #choices{gap:0;background:#f4f5f2;border-top:1px solid #cfd4d8;border-inline:1px solid #cfd4d8}
+  #choices .choice{min-height:58px;padding:0 16px;gap:12px;border:0;border-bottom:1px solid #cfd4d8;
+    border-radius:0;background:var(--choice-color);color:#fff;font-size:15px;font-weight:500;
+    text-shadow:0 1px 2px rgba(0,0,0,.35)}
+  #choices .choice:hover{background:var(--choice-color);border-color:#cfd4d8;filter:brightness(.94)}
+  #choices .choice.sel{background:var(--choice-color);outline:0;box-shadow:inset 4px 0 0 #fff}
+  #choices .sw{display:none}
+  #choices .choice .tag{display:flex;align-items:center;justify-content:flex-end;min-width:22px;color:#fff;
+    text-shadow:0 1px 2px rgba(0,0,0,.45)}
+  #choices .choice .tag::after{content:"→";font-size:21px;font-weight:400;line-height:1}
+  #choices .choice.sel .tag::after{content:""}
+  button.primary{min-height:44px;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:12px 14px;
+    font-size:14px;font-weight:650;cursor:pointer}
   button.primary:disabled{opacity:.4;cursor:default}
-  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;
-    padding:10px;font-size:13px;cursor:pointer}
-  button.ghost.mini{padding:7px 10px;font-size:11.5px;color:var(--muted);align-self:flex-start}
+  button.ghost{min-height:42px;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:9px;
+    padding:11px 13px;font-size:14px;cursor:pointer}
+  button.ghost.mini{padding:8px 11px;font-size:12.5px;color:var(--muted);align-self:flex-start}
   button.ghost.on{border-color:var(--accent);color:var(--accent)}
-  .verdict{font-size:13px;line-height:1.5;padding:10px 12px;border-radius:8px;background:#141b24;border:1px solid var(--line)}
-  .score{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:6px}
+  .verdict{font-size:14px;line-height:1.55;padding:14px;border-radius:9px;background:#f6f8fa;border:1px solid var(--line)}
+  .verdict strong{display:block;font-size:19px;margin-bottom:4px}
+  .score{border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:8px}
   .score .row{display:flex;justify-content:space-between}
   .score b{font-variant-numeric:tabular-nums}
   .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
   .weekly-results .hint{margin-top:6px}
-  .hint{font-size:11px;color:var(--faint);line-height:1.5}
-  .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
-    padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
   dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
     border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
   dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
@@ -125,6 +159,39 @@
   html[data-quiz-mode="weekly"] #leaderboard-link,
   html[data-quiz-mode="weekly"] #score{display:none!important}
   html[data-quiz-mode="weekly"] #weekly-results{display:block}
+  .hint{font-size:12px;color:var(--faint);line-height:1.55}
+  #viewer-question{position:absolute;z-index:30;top:16px;left:16px;display:flex;flex-direction:column;
+    gap:2px;max-width:min(480px,calc(100% - 240px));padding:10px 13px;background:#fffffff2;
+    border:1px solid var(--line);border-radius:9px}
+  #viewer-question .lig{font-size:18px;line-height:1.3}
+  #viewer-question .lig small{font-size:12px}
+  #viewer-question .instruction{font-size:13px;line-height:1.4}
+  .badge{position:absolute;top:14px;right:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
+    padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+  #view-options{position:absolute;z-index:30;left:50%;bottom:16px;transform:translateX(-50%);
+    width:min(760px,calc(100% - 32px));display:flex;justify-content:center;align-items:center;
+    background:transparent;border:0}
+  #view-options[hidden]{display:none}
+  #view-options .details-body{width:100%;max-height:min(48vh,420px);padding:0;display:flex;
+    flex-flow:row wrap;justify-content:center;align-items:center;gap:6px;overflow-y:auto}
+  #view-options .seg{display:contents}
+  #view-options .view-actions{display:contents}
+  #view-options button,#lock{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
+    border:1px solid var(--line);border-radius:9px;font-size:12.5px}
+  #view-options button.on{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #lock:not(:disabled):hover{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #view-options .hint{flex-basis:100%;padding:5px 8px;text-align:center;background:#ffffffeb;border-radius:7px}
+  #wrap.intro #stage{display:none}
+  #wrap.intro #side{width:100%;max-width:480px;margin:auto;border-inline:1px solid var(--line);justify-content:center}
+  @media (max-width: 760px){
+    #wrap{height:100dvh;flex-direction:column}
+    #stage{order:1;flex:1;min-height:50dvh}
+    #side{order:2;width:100%;height:48dvh;max-height:48dvh;padding:20px;gap:14px;border-right:0;border-top:1px solid var(--line)}
+    #wrap.intro #side{height:100dvh;max-height:none;justify-content:center}
+    #viewer-question{top:8px;left:8px;max-width:calc(100% - 16px);padding:8px 10px}
+    #view-options{bottom:8px;width:calc(100% - 16px)}
+    .badge{display:none}
+  }
 </style>
 </head>
 <body>
@@ -152,56 +219,55 @@
     </section>
 
     <div id="setup">
-      <div class="seg" id="quizsrc">
-        <button data-q="cameo" class="on">CAMEO</button>
-        <button data-q="rnp">Runs-n-Poses</button>
-        <button data-q="weekly" disabled>Weekly blind</button>
+      <div>
+        <div class="setup-label">Dataset</div>
+        <div class="seg setup-options" id="quizsrc">
+          <button data-q="cameo" class="on" aria-pressed="true"><span>CAMEO</span><small>AlphaFold3 poses</small></button>
+          <button data-q="rnp" aria-pressed="false"><span>Runs-n-Poses</span><small>Multiple methods</small></button>
+          <button data-q="weekly" aria-pressed="false" disabled><span>Weekly blind</span><small>Prospective predictions</small></button>
+        </div>
       </div>
-      <div class="seg" id="diff" style="margin-top:6px">
-        <button data-d="easy" class="on">Easy</button>
-        <button data-d="hard">Hard</button>
+      <div>
+        <div class="setup-label">Difficulty</div>
+        <div class="seg setup-options" id="diff">
+          <button data-d="easy" class="on" aria-pressed="true"><span>Easy</span><small>A correct pose is included</small></button>
+          <button data-d="hard" aria-pressed="false"><span>Hard</span><small>“None” may be correct</small></button>
+        </div>
       </div>
       <div class="hint" id="setuphint"></div>
     </div>
 
-    <div class="q" id="progress">question — / —</div>
-    <div class="lig" id="ligand">—</div>
+    <div id="question-head">
+      <div class="q" id="progress">question — / —</div>
+      <div class="q" id="score-summary">score 0 / 0</div>
+    </div>
 
-    <div class="seg" id="mode">
-      <button data-m="all" class="on">Show all</button>
-      <button data-m="one">One at a time</button>
-      <button data-m="grid">Grid</button>
-    </div>
-    <div class="seg" id="gridpages" style="display:none;margin-top:6px"></div>
-    <div class="seg" id="protmode" style="margin-top:6px">
-      <button data-p="crystal" class="on">Crystal protein</button>
-      <button data-p="af3">AF3 protein</button>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
-      <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
-    </div>
-    <div class="hint" id="modehint">Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.</div>
-
-    <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
     <div class="choices" id="choices"></div>
 
-    <button class="primary" id="lock" disabled>Lock in answer</button>
-    <div class="verdict" id="verdict" style="display:none"></div>
+    <button class="primary" id="lock" disabled>Submit answer</button>
+    <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
     <button class="primary" id="start" style="display:none">Start quiz →</button>
-    <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
-    <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
-      <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span></label>
     <div style="display:flex;gap:6px">
       <button class="ghost" id="prev" style="display:none;flex:1">← Prev</button>
-      <button class="ghost" id="next" style="display:none;flex:1">Next question →</button>
+      <button class="primary" id="next" style="display:none;flex:1">Next question →</button>
     </div>
 
-    <div class="score" id="score">
-      <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
-      <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
-      <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
-    </div>
+    <details id="answer-details" hidden>
+      <summary>Answer details</summary>
+      <div class="details-body">
+        <div class="choices" id="answer-choices"></div>
+        <div class="hint" id="answer-ai"></div>
+        <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
+        <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
+          <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span>
+        </label>
+        <div class="score" id="score">
+          <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
+          <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
+          <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
+        </div>
+      </div>
+    </details>
     <section class="weekly-results" id="weekly-results" aria-live="polite">
       <div class="q">Results / leaderboard</div>
       <div class="hint" id="weekly-results-copy">Results and vote totals will be available Wednesday.</div>
@@ -209,8 +275,33 @@
   </div>
   <div id="stage">
     <div id="app"></div>
+    <div id="viewer-question">
+      <div class="lig" id="ligand">—</div>
+      <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
+    </div>
     <div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div>
     <div id="gridview"><div id="gridcells"></div></div>
+    <div id="view-options" hidden>
+      <div class="details-body">
+        <div class="seg" id="mode">
+          <button data-m="all" class="on" aria-pressed="true">Show all</button>
+          <button data-m="one" aria-pressed="false">One at a time</button>
+          <button data-m="grid" aria-pressed="false">Grid</button>
+        </div>
+        <div class="seg" id="gridpages" style="display:none"></div>
+        <div class="seg" id="protmode">
+          <button data-p="crystal" class="on" aria-pressed="true">Crystal protein</button>
+          <button data-p="af3" aria-pressed="false">AF3 protein</button>
+        </div>
+        <div class="view-actions">
+          <button class="ghost mini" id="surface" style="display:none">Surface</button>
+          <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+          <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
+          <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
+        </div>
+        <div class="hint" id="modehint"></div>
+      </div>
+    </div>
   </div>
 </div>
 <button class="ghost mini" id="suggestion-open" type="button" disabled hidden>Suggestions</button>
@@ -294,7 +385,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js');
+      await loadScript('app.js?v=2026080901');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

@@ -97,7 +97,7 @@ test('ports Grid UI and balanced session source contracts', async () => {
   assert.doesNotMatch(app, /Choices stay method-anonymous/);
   assert.match(app, /The protein and pocket change with the pose/);
   assert.match(app, /linked viewer per pose cluster/);
-  assert.match(html, /\.seg\{display:flex;flex:none;/);
+  assert.match(html, /\.seg\{display:flex;/);
   assert.match(html, /data-m="grid"/);
 });
 
@@ -836,6 +836,7 @@ test('Weekly Show all rebuilds the exact clicked protein and pocket sticks', asy
     },
     addRep: async () => {},
     addSticks: async (...args) => { stickCalls.push(args); },
+    showSurface: false,
     proteinMode: 'crystal',
     AF3PROT: 2,
     PROT: 1,
@@ -861,49 +862,107 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
   const ghost = { pose_file: 'ghost.pdb', afprotein_file: 'ghost-protein.pdb', color: 7 };
   const sandbox = {
     molstar: { Viewer: { create: async () => ({ plugin, handleResize: () => {}, dispose: () => {} }) } },
-    OPTS: {},
-    gridBuildRevision: 4,
-    configurePlugin: () => {},
-    viewerTraceRecorder: null,
+    OPTS: {}, gridBuildRevision: 4, configurePlugin: () => {}, viewerTraceRecorder: null,
     gridProteinUrls: () => ({ prot: 'rep-protein.pdb', pocket: 'rep-pocket.pdb', color: 3 }),
-    loadStruct: async url => ({ struct: { url } }),
-    addRep: async () => {},
-    addSticks: async () => {},
+    loadStruct: async url => ({ struct: { url } }), addRep: async () => {}, addSticks: async () => {},
     addPose: async (_struct, _color, _plugin, options) => { poseCalls.push(options || null); },
     acceptedChoiceCorrect: choice => choice.correct === true,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
-    GHOST_PROTEIN_ALPHA: 0.12,
-    GHOST_POSE_ALPHA: 0.18,
-    GHOST_POSE_SIZE: 0.14,
+    GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => ({ radius: 1 }),
     buildInteractions: async (...args) => { interactionCalls.push(args); },
     cameraChanges: target => target.canvas3d.camera.changed,
     window: { waitForCameraSettled: async ({ requestReset }) => requestReset() },
-    GOOD: 0x2BA84A,
-    BAD: 0xE23B2E,
+    GOOD: 0x2BA84A, BAD: 0xE23B2E,
   };
   const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
   const cell = {
     entry: { choice: representative, cluster: { members: [representative, ghost] } },
     card: fakeElement(), head: fakeElement('button'), host: fakeElement(),
     viewer: null, plugin: null, disposed: false,
-    spec: {
-      item: { source: 'weekly' }, proteinMode: 'crystal', answer: false,
-      clustered: true, showHbonds: true, showProteinEnsemble: true,
-    },
+    spec: { item: { source: 'weekly' }, proteinMode: 'crystal', answer: false,
+      clustered: true, showHbonds: true, showProteinEnsemble: true, showSurface: false },
   };
 
   await buildGridCell(cell, 4);
 
   assert.deepEqual(JSON.parse(JSON.stringify(poseCalls)), [
-    { alpha: 0.18, sizeFactor: 0.14 },
-    null,
+    { alpha: 0.18, sizeFactor: 0.14 }, null,
   ]);
   assert.equal(interactionCalls.length, 1);
   assert.equal(interactionCalls[0][0], 'rep-pocket.pdb');
   assert.deepEqual(JSON.parse(JSON.stringify(interactionCalls[0][1])), ['rep.pdb']);
   assert.equal(resetCount, 1);
   assert.equal(cell.failed, undefined);
+});
+
+test('Surface mode adds representative protein and ligand surfaces in Grid', async () => {
+  const app = await readApp();
+  const reps = [];
+  const camera = { changed: {}, getSnapshot: () => ({}), setState: () => {} };
+  const plugin = { canvas3d: { camera, requestCameraReset() {} } };
+  const choice = { pose_file: 'pose.pdb', color: 0x5B8FF9 };
+  const sandbox = {
+    molstar: { Viewer: { create: async () => ({ plugin, handleResize() {}, dispose() {} }) } },
+    OPTS: {}, gridBuildRevision: 2, configurePlugin: () => {}, viewerTraceRecorder: null,
+    gridProteinUrls: () => ({ prot: 'protein.pdb', pocket: null, color: 0x9aa6b2 }),
+    loadStruct: async url => ({ struct: { url } }),
+    addRep: async (struct, selector, type, color, alpha) => {
+      reps.push({ url: struct.url, selector, type, color, alpha });
+    },
+    addSticks: async () => {}, addPose: async () => {},
+    acceptedChoiceCorrect: () => false,
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+    GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
+    structureSphere: () => null, buildInteractions: async () => {},
+    cameraChanges: target => target.canvas3d.camera.changed,
+    window: { waitForCameraSettled: async () => {} }, GOOD: 1, BAD: 2,
+  };
+  const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
+  const cell = {
+    entry: { choice, cluster: { members: [choice] } },
+    card: fakeElement(), head: fakeElement('button'), host: fakeElement(),
+    viewer: null, plugin: null, disposed: false,
+    spec: { item: { source: 'weekly' }, proteinMode: 'crystal', answer: false,
+      clustered: true, showHbonds: false, showProteinEnsemble: false, showSurface: true },
+  };
+
+  await buildGridCell(cell, 2);
+
+  assert.deepEqual(reps, [
+    { url: 'protein.pdb', selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+    { url: 'protein.pdb', selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.7 },
+    { url: 'pose.pdb', selector: 'all', type: 'molecular-surface', color: 0x5B8FF9, alpha: 0.7 },
+  ]);
+});
+
+test('Surface toggle rebuilds the canonical protein when disabled', async () => {
+  const app = await readApp();
+  const reps = [];
+  const deleted = [];
+  const sandbox = {
+    showSurface: true, currentProteinKey: null, proteinData: [], proteinMode: 'crystal',
+    PROT: 0x9aa6b2, AF3PROT: 0x8FA8CC,
+    protUrls: () => ({ prot: 'protein.pdb', pocket: null }),
+    weeklyGhostProteinUrls: () => [],
+    loadStruct: async () => ({ data: { ref: 'protein-data' }, struct: {} }),
+    addRep: async (_struct, selector, type, color, alpha) => reps.push({ selector, type, color, alpha }),
+    addSticks: async () => {}, GHOST_PROTEIN_ALPHA: 0.12,
+    plugin: { build: () => ({ delete(ref) { deleted.push(ref); }, async commit() {} }) },
+    JSON,
+  };
+  const buildProtein = evaluateDeclaration(app, 'async function buildProtein(shown)', sandbox);
+
+  await buildProtein([]);
+  sandbox.showSurface = false;
+  await buildProtein([]);
+
+  assert.deepEqual(reps, [
+    { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+    { selector: 'polymer', type: 'molecular-surface', color: 0x9aa6b2, alpha: 0.7 },
+    { selector: 'polymer', type: 'cartoon', color: 0x9aa6b2, alpha: 0.5 },
+  ]);
+  assert.deepEqual(deleted, ['protein-data']);
 });
 
 test('Easy eligibility keeps reachable pick puzzles and drops sets whose clusters hide an option', async () => {
