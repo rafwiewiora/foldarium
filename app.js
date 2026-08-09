@@ -12,7 +12,7 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const METHOD_NAMES = { af3: 'AF3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
 const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
-const GHOST_POSE_ALPHA = 0.12, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
+const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
 // Retain the protein-ensemble experiment for future testing without exposing
 // it in the public quiz. The active Foldarium UI deliberately keeps this off.
 const ENABLE_GHOST_PROTEIN_EXPERIMENT = false;
@@ -155,6 +155,35 @@ function pinCameraAfterSettled(targetPlugin, snapshot, settleMs = 300) {
     }
   });
 }
+// Mol* may publish an automatic focus between awaited structure rebuilds.
+// Re-pin immediately on camera events so the intermediate view never reaches a
+// rendered frame, then keep the existing settled pin as the final safeguard.
+function holdCameraSnapshot(targetPlugin, snapshot) {
+  const camera = targetPlugin?.canvas3d?.camera;
+  if (!camera || !snapshot) return () => {};
+  let released = false, applying = false;
+  let signature = null;
+  try { signature = JSON.stringify(snapshot); } catch (e) {}
+  const apply = () => {
+    if (released || applying) return;
+    try {
+      const current = camera.getSnapshot?.();
+      if (signature !== null && JSON.stringify(current) === signature) return;
+      applying = true;
+      camera.setState?.(snapshot, 0);
+    } catch (e) {
+      // Camera preservation is best-effort and must never break a scene swap.
+    } finally {
+      applying = false;
+    }
+  };
+  const subscription = cameraChanges(targetPlugin)?.subscribe?.(apply) || null;
+  apply();
+  return () => {
+    released = true;
+    subscription?.unsubscribe?.();
+  };
+}
 const structureSphere = selector => selector?.obj?.data?.boundary?.sphere;
 function focusLigandSpheres(targetPlugin, spheres) {
   const valid = spheres.filter(Boolean);
@@ -171,7 +200,9 @@ function decorateClusterMembers(members, label) {
   });
 }
 function clusteredPoseLayers(choices, methodScoped = false) {
-  if (!clustered || cur.revealed && cur.showAnswer) {
+  // Show all compares one clean representative per cluster. One-at-a-time and
+  // Grid retain faint member poses so users can inspect within-cluster spread.
+  if (!clustered || displayMode === 'all' || cur.revealed && cur.showAnswer) {
     return choices.map(choice => ({ choice, ghost: false }));
   }
   return choices.flatMap(choice => {
@@ -523,32 +554,37 @@ async function buildHbonds(poseUrls) {
 async function buildSingleLayer() {     // only the moving ligand poses (+ crystal truth on reveal)
   let preservedCamera = null;
   try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
-  await buildProtein();                 // swap protein only if it changed (AF3 one-at-a-time, or toggle)
-  await clearLayer();
-  const ligandSpheres = [];
-  const answer = cur.revealed && cur.showAnswer;        // green/red reveal vs the anonymised "my view"
-  const vis = visibleChoices();
-  const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
-  for (const layer of clusteredPoseLayers(shown)) {
-    const c = layer.choice;
-    const s = await loadStruct(c.pose_file, 'pdb');
-    layerData.push(s.data);
-    await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color, plugin,
-      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
-    if (!layer.ghost) ligandSpheres.push(structureSphere(s.struct));
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    await buildProtein();               // swap protein only if it changed (AF3 one-at-a-time, or toggle)
+    await clearLayer();
+    const ligandSpheres = [];
+    const answer = cur.revealed && cur.showAnswer;      // green/red reveal vs the anonymised "my view"
+    const vis = visibleChoices();
+    const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
+    for (const layer of clusteredPoseLayers(shown)) {
+      const c = layer.choice;
+      const s = await loadStruct(c.pose_file, 'pdb');
+      layerData.push(s.data);
+      await addPose(s.struct, answer ? (c.correct ? GOOD : BAD) : c.color, plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
+      if (!layer.ghost) ligandSpheres.push(structureSphere(s.struct));
+    }
+    // crystal reference (true pose) — only after reveal, when toggled on
+    const hbondPoses = shown.map(c => c.pose_file);
+    if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
+      const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
+      layerData.push(xl.data);
+      await addPose(xl.struct, XTAL);
+      ligandSpheres.push(structureSphere(xl.struct));
+      hbondPoses.push(cur.item.xtal_lig_file); // also show the crystal reference's H-bonds when visible
+    }
+    await buildHbonds(hbondPoses);      // H-bond overlay for whatever pose(s) are currently shown
+    await pinCameraAfterSettled(plugin, preservedCamera);
+    return ligandSpheres;
+  } finally {
+    releaseCamera();
   }
-  // crystal reference (true pose) — only after reveal, when toggled on
-  const hbondPoses = shown.map(c => c.pose_file);
-  if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
-    const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
-    layerData.push(xl.data);
-    await addPose(xl.struct, XTAL);
-    ligandSpheres.push(structureSphere(xl.struct));
-    hbondPoses.push(cur.item.xtal_lig_file);   // also show the crystal reference's H-bonds when it's visible
-  }
-  await buildHbonds(hbondPoses);        // H-bond overlay for whatever pose(s) are currently shown
-  await pinCameraAfterSettled(plugin, preservedCamera);
-  return ligandSpheres;
 }
 async function buildLayer() {
   if (displayMode === 'grid') {
