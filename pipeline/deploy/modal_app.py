@@ -18,6 +18,7 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,18 @@ except ModuleNotFoundError:  # pragma: no cover - exercised without deployment e
 APP_NAME = "foldarium-predictions"
 WEEKLY_SCORING_APP_NAME = "foldarium-weekly-scoring"
 WEEKLY_SCORING_FUNCTION_NAME = "score_pose"
+PUBLIC_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+
+
+def _weekly_public_bucket(explicit: str | None = None) -> str:
+    value = explicit if explicit is not None else os.environ.get(
+        "FOLDARIUM_PUBLIC_QUIZ_BUCKET"
+    )
+    if not isinstance(value, str) or not PUBLIC_BUCKET_NAME.fullmatch(value):
+        raise ValueError(
+            "public quiz bucket must be an explicit safe Storage bucket name"
+        )
+    return value
 
 # Official OpenFold3 0.4-pixi (OpenFold3 0.4.4) OCI index. Keep this immutable;
 # upgrading the model runtime should be an explicit, reviewed change with a new
@@ -692,6 +705,7 @@ if modal is not None:
         open_round: bool = False,
         include_pose_metrics: bool = False,
         round_environment: str = "production",
+        public_quiz_bucket: str | None = None,
     ) -> dict[str, Any]:
         """Assemble complete method pairs and optionally open the blind round."""
 
@@ -713,11 +727,12 @@ if modal is not None:
         if not complete:
             raise RuntimeError("campaign has no complete two-method target pairs")
 
-        public_bucket = os.environ.get(PUBLIC_QUIZ_BUCKET_ENV)
-        if not public_bucket:
+        try:
+            public_bucket = _weekly_public_bucket(public_quiz_bucket)
+        except ValueError as exc:
             raise SupabaseConfigurationError(
-                f"missing required environment variable: {PUBLIC_QUIZ_BUCKET_ENV}"
-            )
+                f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+            ) from exc
         public_environment = dict(os.environ)
         public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
         public = SupabaseCoordinator.from_env(public_environment)

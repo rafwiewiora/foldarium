@@ -86,6 +86,18 @@ class TransientMsaRetrySubmissionTests(unittest.TestCase):
             },
         )
 
+    def test_manual_weekly_assembly_accepts_only_an_explicit_safe_public_bucket(self) -> None:
+        module = self.deployment_module()
+        self.assertEqual(
+            module._weekly_public_bucket("foldarium-weekly-quiz"),
+            "foldarium-weekly-quiz",
+        )
+        for invalid in ("", "UPPERCASE", "../private", "bucket/name"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "safe Storage bucket"
+            ):
+                module._weekly_public_bucket(invalid)
+
 
 class WednesdayRevealDeploymentTests(unittest.TestCase):
     @staticmethod
