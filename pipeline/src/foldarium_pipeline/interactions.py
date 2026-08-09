@@ -22,6 +22,7 @@ VICINITY_CUTOFF_ANGSTROM = 6.0
 PROTEIN_STANDARDIZATION_POLICY = (
     "prolif-molecule-standardizer-standard-amino-acids/v1"
 )
+PROTEIN_PARSE_POLICY = "rdkit-pdb-unsanitized-proximity-connectivity/v1"
 
 # ProLIF names these according to the ligand's role.  The public metric collapses
 # the direction into one unique-protein-residue H-bond count; private provenance
@@ -96,11 +97,28 @@ def _residue_label(value: Any) -> str:
     return label
 
 
-def _hbond_summary(prolif: Any, protein_path: Path, ligand: Any) -> dict[str, Any]:
+def _hbond_summary(
+    prolif: Any,
+    Chem: Any,
+    protein_path: Path,
+    ligand: Any,
+) -> dict[str, Any]:
     """Run ProLIF's implicit-H H-bond detectors with their default geometry checks."""
 
     try:
-        protein = prolif.io.MoleculeStandardizer()(protein_path)
+        # RDKit's default PDB sanitization can reject cofolded receptors when
+        # proximity-guessed bonds span a steric clash. ProLIF immediately strips
+        # and replaces each residue's bonds from standard templates, so defer
+        # sanitization until that authoritative residue-standardization step.
+        raw_protein = Chem.MolFromPDBFile(
+            str(protein_path),
+            sanitize=False,
+            removeHs=False,
+            proximityBonding=True,
+        )
+        if raw_protein is None:
+            raise ValueError("RDKit could not parse predicted receptor coordinates")
+        protein = prolif.io.MoleculeStandardizer()(raw_protein)
         ligand_molecule = prolif.Molecule.from_rdkit(
             ligand,
             resname="LIG",
@@ -115,8 +133,10 @@ def _hbond_summary(prolif: Any, protein_path: Path, ligand: Any) -> dict[str, An
         )
         ifp = fingerprint.generate(ligand_molecule, protein, metadata=True)
     except Exception as exc:
+        detail = str(exc).replace("\n", " ").strip()[:500]
         raise InteractionFingerprintError(
-            "ProLIF could not standardize or fingerprint the exact predicted complex"
+            "ProLIF could not standardize or fingerprint the exact predicted "
+            f"complex: {type(exc).__name__}: {detail or 'no detail'}"
         ) from exc
     return summarize_ifp(ifp)
 
@@ -212,7 +232,7 @@ def calculate_interaction_summary(
     ligand.RemoveAllConformers()
     ligand.AddConformer(conformer, assignId=True)
 
-    summary = _hbond_summary(prolif, path, ligand)
+    summary = _hbond_summary(prolif, Chem, path, ligand)
 
     return {
         "schema_version": 1,
@@ -220,6 +240,7 @@ def calculate_interaction_summary(
         "engine_version": versions["prolif"],
         "rdkit_version": versions["rdkit"],
         "policy": INTERACTION_POLICY,
+        "protein_parse_policy": PROTEIN_PARSE_POLICY,
         "protein_standardization_policy": PROTEIN_STANDARDIZATION_POLICY,
         "vicinity_cutoff_angstrom": VICINITY_CUTOFF_ANGSTROM,
         "implicit_hydrogens": True,
@@ -269,6 +290,7 @@ __all__ = [
     "INTERACTION_TYPES",
     "PROLIF_VERSION",
     "PROTEIN_STANDARDIZATION_POLICY",
+    "PROTEIN_PARSE_POLICY",
     "RDKIT_VERSION",
     "VICINITY_CUTOFF_ANGSTROM",
     "InteractionFingerprintError",

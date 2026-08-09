@@ -10,6 +10,7 @@ from foldarium_pipeline import interactions as interactions_module
 from foldarium_pipeline.interactions import (
     INTERACTION_POLICY,
     INTERACTION_TYPES,
+    PROTEIN_PARSE_POLICY,
     PROTEIN_STANDARDIZATION_POLICY,
     InteractionFingerprintError,
     _coordinates,
@@ -82,6 +83,10 @@ class InteractionSummaryTests(unittest.TestCase):
         self.assertEqual(
             PROTEIN_STANDARDIZATION_POLICY,
             "prolif-molecule-standardizer-standard-amino-acids/v1",
+        )
+        self.assertEqual(
+            PROTEIN_PARSE_POLICY,
+            "rdkit-pdb-unsanitized-proximity-connectivity/v1",
         )
         self.assertEqual(
             INTERACTION_TYPES,
@@ -196,13 +201,30 @@ class InteractionSummaryTests(unittest.TestCase):
             ),
             Fingerprint=FakeFingerprint,
         )
+        raw_protein = object()
+        fake_chem = SimpleNamespace(
+            MolFromPDBFile=lambda path, **kwargs: calls.setdefault(
+                "pdb", (path, kwargs)
+            ) and raw_protein
+        )
         path = Path("protein.pdb")
         ligand = object()
 
-        summary = _hbond_summary(fake_prolif, path, ligand)
+        summary = _hbond_summary(fake_prolif, fake_chem, path, ligand)
 
         self.assertEqual(summary["count"], 1)
-        self.assertEqual(calls["protein_path"], path)
+        self.assertEqual(calls["protein_path"], raw_protein)
+        self.assertEqual(
+            calls["pdb"],
+            (
+                "protein.pdb",
+                {
+                    "sanitize": False,
+                    "removeHs": False,
+                    "proximityBonding": True,
+                },
+            ),
+        )
         self.assertEqual(calls["ligand"][1], {"resname": "LIG", "resnumber": 1, "chain": "X"})
         self.assertEqual(
             calls["fingerprint"],
