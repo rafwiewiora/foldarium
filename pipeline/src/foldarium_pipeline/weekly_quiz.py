@@ -25,7 +25,7 @@ from .evaluation import (
 )
 from .quiz import build_blind_manifest, manifest_sha256
 
-WEEKLY_QUIZ_STAGE_VERSION = 3
+WEEKLY_QUIZ_STAGE_VERSION = 4
 POCKET_RADIUS_ANGSTROM = 5.0
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
@@ -38,7 +38,7 @@ RECEPTOR_ANCHOR_POLICY = "minimum-total-pairwise-receptor-rmsd-medoid/v1"
 LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
 LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
-PROLIF_COUNT_METRIC = "prolif_unique_residue_interaction_type"
+PROLIF_COUNT_METRIC = "prolif_hbond_residue_count"
 WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 
 

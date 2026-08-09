@@ -10,11 +10,10 @@ from foldarium_pipeline import interactions as interactions_module
 from foldarium_pipeline.interactions import (
     INTERACTION_POLICY,
     INTERACTION_TYPES,
-    VDW_RADII_PRESET,
+    PROTEIN_STANDARDIZATION_POLICY,
     InteractionFingerprintError,
     _coordinates,
-    _protein_vicinity_records,
-    _vdw_summary,
+    _hbond_summary,
     summarize_ifp,
 )
 
@@ -23,40 +22,41 @@ class InteractionSummaryTests(unittest.TestCase):
     def test_counts_unique_residue_interaction_bits_and_reports_types(self) -> None:
         ifp = {
             ("LIG1.X", "ASP10.A"): {
-                "VdWContact": ({"distance": 3.4}, {"distance": 3.5}),
+                "ImplicitHBAcceptor": ({"distance": 3.4}, {"distance": 3.5}),
+                "ImplicitHBDonor": ({"distance": 3.2},),
             },
             ("LIG1.X", "PHE20.A"): {
-                "VdWContact": ({"distance": 3.7},),
+                "ImplicitHBDonor": ({"distance": 3.3},),
             },
         }
 
         summary = summarize_ifp(ifp)
 
-        # Multiple atom-level contacts are one boolean fingerprint bit for the
-        # same residue and interaction type.
+        # Multiple atom-level occurrences and donor/acceptor directions collapse
+        # to one public count for the same protein residue.
         self.assertEqual(summary["count"], 2)
         self.assertEqual(summary["interacting_residue_count"], 2)
         self.assertEqual(
             summary["by_type"],
-            {"VdWContact": 2},
+            {"ImplicitHBAcceptor": 1, "ImplicitHBDonor": 2},
         )
         self.assertEqual(
             summary["residues"],
             [
                 {
                     "id": "ASP10.A",
-                    "types": ["VdWContact"],
+                    "types": ["ImplicitHBAcceptor", "ImplicitHBDonor"],
                 },
                 {
                     "id": "PHE20.A",
-                    "types": ["VdWContact"],
+                    "types": ["ImplicitHBDonor"],
                 },
             ],
         )
 
     def test_ignores_empty_metadata_and_empty_residue_rows(self) -> None:
         self.assertEqual(
-            summarize_ifp({("LIG1.X", "ALA1.A"): {"VdWContact": ()}}),
+            summarize_ifp({("LIG1.X", "ALA1.A"): {"ImplicitHBDonor": ()}}),
             {
                 "count": 0,
                 "interacting_residue_count": 0,
@@ -77,10 +77,16 @@ class InteractionSummaryTests(unittest.TestCase):
     def test_contract_is_fixed_and_heavy_atom_aware(self) -> None:
         self.assertEqual(
             INTERACTION_POLICY,
-            "prolif-vdwcontact-distance-unique-residue-pdb/v1",
+            "prolif-implicit-hbond-unique-protein-residue/v1",
         )
-        self.assertEqual(VDW_RADII_PRESET, "rdkit")
-        self.assertEqual(INTERACTION_TYPES, ("VdWContact",))
+        self.assertEqual(
+            PROTEIN_STANDARDIZATION_POLICY,
+            "prolif-molecule-standardizer-standard-amino-acids/v1",
+        )
+        self.assertEqual(
+            INTERACTION_TYPES,
+            ("ImplicitHBAcceptor", "ImplicitHBDonor"),
+        )
 
     def test_calculator_builds_exact_pose_molecules_and_returns_provenance(self) -> None:
         class FakeMol:
@@ -133,17 +139,14 @@ class InteractionSummaryTests(unittest.TestCase):
                 ),
                 patch.object(
                     interactions_module,
-                    "_protein_vicinity_records",
-                    return_value=[(("A", "   7", "", "TYR"), "C", (1.0, 2.0, 3.0))],
-                ),
-                patch.object(
-                    interactions_module,
-                    "_vdw_summary",
+                    "_hbond_summary",
                     return_value={
                         "count": 1,
                         "interacting_residue_count": 1,
-                        "by_type": {"VdWContact": 1},
-                        "residues": [{"id": "TYR7.A", "types": ["VdWContact"]}],
+                        "by_type": {"ImplicitHBDonor": 1},
+                        "residues": [
+                            {"id": "TYR7.A", "types": ["ImplicitHBDonor"]}
+                        ],
                     },
                 ),
             ):
@@ -158,75 +161,59 @@ class InteractionSummaryTests(unittest.TestCase):
         self.assertEqual(summary["engine_version"], "2.2.0")
         self.assertEqual(summary["rdkit_version"], "2026.3.4")
         self.assertEqual(summary["policy"], INTERACTION_POLICY)
-        self.assertEqual(summary["vdw_radii_preset"], "rdkit")
+        self.assertTrue(summary["implicit_hydrogens"])
+        self.assertEqual(summary["geometry_checks"], "prolif-defaults")
+        self.assertFalse(summary["include_water"])
         self.assertEqual(ligand.conformers[0][0].positions, [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)])
 
-    def test_vicinity_prefilter_keeps_complete_nearby_residues(self) -> None:
-        def atom_line(serial, atom_name, residue, residue_number, x):
-            return (
-                f"ATOM  {serial:5d} {atom_name:<4} {residue:>3} A{residue_number:4d}    "
-                f"{x:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00 20.00           C"
-            )
+    def test_hbond_runner_standardizes_protein_and_uses_implicit_geometry_checked_detectors(self) -> None:
+        calls = {}
+        protein = object()
+        ligand_molecule = object()
+        ifp = {
+            ("LIG1.X", "ASP10.A"): {"ImplicitHBAcceptor": ({},)},
+        }
 
-        with TemporaryDirectory() as temporary:
-            protein_path = Path(temporary, "protein.pdb")
-            protein_path.write_text(
-                "\n".join(
-                    [
-                        atom_line(1, "CA", "ALA", 1, 0.0),
-                        atom_line(2, "CB", "ALA", 1, 20.0),
-                        atom_line(3, "CA", "GLY", 2, 30.0),
-                        "END",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            records = _protein_vicinity_records(
-                protein_path,
-                [(1.0, 0.0, 0.0)],
-            )
+        class FakeStandardizer:
+            def __call__(self, path):
+                calls["protein_path"] = path
+                return protein
 
-        # Atom 2 is far away but retained because atom 1 in the same complete
-        # residue is within the ProLIF vicinity; only GLY2 is excluded.
-        self.assertEqual(len(records), 2)
-        self.assertEqual({record[0] for record in records}, {("A", "   1", " ", "ALA")})
-        self.assertEqual({record[1] for record in records}, {"C"})
-        self.assertEqual({record[2] for record in records}, {(0.0, 0.0, 0.0), (20.0, 0.0, 0.0)})
+        class FakeFingerprint:
+            def __init__(self, **kwargs):
+                calls["fingerprint"] = kwargs
 
-    def test_vdw_summary_uses_prolif_radii_and_counts_unique_residues(self) -> None:
-        class FakeAtom:
-            def __init__(self, symbol):
-                self.symbol = symbol
+            def generate(self, ligand, receptor, metadata=False):
+                calls["generate"] = (ligand, receptor, metadata)
+                return ifp
 
-            def GetSymbol(self):
-                return self.symbol
-
-        class FakeLigand:
-            def GetAtoms(self):
-                return [FakeAtom("C"), FakeAtom("N")]
-
-        detector = SimpleNamespace(
-            tolerance=0.0,
-            _get_radii_sum=lambda ligand, protein: {
-                ("C", "O"): 3.0,
-                ("N", "O"): 2.5,
-            }[(ligand, protein)],
+        fake_prolif = SimpleNamespace(
+            io=SimpleNamespace(MoleculeStandardizer=FakeStandardizer),
+            Molecule=SimpleNamespace(
+                from_rdkit=lambda ligand, **kwargs: calls.setdefault(
+                    "ligand", (ligand, kwargs)
+                ) and ligand_molecule
+            ),
+            Fingerprint=FakeFingerprint,
         )
-        records = [
-            (("A", "  10", " ", "ASP"), "O", (2.9, 0.0, 0.0)),
-            (("A", "  10", " ", "ASP"), "O", (2.8, 0.0, 0.0)),
-            (("A", "  11", " ", "GLU"), "O", (20.0, 0.0, 0.0)),
-        ]
-        with patch.object(interactions_module, "_vdw_detector", return_value=detector):
-            summary = _vdw_summary(
-                records,
-                FakeLigand(),
-                [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
-            )
+        path = Path("protein.pdb")
+        ligand = object()
+
+        summary = _hbond_summary(fake_prolif, path, ligand)
 
         self.assertEqual(summary["count"], 1)
-        self.assertEqual(summary["by_type"], {"VdWContact": 1})
-        self.assertEqual(summary["residues"], [{"id": "ASP10.A", "types": ["VdWContact"]}])
+        self.assertEqual(calls["protein_path"], path)
+        self.assertEqual(calls["ligand"][1], {"resname": "LIG", "resnumber": 1, "chain": "X"})
+        self.assertEqual(
+            calls["fingerprint"],
+            {
+                "interactions": ["HBAcceptor", "HBDonor"],
+                "count": False,
+                "vicinity_cutoff": 6.0,
+                "implicit_hydrogens": True,
+            },
+        )
+        self.assertEqual(calls["generate"], (ligand_molecule, protein, True))
 
     def test_pose_file_adapter_passes_exact_coordinates_to_calculator(self) -> None:
         class FakePosition:

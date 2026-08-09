@@ -188,14 +188,14 @@ def build_blind_manifest(
                 )
                 value = count.get("value")
                 if (
-                    count.get("metric") != "prolif_unique_residue_interaction_type"
+                    count.get("metric") != "prolif_hbond_residue_count"
                     or isinstance(value, bool)
                     or not isinstance(value, int)
                     or value < 0
                 ):
                     raise QuizManifestError("choice.interaction_count is invalid")
                 public_choice["interaction_count"] = {
-                    "metric": "prolif_unique_residue_interaction_type",
+                    "metric": "prolif_hbond_residue_count",
                     "value": value,
                     "policy": _nonempty(
                         count.get("policy"), "choice.interaction_count.policy"

@@ -21,7 +21,12 @@ function weeklyPoseEvidence(choice) {
   const sminaValue = smina?.metric === 'smina_affinity' && Number.isFinite(smina.value)
     ? ` · smina ${smina.value.toFixed(1)} kcal/mol`
     : '';
-  return `${methodName(choice._method)}${confidenceValue}${sminaValue}`;
+  const interactions = choice._interactionCount;
+  const interactionValue = interactions?.metric === 'prolif_hbond_residue_count'
+      && Number.isInteger(interactions.value) && interactions.value >= 0
+    ? ` · ProLIF H-bonds ${interactions.value}`
+    : '';
+  return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
 }
 function weeklyLigandPlddt(choice) {
   const confidence = choice?._confidence;

@@ -441,26 +441,26 @@ test('Weekly exposes method-specific ligand confidence for every raw pose', asyn
     _method: 'openfold3',
     _confidence: { metric: 'ligand_plddt', value: 82.54, scale_max: 100 },
     _sminaScore: { metric: 'smina_affinity', value: -7.14 },
-    _interactionCount: { metric: 'prolif_unique_residue_interaction_type', value: 9 },
+    _interactionCount: { metric: 'prolif_hbond_residue_count', value: 3 },
   };
   const boltz = {
     label: 'D-2',
     _method: 'boltz2',
     _confidence: { metric: 'ligand_plddt', value: 74.96, scale_max: 100 },
     _sminaScore: { metric: 'smina_affinity', value: -6.26 },
-    _interactionCount: { metric: 'prolif_unique_residue_interaction_type', value: 7 },
+    _interactionCount: { metric: 'prolif_hbond_residue_count', value: 1 },
   };
   const entry = { choice: openfold, cluster: { members: [openfold, boltz] } };
 
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol ; '
-      + 'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · ProLIF H-bonds 3 ; '
+      + 'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol · ProLIF H-bonds 1',
   );
   sandbox.clustered = false;
   assert.equal(
     weeklyEntryEvidence(entry),
-    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol',
+    'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · ProLIF H-bonds 3',
   );
   assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
   assert.match(app, /_confidence: choice\.confidence \|\| null/);

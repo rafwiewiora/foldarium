@@ -309,7 +309,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 },
                 "interaction_summary": {
                     "engine": "prolif",
-                    "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                    "policy": "prolif-implicit-hbond-unique-protein-residue/v1",
                     "count": 8,
                 },
             }
@@ -323,7 +323,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 3)
+            self.assertEqual(stage["schema_version"], 4)
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
             self.assertEqual(len(scoring_calls), 2)
@@ -344,6 +344,10 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 )
                 self.assertEqual(choice["smina_score"]["value"], -7.25)
                 self.assertEqual(choice["interaction_count"]["value"], 8)
+                self.assertEqual(
+                    choice["interaction_count"]["metric"],
+                    "prolif_hbond_residue_count",
+                )
             self.assertEqual(stage["items"][0]["clustering"]["cluster_count"], 1)
             self.assertEqual(
                 sum(choice["is_rep"] for choice in stage["items"][0]["choices"]),

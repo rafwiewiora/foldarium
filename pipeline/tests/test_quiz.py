@@ -39,9 +39,9 @@ def source_items() -> list[dict]:
                         "scoring_function": "vina",
                     },
                     "interaction_count": {
-                        "metric": "prolif_unique_residue_interaction_type",
+                        "metric": "prolif_hbond_residue_count",
                         "value": 9,
-                        "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                        "policy": "prolif-implicit-hbond-unique-protein-residue/v1",
                     },
                     "pose_uri": "supabase://bucket/of3-1.pdb",
                 },
@@ -65,9 +65,9 @@ def source_items() -> list[dict]:
                         "scoring_function": "vina",
                     },
                     "interaction_count": {
-                        "metric": "prolif_unique_residue_interaction_type",
+                        "metric": "prolif_hbond_residue_count",
                         "value": 7,
-                        "policy": "prolif-heavy-atom-unique-residue-type/v1",
+                        "policy": "prolif-implicit-hbond-unique-protein-residue/v1",
                     },
                     "pose_uri": "supabase://bucket/boltz-1.pdb",
                 },
@@ -88,7 +88,7 @@ class BlindManifestTests(unittest.TestCase):
         self.assertIn("boltz2", encoded)
         self.assertIn("ligand_plddt", encoded)
         self.assertIn("smina_affinity", encoded)
-        self.assertIn("prolif_unique_residue_interaction_type", encoded)
+        self.assertIn("prolif_hbond_residue_count", encoded)
         self.assertNotIn("run-of3", encoded)
         self.assertEqual(len(blind["items"][0]["choices"]), 2)
         self.assertEqual(private["blind_manifest_sha256"], manifest_sha256(blind))

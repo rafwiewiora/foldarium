@@ -1,4 +1,4 @@
-"""Reproducible, heavy-atom ProLIF summaries for exact predicted poses.
+"""Reproducible ProLIF hydrogen-bond summaries for exact predicted poses.
 
 The weekly models do not reliably contain explicit hydrogens.  ProLIF 2.2's
 implicit-hydrogen interactions make it possible to calculate one comparable
@@ -17,16 +17,16 @@ from typing import Any, Iterable, Mapping, Sequence
 
 PROLIF_VERSION = "2.2.0"
 RDKIT_VERSION = "2026.3.4"
-INTERACTION_POLICY = "prolif-vdwcontact-distance-unique-residue-pdb/v1"
+INTERACTION_POLICY = "prolif-implicit-hbond-unique-protein-residue/v1"
 VICINITY_CUTOFF_ANGSTROM = 6.0
-VDW_RADII_PRESET = "rdkit"
-PROTEIN_PARSER_POLICY = "pdb-fixed-columns-elements-and-coordinates/v1"
+PROTEIN_STANDARDIZATION_POLICY = (
+    "prolif-molecule-standardizer-standard-amino-acids/v1"
+)
 
-# AI-predicted receptors contain no explicit hydrogens and can contain metals or
-# non-standard residues.  A VdW-only ProLIF fingerprint is the reproducible
-# intersection available for every pose: it requires only elements and exact
-# coordinates, and avoids inventing hydrogens or guessing protein bond orders.
-INTERACTION_TYPES = ("VdWContact",)
+# ProLIF names these according to the ligand's role.  The public metric collapses
+# the direction into one unique-protein-residue H-bond count; private provenance
+# retains the directional breakdown.
+INTERACTION_TYPES = ("ImplicitHBAcceptor", "ImplicitHBDonor")
 
 
 class InteractionFingerprintError(RuntimeError):
@@ -44,17 +44,6 @@ def _dependencies() -> tuple[Any, Any, Any]:
             "pipeline 'interactions' extra"
         ) from exc
     return prolif, Chem, Point3D
-
-
-def _vdw_detector() -> Any:
-    try:
-        from prolif.interactions import VdWContact
-    except (ImportError, ModuleNotFoundError) as exc:
-        raise InteractionFingerprintError(
-            "interaction scoring requires ProLIF; install the pipeline "
-            "'interactions' extra"
-        ) from exc
-    return VdWContact(preset=VDW_RADII_PRESET)
 
 
 def _installed_versions() -> dict[str, str]:
@@ -107,139 +96,35 @@ def _residue_label(value: Any) -> str:
     return label
 
 
-def _protein_vicinity_records(
-    path: Path,
-    ligand_coordinates: Sequence[tuple[float, float, float]],
-) -> list[tuple[tuple[str, str, str, str], str, tuple[float, float, float]]]:
-    """Keep complete protein residues having an atom within the 6 A vicinity.
-
-    ProLIF's generic fingerprint runner otherwise has to visit every residue in
-    a full predicted complex for every pose. This filters fixed-width PDB atom
-    records before RDKit parsing, retaining every atom of every nearby residue.
-    It is an exact prefilter for ProLIF's own ``vicinity_cutoff``: no residue
-    outside the cutoff can yield a configured interaction.
-    """
+def _hbond_summary(prolif: Any, protein_path: Path, ligand: Any) -> dict[str, Any]:
+    """Run ProLIF's implicit-H H-bond detectors with their default geometry checks."""
 
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError) as exc:
+        protein = prolif.io.MoleculeStandardizer()(protein_path)
+        ligand_molecule = prolif.Molecule.from_rdkit(
+            ligand,
+            resname="LIG",
+            resnumber=1,
+            chain="X",
+        )
+        fingerprint = prolif.Fingerprint(
+            interactions=["HBAcceptor", "HBDonor"],
+            count=False,
+            vicinity_cutoff=VICINITY_CUTOFF_ANGSTROM,
+            implicit_hydrogens=True,
+        )
+        ifp = fingerprint.generate(ligand_molecule, protein, metadata=True)
+    except Exception as exc:
         raise InteractionFingerprintError(
-            "could not read the pose-specific predicted protein"
+            "ProLIF could not standardize or fingerprint the exact predicted complex"
         ) from exc
-
-    cutoff_squared = VICINITY_CUTOFF_ANGSTROM * VICINITY_CUTOFF_ANGSTROM
-    atom_records: list[
-        tuple[tuple[str, str, str, str], str, tuple[float, float, float]]
-    ] = []
-    nearby_residues: set[tuple[str, str, str, str]] = set()
-    for line_number, line in enumerate(lines, start=1):
-        if not line.startswith(("ATOM  ", "HETATM")):
-            continue
-        if len(line) < 54:
-            raise InteractionFingerprintError(
-                f"predicted protein has a truncated atom record at line {line_number}"
-            )
-        residue_key = (line[21:22], line[22:26], line[26:27], line[17:20])
-        try:
-            xyz = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
-        except ValueError as exc:
-            raise InteractionFingerprintError(
-                f"predicted protein has invalid coordinates at line {line_number}"
-            ) from exc
-        if not all(math.isfinite(axis) for axis in xyz):
-            raise InteractionFingerprintError(
-                f"predicted protein has non-finite coordinates at line {line_number}"
-            )
-        element = line[76:78].strip() if len(line) >= 78 else ""
-        if not element or not element.isalpha() or len(element) > 2:
-            raise InteractionFingerprintError(
-                f"predicted protein has no valid PDB element at line {line_number}"
-            )
-        element = element[0].upper() + element[1:].lower()
-        atom_records.append((residue_key, element, xyz))
-        if any(
-            (xyz[0] - ligand[0]) ** 2
-            + (xyz[1] - ligand[1]) ** 2
-            + (xyz[2] - ligand[2]) ** 2
-            <= cutoff_squared
-            for ligand in ligand_coordinates
-        ):
-            nearby_residues.add(residue_key)
-
-    if not atom_records:
-        raise InteractionFingerprintError(
-            "pose-specific predicted protein has no PDB atom records"
-        )
-    if not nearby_residues:
-        return []
-    return [record for record in atom_records if record[0] in nearby_residues]
-
-
-def _pdb_residue_label(key: tuple[str, str, str, str]) -> str:
-    chain, residue_number, insertion_code, residue_name = key
-    name = residue_name.strip()
-    number = residue_number.strip()
-    insertion = insertion_code.strip()
-    chain_id = chain.strip()
-    if not name or not number:
-        raise InteractionFingerprintError(
-            "predicted protein has invalid PDB residue metadata"
-        )
-    return f"{name}{number}{insertion}{'.' + chain_id if chain_id else ''}"
-
-
-def _vdw_summary(
-    protein_records: Sequence[
-        tuple[tuple[str, str, str, str], str, tuple[float, float, float]]
-    ],
-    ligand: Any,
-    ligand_coordinates: Sequence[tuple[float, float, float]],
-) -> dict[str, Any]:
-    """Apply ProLIF's pinned VdWContact distance definition exactly."""
-
-    detector = _vdw_detector()
-    ligand_elements = [atom.GetSymbol() for atom in ligand.GetAtoms()]
-    if len(ligand_elements) != len(ligand_coordinates):
-        raise InteractionFingerprintError(
-            "ligand element count does not match predicted coordinates"
-        )
-    contacting: set[str] = set()
-    for residue_key, protein_element, protein_xyz in protein_records:
-        residue_label = _pdb_residue_label(residue_key)
-        for ligand_element, ligand_xyz in zip(ligand_elements, ligand_coordinates):
-            try:
-                threshold = (
-                    detector._get_radii_sum(ligand_element, protein_element)
-                    + detector.tolerance
-                )
-            except ValueError as exc:
-                raise InteractionFingerprintError(
-                    "ProLIF VdW radii are missing a pose element"
-                ) from exc
-            distance_squared = (
-                (protein_xyz[0] - ligand_xyz[0]) ** 2
-                + (protein_xyz[1] - ligand_xyz[1]) ** 2
-                + (protein_xyz[2] - ligand_xyz[2]) ** 2
-            )
-            if distance_squared <= threshold * threshold:
-                contacting.add(residue_label)
-                break
-    residues = [
-        {"id": residue, "types": ["VdWContact"]}
-        for residue in sorted(contacting)
-    ]
-    return {
-        "count": len(residues),
-        "interacting_residue_count": len(residues),
-        "by_type": {"VdWContact": len(residues)} if residues else {},
-        "residues": residues,
-    }
+    return summarize_ifp(ifp)
 
 
 def summarize_ifp(
     ifp: Mapping[tuple[Any, Any], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Summarize an IFP as unique ``(protein residue, interaction type)`` bits.
+    """Summarize an IFP as unique protein residues with ligand H-bonds.
 
     Atom-level occurrences are intentionally not counted.  This prevents a
     single residue with several equivalent atoms from inflating the public
@@ -284,7 +169,7 @@ def summarize_ifp(
         for residue, types in sorted(residue_types.items())
     ]
     return {
-        "count": sum(by_type.values()),
+        "count": len(residues),
         "interacting_residue_count": len(residues),
         "by_type": by_type,
         "residues": residues,
@@ -311,7 +196,7 @@ def calculate_interaction_summary(
         raise InteractionFingerprintError("ligand SMILES is required")
     coordinates = _coordinates(ligand_coordinates)
     versions = _installed_versions()
-    _prolif, Chem, Point3D = _dependencies()
+    prolif, Chem, Point3D = _dependencies()
 
     ligand = Chem.MolFromSmiles(ligand_smiles.strip())
     if ligand is None:
@@ -327,8 +212,7 @@ def calculate_interaction_summary(
     ligand.RemoveAllConformers()
     ligand.AddConformer(conformer, assignId=True)
 
-    protein_records = _protein_vicinity_records(path, coordinates)
-    summary = _vdw_summary(protein_records, ligand, coordinates)
+    summary = _hbond_summary(prolif, path, ligand)
 
     return {
         "schema_version": 1,
@@ -336,9 +220,11 @@ def calculate_interaction_summary(
         "engine_version": versions["prolif"],
         "rdkit_version": versions["rdkit"],
         "policy": INTERACTION_POLICY,
-        "protein_parser_policy": PROTEIN_PARSER_POLICY,
+        "protein_standardization_policy": PROTEIN_STANDARDIZATION_POLICY,
         "vicinity_cutoff_angstrom": VICINITY_CUTOFF_ANGSTROM,
-        "vdw_radii_preset": VDW_RADII_PRESET,
+        "implicit_hydrogens": True,
+        "geometry_checks": "prolif-defaults",
+        "include_water": False,
         "interaction_types": list(INTERACTION_TYPES),
         **summary,
     }
@@ -382,13 +268,11 @@ __all__ = [
     "INTERACTION_POLICY",
     "INTERACTION_TYPES",
     "PROLIF_VERSION",
-    "PROTEIN_PARSER_POLICY",
+    "PROTEIN_STANDARDIZATION_POLICY",
     "RDKIT_VERSION",
     "VICINITY_CUTOFF_ANGSTROM",
-    "VDW_RADII_PRESET",
     "InteractionFingerprintError",
-    "_protein_vicinity_records",
-    "_vdw_summary",
+    "_hbond_summary",
     "calculate_interaction_summary",
     "calculate_interaction_summary_from_pose",
     "summarize_ifp",
