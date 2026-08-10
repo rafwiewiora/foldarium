@@ -766,6 +766,26 @@ if modal is not None:
             raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
 
         choice_scorer = None
+        remote_scorer = None
+
+        def score_choice_remotely(*, protein_path, ligand_path, ligand_smiles, pose_id):
+            nonlocal remote_scorer
+            if remote_scorer is None:
+                remote_scorer = modal.Function.from_name(
+                    WEEKLY_SCORING_APP_NAME,
+                    WEEKLY_SCORING_FUNCTION_NAME,
+                )
+            protein = Path(protein_path).read_bytes()
+            ligand = Path(ligand_path).read_bytes()
+            return remote_scorer.remote(
+                protein,
+                ligand,
+                ligand_smiles,
+                pose_id,
+                hashlib.sha256(protein).hexdigest(),
+                hashlib.sha256(ligand).hexdigest(),
+            )
+
         if reuse_pose_metrics_from_round_id:
             from foldarium_pipeline.clustering import choice_order_digest
 
@@ -801,10 +821,18 @@ if modal is not None:
                     reusable_scores[pose_id] = scoring
 
             def score_choice(*, protein_path, ligand_path, ligand_smiles, pose_id):
-                del ligand_smiles
                 source_scoring = reusable_scores.get(pose_id)
                 if source_scoring is None:
-                    raise RuntimeError("pose-metric source lacks an exact run/sample choice")
+                    if not include_pose_metrics:
+                        raise RuntimeError(
+                            "pose-metric source lacks an exact run/sample choice"
+                        )
+                    return score_choice_remotely(
+                        protein_path=protein_path,
+                        ligand_path=ligand_path,
+                        ligand_smiles=ligand_smiles,
+                        pose_id=pose_id,
+                    )
                 reused = deepcopy(dict(source_scoring))
                 reused["pose_id"] = pose_id
                 provenance = deepcopy(dict(reused.get("provenance") or {}))
@@ -823,25 +851,10 @@ if modal is not None:
                 reused["provenance"] = provenance
                 return reused
 
-        elif include_pose_metrics:
-            remote_scorer = modal.Function.from_name(
-                WEEKLY_SCORING_APP_NAME,
-                WEEKLY_SCORING_FUNCTION_NAME,
-            )
-
-            def score_choice(*, protein_path, ligand_path, ligand_smiles, pose_id):
-                protein = Path(protein_path).read_bytes()
-                ligand = Path(ligand_path).read_bytes()
-                return remote_scorer.remote(
-                    protein,
-                    ligand,
-                    ligand_smiles,
-                    pose_id,
-                    hashlib.sha256(protein).hexdigest(),
-                    hashlib.sha256(ligand).hexdigest(),
-                )
-
             choice_scorer = score_choice
+
+        elif include_pose_metrics:
+            choice_scorer = score_choice_remotely
 
         with tempfile.TemporaryDirectory(prefix="foldarium-weekly-quiz-") as temporary:
             stage = stage_weekly_quiz(

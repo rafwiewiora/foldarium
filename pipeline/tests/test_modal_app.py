@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +99,229 @@ class TransientMsaRetrySubmissionTests(unittest.TestCase):
                 ValueError, "safe Storage bucket"
             ):
                 module._weekly_public_bucket(invalid)
+
+
+class WeeklyMetricReuseTests(unittest.TestCase):
+    @staticmethod
+    def deployment_module():
+        return TransientMsaRetrySubmissionTests.deployment_module()
+
+    @staticmethod
+    def source_private_index(*, scoring):
+        return {
+            "items": [
+                {
+                    "id": "target-1",
+                    "choices": [
+                        {
+                            "run_id": "run-existing",
+                            "sample_id": "sample-existing",
+                            "artifact_sha256": "a" * 64,
+                            "scoring": scoring,
+                        }
+                    ],
+                }
+            ]
+        }
+
+    def run_assembly(self, module, *, include_pose_metrics, stage_quiz, scoring):
+        class Coordinator:
+            def __init__(self, storage_bucket):
+                self.storage_bucket = storage_bucket
+
+            def campaign_prediction_outputs(self, campaign_id):
+                self.campaign_id = campaign_id
+                return []
+
+            def weekly_quiz_reveal_inputs(self, round_id):
+                self.source_round_id = round_id
+                return (
+                    {"campaign_id": "campaign-1"},
+                    json.dumps(
+                        self_test.source_private_index(scoring=scoring)
+                    ).encode(),
+                )
+
+            def download_content_object(self, *args, **kwargs):
+                raise AssertionError("staging fixture must not download artifacts")
+
+        self_test = self
+        private = Coordinator("private-predictions")
+        public = Coordinator("public-weekly-quiz")
+
+        def from_env(environment=None):
+            return private if environment is None else public
+
+        published = {
+            "status": "staged",
+            "round_id": "round-new",
+            "item_count": 1,
+            "choice_count": 2,
+            "blind_manifest_sha256": "b" * 64,
+        }
+        raw_function = module.assemble_weekly_quiz_round.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            side_effect=from_env,
+        ), patch(
+            "foldarium_pipeline.weekly_quiz.select_complete_method_pairs",
+            return_value=([{"target_id": "target-1"}], [], []),
+        ), patch(
+            "foldarium_pipeline.weekly_quiz.stage_weekly_quiz",
+            side_effect=stage_quiz,
+        ), patch(
+            "foldarium_pipeline.weekly_quiz.publish_staged_weekly_quiz",
+            return_value=published,
+        ):
+            result = raw_function(
+                campaign_id="campaign-1",
+                round_id="round-new",
+                opens_at="2026-08-08T00:00:00Z",
+                closes_at="2026-08-12T00:00:00Z",
+                include_pose_metrics=include_pose_metrics,
+                round_environment="preview",
+                public_quiz_bucket="public-weekly-quiz",
+                reuse_pose_metrics_from_round_id="round-source",
+            )
+        self.assertEqual(private.campaign_id, "campaign-1")
+        self.assertEqual(private.source_round_id, "round-source")
+        return result
+
+    def test_reuses_exact_choice_and_remotely_scores_only_missing_choice(self) -> None:
+        module = self.deployment_module()
+        from foldarium_pipeline.clustering import choice_order_digest
+
+        existing_identity = {
+            "run_id": "run-existing",
+            "sample_id": "sample-existing",
+            "artifact_sha256": "a" * 64,
+        }
+        missing_identity = {
+            "run_id": "run-existing",
+            "sample_id": "sample-existing",
+            "artifact_sha256": "c" * 64,
+        }
+        existing_pose_id = choice_order_digest(
+            "round-new", "target-1", existing_identity
+        )
+        missing_pose_id = choice_order_digest(
+            "round-new", "target-1", missing_identity
+        )
+        source_scoring = {
+            "pose_id": "source-pose-id",
+            "scores": {"smina_affinity_kcal_mol": -7.1},
+            "provenance": {"mode": "score_only"},
+        }
+        captured = {}
+
+        class RemoteScorer:
+            def __init__(self):
+                self.calls = []
+
+            def remote(self, *args):
+                self.calls.append(args)
+                return {"pose_id": args[3], "scores": {"remote": True}}
+
+        remote = RemoteScorer()
+
+        def stage_quiz(_complete, temporary, **kwargs):
+            root = Path(temporary)
+            protein_path = root / "protein.pdb"
+            ligand_path = root / "ligand.sdf"
+            protein_path.write_bytes(b"protein-bytes")
+            ligand_path.write_bytes(b"ligand-bytes")
+            scorer = kwargs["choice_scorer"]
+            captured["reused"] = scorer(
+                protein_path=protein_path,
+                ligand_path=ligand_path,
+                ligand_smiles="CCO",
+                pose_id=existing_pose_id,
+            )
+            captured["missing"] = scorer(
+                protein_path=protein_path,
+                ligand_path=ligand_path,
+                ligand_smiles="CCO",
+                pose_id=missing_pose_id,
+            )
+            return {"items": [{"clustering": {"cluster_count": 2}}]}
+
+        with patch.object(
+            module.modal.Function, "from_name", return_value=remote
+        ) as from_name:
+            result = self.run_assembly(
+                module,
+                include_pose_metrics=True,
+                stage_quiz=stage_quiz,
+                scoring=source_scoring,
+            )
+
+        self.assertEqual(captured["reused"]["pose_id"], existing_pose_id)
+        self.assertEqual(
+            captured["reused"]["provenance"]["metric_reuse"],
+            {
+                "source_round_id": "round-source",
+                "policy": "rigid-transform-invariant-fixed-pose-metrics/v1",
+            },
+        )
+        self.assertEqual(source_scoring["pose_id"], "source-pose-id")
+        self.assertEqual(captured["missing"]["pose_id"], missing_pose_id)
+        from_name.assert_called_once_with(
+            module.WEEKLY_SCORING_APP_NAME,
+            module.WEEKLY_SCORING_FUNCTION_NAME,
+        )
+        self.assertEqual(len(remote.calls), 1)
+        self.assertEqual(
+            remote.calls[0],
+            (
+                b"protein-bytes",
+                b"ligand-bytes",
+                "CCO",
+                missing_pose_id,
+                hashlib.sha256(b"protein-bytes").hexdigest(),
+                hashlib.sha256(b"ligand-bytes").hexdigest(),
+            ),
+        )
+        self.assertTrue(result["pose_metrics_included"])
+        self.assertEqual(result["pose_metrics_reused_from_round_id"], "round-source")
+
+    def test_missing_reused_choice_remains_fail_closed_without_metric_scoring(self) -> None:
+        module = self.deployment_module()
+        from foldarium_pipeline.clustering import choice_order_digest
+
+        missing_pose_id = choice_order_digest(
+            "round-new",
+            "target-1",
+            {
+                "run_id": "run-existing",
+                "sample_id": "sample-existing",
+                "artifact_sha256": "c" * 64,
+            },
+        )
+
+        def stage_quiz(_complete, temporary, **kwargs):
+            root = Path(temporary)
+            protein_path = root / "protein.pdb"
+            ligand_path = root / "ligand.sdf"
+            protein_path.write_bytes(b"protein-bytes")
+            ligand_path.write_bytes(b"ligand-bytes")
+            return kwargs["choice_scorer"](
+                protein_path=protein_path,
+                ligand_path=ligand_path,
+                ligand_smiles="CCO",
+                pose_id=missing_pose_id,
+            )
+
+        with patch.object(module.modal.Function, "from_name") as from_name:
+            with self.assertRaisesRegex(
+                RuntimeError, "lacks an exact run/sample choice"
+            ):
+                self.run_assembly(
+                    module,
+                    include_pose_metrics=False,
+                    stage_quiz=stage_quiz,
+                    scoring={"pose_id": "source-pose-id"},
+                )
+        from_name.assert_not_called()
 
 
 class WednesdayRevealDeploymentTests(unittest.TestCase):
