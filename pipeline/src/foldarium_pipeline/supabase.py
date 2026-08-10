@@ -694,7 +694,8 @@ class SupabaseCoordinator(SupabasePublisher):
             {
                 "select": (
                     "round_id,campaign_id,status,opens_at,closes_at,blind_manifest,"
-                    "blind_manifest_sha256,reveal_manifest,reveal_manifest_sha256,metadata"
+                    "blind_manifest_sha256,reveal_manifest,reveal_manifest_sha256,metadata,"
+                    "environment,item_count,opened_at"
                 ),
                 "round_id": f"eq.{round_id}",
                 "limit": "2",

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from foldarium_pipeline.contracts import make_prediction_task
 from foldarium_pipeline import weekly_quiz as weekly_quiz_module
 from foldarium_pipeline.weekly_quiz import (
+    clone_weekly_quiz_manifests,
     publish_staged_weekly_quiz,
     select_complete_method_pairs,
     stage_weekly_quiz,
@@ -152,6 +153,54 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
                 "ignored_run_ids": ["boltz-old"],
             }],
         )
+
+    def test_clones_digest_bound_manifests_without_changing_choice_ids(self) -> None:
+        blind = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [{"id": "item-1", "choices": [{"id": "choice-1"}]}],
+        }
+        private = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [{
+                "id": "item-1",
+                "choices": [{"id": "choice-1", "run_id": "run-1"}],
+            }],
+            "blind_manifest_sha256": weekly_quiz_module.manifest_sha256(blind),
+        }
+
+        promoted_blind, promoted_private = clone_weekly_quiz_manifests(
+            blind, private, round_id="production-beta-round"
+        )
+
+        self.assertEqual(promoted_blind["round_id"], "production-beta-round")
+        self.assertEqual(promoted_private["round_id"], "production-beta-round")
+        self.assertEqual(
+            promoted_private["blind_manifest_sha256"],
+            weekly_quiz_module.manifest_sha256(promoted_blind),
+        )
+        self.assertEqual(
+            promoted_private["items"][0]["choices"][0]["run_id"], "run-1"
+        )
+        self.assertEqual(blind["round_id"], "preview-round")
+
+    def test_rejects_a_private_index_not_bound_to_the_blind_manifest(self) -> None:
+        blind = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [{"id": "item-1", "choices": [{"id": "choice-1"}]}],
+        }
+        private = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [{"id": "item-1", "choices": [{"id": "choice-1"}]}],
+            "blind_manifest_sha256": "0" * 64,
+        }
+        with self.assertRaisesRegex(
+            weekly_quiz_module.WeeklyQuizAssemblyError, "not digest-bound"
+        ):
+            clone_weekly_quiz_manifests(blind, private, round_id="replacement")
 
 
 class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
@@ -385,10 +434,15 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 closes_at="2026-08-12T00:00:00Z",
                 open_round=True,
                 round_environment="preview",
+                round_metadata={"release_channel": "beta"},
             )
             self.assertEqual(summary["status"], "opened")
             self.assertEqual(summary["environment"], "preview")
             self.assertEqual(private.opened["environment"], "preview")
+            self.assertEqual(
+                private.opened["metadata"]["release_channel"], "beta"
+            )
+            self.assertIn("stage_sha256", private.opened["metadata"])
             self.assertEqual(summary["choice_count"], 2)
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
@@ -443,6 +497,19 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 {(row["method"], row["method_version"]) for row in mapping["choices"]},
                 {("openfold3", "0.4.4"), ("boltz2", "2.2.1")},
             )
+
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "cannot override publication metadata",
+            ):
+                publish_staged_weekly_quiz(
+                    temporary,
+                    private_coordinator=private,
+                    public_coordinator=public,
+                    opens_at="2026-08-08T03:00:00Z",
+                    closes_at="2026-08-12T00:00:00Z",
+                    round_metadata={"stage_sha256": "operator-value"},
+                )
 
 
 if __name__ == "__main__":

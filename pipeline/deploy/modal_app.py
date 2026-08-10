@@ -704,6 +704,7 @@ if modal is not None:
         closes_at: str,
         open_round: bool = False,
         include_pose_metrics: bool = False,
+        beta: bool = False,
         round_environment: str = "production",
         public_quiz_bucket: str | None = None,
     ) -> dict[str, Any]:
@@ -777,6 +778,7 @@ if modal is not None:
                 closes_at=closes_at,
                 open_round=open_round,
                 round_environment=round_environment,
+                round_metadata={"release_channel": "beta"} if beta else None,
             )
         cluster_counts = [
             int(item["clustering"]["cluster_count"])
@@ -791,6 +793,7 @@ if modal is not None:
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
             "pose_metrics_included": include_pose_metrics,
+            "release_channel": "beta" if beta else "standard",
             "environment": round_environment,
         }
         print(
@@ -814,6 +817,83 @@ if modal is not None:
             )
         )
         return summary
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=1.0,
+        memory=2048,
+        secrets=[control_plane_secret],
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def promote_weekly_quiz_round(
+        source_round_id: str,
+        round_id: str,
+        opens_at: str,
+        closes_at: str,
+        source_environment: str = "preview",
+        round_environment: str = "production",
+        beta: bool = True,
+        open_round: bool = False,
+    ) -> dict[str, Any]:
+        """Clone one exact reviewed round without recomputing its pose assets."""
+
+        from foldarium_pipeline.contracts import canonical_json
+        from foldarium_pipeline.quiz import manifest_sha256
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+        from foldarium_pipeline.weekly_quiz import clone_weekly_quiz_manifests
+
+        coordinator = SupabaseCoordinator.from_env()
+        source, private_content = coordinator.weekly_quiz_reveal_inputs(source_round_id)
+        if source.get("environment") != source_environment:
+            raise RuntimeError("source weekly round environment does not match")
+        if source.get("status") not in {"open", "closed"}:
+            raise RuntimeError("only an unrevealed weekly round can be promoted")
+        try:
+            private_index = json.loads(private_content)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("source private index is not valid JSON") from exc
+        blind, promoted_private = clone_weekly_quiz_manifests(
+            source["blind_manifest"], private_index, round_id=round_id
+        )
+        private_object = coordinator.store_bytes(
+            canonical_json(promoted_private).encode("utf-8"), "application/json"
+        )
+        source_metadata = dict(source.get("metadata") or {})
+        source_metadata.pop("private_index", None)
+        metadata = {
+            **source_metadata,
+            "private_index": private_object,
+            "promoted_from_round_id": source_round_id,
+            "promoted_from_blind_manifest_sha256": source["blind_manifest_sha256"],
+            "release_channel": "beta" if beta else "standard",
+        }
+        response: Any = {"status": "uploaded-not-opened"}
+        if open_round:
+            response = coordinator.open_weekly_quiz_round(
+                round_id=round_id,
+                campaign_id=source["campaign_id"],
+                opens_at=opens_at,
+                closes_at=closes_at,
+                blind_manifest=blind,
+                metadata=metadata,
+                environment=round_environment,
+            )
+        result = {
+            "status": "opened" if open_round else "uploaded-not-opened",
+            "round_id": round_id,
+            "campaign_id": source["campaign_id"],
+            "environment": round_environment,
+            "release_channel": metadata["release_channel"],
+            "source_round_id": source_round_id,
+            "item_count": len(blind["items"]),
+            "choice_count": sum(len(item["choices"]) for item in blind["items"]),
+            "blind_manifest_sha256": manifest_sha256(blind),
+            "private_index": private_object,
+            "open_response": response,
+        }
+        print("foldarium.weekly_quiz_promotion " + json.dumps(result, sort_keys=True))
+        return result
 
     @app.function(
         image=quiz_assembly_image,

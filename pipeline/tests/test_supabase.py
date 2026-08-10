@@ -963,6 +963,7 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     )
                     self.test_case.assertEqual(query["limit"], ["2"])
                     self.test_case.assertIn("metadata", query["select"][0].split(","))
+                    self.test_case.assertIn("environment", query["select"][0].split(","))
                     return FakeResponse(json.dumps([round_row]).encode())
                 if "/storage/v1/object/authenticated/results/" in url:
                     return FakeResponse(private_content)

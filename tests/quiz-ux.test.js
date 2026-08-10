@@ -94,6 +94,7 @@ test('left panel has a balanced type and gray hierarchy', async () => {
 
 test('Foldarium branding is present and the name intro starts centered', async () => {
   const html = await readHtml();
+  const logo = await readFile(new URL('../assets/foldarium-mark.svg', import.meta.url), 'utf8');
 
   assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="assets\/foldarium-mark\.svg"/);
   assert.match(html, /<img class="brand-mark" src="assets\/foldarium-mark\.svg" alt=""/);
@@ -102,6 +103,10 @@ test('Foldarium branding is present and the name intro starts centered', async (
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
   assert.match(html, /#wrap\.intro #question-head,[\s\S]*?#wrap\.intro #answer-details\{display:none!important\}/);
   assert.match(html, /html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
+  for (const color of ['#5b8ff9', '#f6bd16', '#9270ca', '#5ad8a6']) {
+    assert.match(logo.toLowerCase(), new RegExp(color));
+  }
+  assert.doesNotMatch(logo, /#111820/i);
 });
 
 test('left pose selections use calm cards with pose-color rails', async () => {

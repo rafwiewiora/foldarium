@@ -886,6 +886,60 @@ def _aware_timestamp(value: str, field: str) -> str:
     return value
 
 
+def clone_weekly_quiz_manifests(
+    blind_manifest: Mapping[str, Any],
+    private_index: Mapping[str, Any],
+    *,
+    round_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Rebind one verified blind/private manifest pair to a replacement round.
+
+    Content-addressed pose assets and opaque item/choice IDs remain unchanged;
+    only the round identity and its digest binding are replaced.
+    """
+
+    if not isinstance(round_id, str) or not round_id.strip():
+        raise WeeklyQuizAssemblyError("replacement round_id is required")
+    blind = deepcopy(dict(blind_manifest))
+    private = deepcopy(dict(private_index))
+    source_round_id = blind.get("round_id")
+    if (
+        blind.get("schema_version") != private.get("schema_version")
+        or not isinstance(source_round_id, str)
+        or private.get("round_id") != source_round_id
+        or private.get("blind_manifest_sha256") != manifest_sha256(blind)
+    ):
+        raise WeeklyQuizAssemblyError("source weekly manifests are not digest-bound")
+
+    def manifest_ids(value: Mapping[str, Any]) -> dict[str, set[str]]:
+        items = value.get("items")
+        if not isinstance(items, list) or not items:
+            raise WeeklyQuizAssemblyError("source weekly manifest has no items")
+        result: dict[str, set[str]] = {}
+        for item in items:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                raise WeeklyQuizAssemblyError("source weekly manifest item is invalid")
+            choices = item.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise WeeklyQuizAssemblyError("source weekly manifest item has no choices")
+            ids = {
+                choice.get("id")
+                for choice in choices
+                if isinstance(choice, Mapping) and isinstance(choice.get("id"), str)
+            }
+            if len(ids) != len(choices) or item["id"] in result:
+                raise WeeklyQuizAssemblyError("source weekly manifest IDs are invalid")
+            result[item["id"]] = ids
+        return result
+
+    if manifest_ids(blind) != manifest_ids(private):
+        raise WeeklyQuizAssemblyError("source blind and private manifest IDs differ")
+    blind["round_id"] = round_id.strip()
+    private["round_id"] = round_id.strip()
+    private["blind_manifest_sha256"] = manifest_sha256(blind)
+    return blind, private
+
+
 def publish_staged_weekly_quiz(
     stage_directory: str | Path,
     *,
@@ -895,6 +949,7 @@ def publish_staged_weekly_quiz(
     closes_at: str,
     open_round: bool = False,
     round_environment: str = "production",
+    round_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Upload sanitized assets; optionally atomically open the blind voting round."""
 
@@ -993,7 +1048,16 @@ def publish_staged_weekly_quiz(
     private_object = private_coordinator.store_bytes(
         canonical_json(private_index).encode("utf-8"), "application/json"
     )
+    supplied_metadata = dict(round_metadata or {})
+    reserved_metadata = {"stage_sha256", "private_index", "public_quiz_bucket"}
+    overlap = reserved_metadata.intersection(supplied_metadata)
+    if overlap:
+        raise WeeklyQuizAssemblyError(
+            "round_metadata cannot override publication metadata: "
+            + ", ".join(sorted(overlap))
+        )
     metadata = {
+        **supplied_metadata,
         "stage_sha256": declared_digest,
         "private_index": private_object,
         "public_quiz_bucket": public_coordinator.storage_bucket,
