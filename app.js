@@ -34,6 +34,13 @@ function weeklyLigandPlddt(choice) {
     ? `ligand pLDDT ${confidence.value.toFixed(1)}`
     : '';
 }
+function weeklyHbondCount(choice) {
+  const interactions = choice?._interactionCount;
+  return interactions?.metric === 'prolif_hbond_residue_count'
+      && Number.isInteger(interactions.value) && interactions.value >= 0
+    ? `H-bonds ${interactions.value}`
+    : '';
+}
 function weeklyEntryEvidence(entry) {
   if (cur?.item?.source !== 'weekly') return '';
   const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
@@ -1729,19 +1736,17 @@ function syncStageBadge() {
   if (DEV) return;
   const badge = $('#badge');
   if (!badge) return;
-  const hideWeeklyOverlayBadge = cur?.item?.source === 'weekly' && displayMode === 'all';
+  const hideWeeklyOverlayBadge = cur?.item?.source === 'weekly' && displayMode !== 'one';
   badge.style.display = hideWeeklyOverlayBadge ? 'none' : '';
   if (hideWeeklyOverlayBadge) return;
   if (cur?.item?.source === 'weekly' && displayMode === 'one') {
     const choices = visibleChoices();
     const choice = choices[Math.min(shownOne, choices.length - 1)];
-    const confidence = weeklyLigandPlddt(choice);
-    badge.textContent = `Pose ${displayedPoseLabel(choice)}${confidence ? ` · ${confidence}` : ''}`;
+    const evidence = [weeklyLigandPlddt(choice), weeklyHbondCount(choice)].filter(Boolean);
+    badge.textContent = `Pose ${displayedPoseLabel(choice)}${evidence.length ? ` · ${evidence.join(' · ')}` : ''}`;
     return;
   }
-  badge.textContent = cur?.item?.source === 'weekly'
-    ? `${WEEKLY_ROUND?.public_status === 'revealed' ? 'reference released' : 'reference available Wednesday'} · pose details on hover`
-    : 'crystal reference hidden · poses anonymised';
+  badge.textContent = 'crystal reference hidden · poses anonymised';
 }
 
 // dev reveal toggle: flip the green/red correctness + RMSD list on/off, reusing the showAnswer machinery.

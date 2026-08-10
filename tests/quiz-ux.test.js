@@ -101,7 +101,7 @@ test('Foldarium branding is present and the name intro starts centered', async (
   assert.match(html, /<div id="wrap" class="intro" hidden>/);
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
   assert.match(html, /#wrap\.intro #question-head,[\s\S]*?#wrap\.intro #answer-details\{display:none!important\}/);
-  assert.match(html, /html\[data-quiz-mode="weekly"\] #badge,[\s\S]*?html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
 });
 
 test('left pose selections use calm cards with pose-color rails', async () => {

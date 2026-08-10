@@ -912,10 +912,16 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
     label: 'C',
     color: 0x5B8FF9,
     _confidence: { metric: 'ligand_plddt', value: 72.54, scale_max: 100 },
+    _interactionCount: { metric: 'prolif_hbond_residue_count', value: 3 },
   };
   const weeklyLigandPlddt = evaluateDeclaration(
     app,
     'function weeklyLigandPlddt(choice)',
+    { Number },
+  );
+  const weeklyHbondCount = evaluateDeclaration(
+    app,
+    'function weeklyHbondCount(choice)',
     { Number },
   );
   const header = evaluateDeclaration(app, 'function gridHeader(entry)', {
@@ -945,23 +951,17 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
     shownOne: 0,
     displayedPoseLabel: current => current.label,
     weeklyLigandPlddt,
+    weeklyHbondCount,
     $: registry.$,
   };
   const syncStageBadge = evaluateDeclaration(app, 'function syncStageBadge()', badgeSandbox);
   syncStageBadge();
-  assert.equal(registry.elements.get('#badge').textContent, 'Pose C · ligand pLDDT 72.5');
+  assert.equal(registry.elements.get('#badge').textContent, 'Pose C · ligand pLDDT 72.5 · H-bonds 3');
   assert.equal(registry.elements.get('#badge').style.display, '');
 
   badgeSandbox.displayMode = 'grid';
   syncStageBadge();
-  assert.equal(
-    registry.elements.get('#badge').textContent,
-    'reference available Wednesday · pose details on hover',
-  );
-  badgeSandbox.WEEKLY_ROUND.public_status = 'revealed';
-  syncStageBadge();
-  assert.equal(registry.elements.get('#badge').textContent, 'reference released · pose details on hover');
-  badgeSandbox.WEEKLY_ROUND.public_status = 'open';
+  assert.equal(registry.elements.get('#badge').style.display, 'none');
 
   badgeSandbox.displayMode = 'all';
   syncStageBadge();

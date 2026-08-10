@@ -178,7 +178,6 @@
   html[data-quiz-mode="weekly"] #leaderboard-link,
   html[data-quiz-mode="weekly"] #score,
   html[data-quiz-mode="weekly"] #score-summary,
-  html[data-quiz-mode="weekly"] #badge,
   html[data-quiz-mode="weekly"] #instruction{display:none!important}
   html[data-quiz-mode="weekly"] #lock{min-height:44px;padding-inline:20px;background:var(--accent);
     color:#fff;border-color:var(--accent);font-weight:700;box-shadow:0 3px 10px #1687b82b}
@@ -422,7 +421,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080908');
+      await loadScript('app.js?v=2026080909');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;
