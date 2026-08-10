@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 from foldarium_pipeline.evaluation import (
@@ -164,6 +165,15 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
                 "C": "A" * 40,
             },
         )
+        reverse = exact_complex_receptor_superposition(
+            predicted_model,
+            reference_model,
+            expected_chain_sequences={
+                "A": "A" * 40,
+                "B": "A" * 60,
+                "C": "A" * 40,
+            },
+        )
 
         self.assertEqual(result["reference_chains"], ["A", "B", "C"])
         self.assertEqual(result["predicted_chains"], ["A", "B", "C"])
@@ -172,6 +182,8 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
             "exact-task-chain-id-and-sequence/v1",
         )
         self.assertLess(result["receptor_rmsd"], 1e-5)
+        self.assertEqual(result["receptor_rmsd"], reverse["receptor_rmsd"])
+        self.assertEqual(result["robust_core"], reverse["robust_core"])
         self.assertEqual(result["robust_core"]["aligned_residue_count"], 140)
         contributions = {
             row["chain_id"]: row
@@ -180,6 +192,33 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
         self.assertEqual(contributions["A"]["retained_residue_count"], 40)
         self.assertEqual(contributions["B"]["retained_residue_count"], 0)
         self.assertEqual(contributions["C"]["retained_residue_count"], 40)
+
+    def test_exact_complex_rmsd_is_symmetric_to_numerical_tolerance(self) -> None:
+        reference = self.translated_polymer(80)
+        predicted = self.translated_polymer(80, translation=(7.0, -4.0, 3.0))
+        for index, residue in enumerate(predicted):
+            residue[0].pos.x += math.sin(index) * 0.08
+            residue[0].pos.y += math.cos(index) * 0.06
+            if index >= 64:
+                residue[0].pos.z += 12.0
+        expected = {"A": "A" * 80}
+
+        forward = exact_complex_receptor_superposition(
+            [FakeChain("A", reference)],
+            [FakeChain("A", predicted)],
+            expected_chain_sequences=expected,
+        )
+        reverse = exact_complex_receptor_superposition(
+            [FakeChain("A", predicted)],
+            [FakeChain("A", reference)],
+            expected_chain_sequences=expected,
+        )
+
+        self.assertLess(
+            abs(forward["receptor_rmsd"] - reverse["receptor_rmsd"]),
+            1e-10,
+        )
+        self.assertEqual(forward["robust_core"], reverse["robust_core"])
 
     def test_exact_task_complex_fails_closed_for_missing_chain(self) -> None:
         reference_model = [FakeChain("A", self.translated_polymer(6))]

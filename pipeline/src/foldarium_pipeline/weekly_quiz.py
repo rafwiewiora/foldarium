@@ -533,10 +533,15 @@ def _select_receptor_medoid(
         for choice in choices
     ]
     matrix = [[0.0 for _ in choices] for _ in choices]
+    # Exact-task-complex receptor RMSD is a metric over two coordinate sets:
+    # swapping reference/predicted reverses the rigid transform but preserves
+    # the retained robust core and its RMSD.  Compute each unordered pair once
+    # and mirror it.  Besides halving the expensive robust fits, this keeps the
+    # matrix explicitly symmetric as required by minimum-total-distance medoid
+    # selection.
     for reference_index, reference in enumerate(choices):
-        for predicted_index, predicted in enumerate(choices):
-            if reference_index == predicted_index:
-                continue
+        for predicted_index in range(reference_index + 1, len(choices)):
+            predicted = choices[predicted_index]
             try:
                 alignment = aligner(reference["model"], predicted["model"])
                 rmsd = float(alignment["receptor_rmsd"])
@@ -550,6 +555,7 @@ def _select_receptor_medoid(
                     "receptor-medoid RMSD must be finite and non-negative"
                 )
             matrix[reference_index][predicted_index] = rmsd
+            matrix[predicted_index][reference_index] = rmsd
     totals = [sum(row) for row in matrix]
     medoid_index = min(range(len(choices)), key=lambda index: (totals[index], digests[index]))
     distance_payload = {

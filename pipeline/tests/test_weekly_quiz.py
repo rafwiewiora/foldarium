@@ -340,13 +340,19 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         ]
         positions = {"a": 0.0, "b": 2.0, "c": 10.0}
 
+        comparisons: list[tuple[str, str]] = []
+
+        def align(reference: str, predicted: str) -> dict[str, float]:
+            comparisons.append((reference, predicted))
+            return {
+                "receptor_rmsd": abs(positions[reference] - positions[predicted])
+            }
+
         medoid, audit = weekly_quiz_module._select_receptor_medoid(
             choices,
             round_id="weekly-test-v3",
             target_id="target-1",
-            aligner=lambda reference, predicted: {
-                "receptor_rmsd": abs(positions[reference] - positions[predicted])
-            },
+            aligner=align,
         )
 
         self.assertEqual(medoid["model"], "b")
@@ -354,6 +360,7 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
             audit["policy"], weekly_quiz_module.RECEPTOR_ANCHOR_POLICY
         )
         self.assertEqual(audit["total_pairwise_receptor_rmsd"], 10.0)
+        self.assertEqual(comparisons, [("a", "b"), ("a", "c"), ("b", "c")])
         self.assertRegex(audit["choice_digest"], r"^[0-9a-f]{64}$")
         self.assertRegex(audit["distance_matrix_sha256"], r"^[0-9a-f]{64}$")
 
