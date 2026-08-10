@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from foldarium_pipeline.contracts import make_prediction_task
 from foldarium_pipeline import weekly_quiz as weekly_quiz_module
@@ -246,6 +247,22 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
 
 
 class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
+    def test_weekly_alignment_requests_a_stable_chain_pair(self) -> None:
+        expected = {"receptor_rmsd": 1.0}
+        with patch.object(
+            weekly_quiz_module,
+            "best_receptor_superposition",
+            return_value=expected,
+        ) as aligner:
+            result = weekly_quiz_module._weekly_receptor_superposition(
+                "reference", "predicted"
+            )
+
+        self.assertIs(result, expected)
+        aligner.assert_called_once_with(
+            "reference", "predicted", stable_chain_pair=True
+        )
+
     def test_selects_minimum_total_pairwise_rmsd_without_method_labels(self) -> None:
         choices = [
             {

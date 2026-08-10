@@ -93,8 +93,36 @@ def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
     return gemmi.superpose_positions(reference_positions, predicted_positions)
 
 
-def best_receptor_superposition(reference_model: Any, predicted_model: Any) -> dict[str, Any]:
-    """Return the best sequence-compatible transform from prediction to reference."""
+def _receptor_candidate_key(
+    candidate: dict[str, Any], *, stable_chain_pair: bool
+) -> tuple[Any, ...]:
+    if stable_chain_pair:
+        return (
+            -candidate["sequence_similarity"],
+            candidate["reference_chain"],
+            candidate["predicted_chain"],
+            candidate["receptor_rmsd"],
+        )
+    return (
+        -candidate["sequence_similarity"],
+        candidate["receptor_rmsd"],
+        candidate["reference_chain"],
+        candidate["predicted_chain"],
+    )
+
+
+def best_receptor_superposition(
+    reference_model: Any,
+    predicted_model: Any,
+    *,
+    stable_chain_pair: bool = False,
+) -> dict[str, Any]:
+    """Return a sequence-compatible transform from prediction to reference.
+
+    Evaluation retains its historical lowest-RMSD chain choice. Blind ensemble
+    assembly opts into ``stable_chain_pair`` so equivalent chains cannot change
+    the shared coordinate frame from one predicted pose to the next.
+    """
 
     try:
         import gemmi
@@ -124,14 +152,15 @@ def best_receptor_superposition(reference_model: Any, predicted_model: Any) -> d
                 "sequence_similarity": similarity,
                 "receptor_rmsd": float(superposition.rmsd),
                 "transform": superposition.transform,
+                "chain_selection_policy": (
+                    "stable-sequence-chain-pair/v1"
+                    if stable_chain_pair
+                    else "best-sequence-then-rmsd/v1"
+                ),
             }
-            if best is None or (
-                -candidate["sequence_similarity"], candidate["receptor_rmsd"],
-                candidate["reference_chain"], candidate["predicted_chain"]
-            ) < (
-                -best["sequence_similarity"], best["receptor_rmsd"],
-                best["reference_chain"], best["predicted_chain"]
-            ):
+            if best is None or _receptor_candidate_key(
+                candidate, stable_chain_pair=stable_chain_pair
+            ) < _receptor_candidate_key(best, stable_chain_pair=stable_chain_pair):
                 best = candidate
     if best is None:
         raise EvaluationError("no compatible receptor chains could be aligned")

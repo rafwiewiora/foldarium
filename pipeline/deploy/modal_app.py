@@ -836,6 +836,7 @@ if modal is not None:
         beta: bool = True,
         open_round: bool = False,
         minimum_cluster_count: int = 1,
+        additional_excluded_item_ids: str = "",
     ) -> dict[str, Any]:
         """Clone one exact reviewed round without recomputing its pose assets."""
 
@@ -864,7 +865,7 @@ if modal is not None:
         if not isinstance(private_items, list) or not private_items:
             raise RuntimeError("source private index has no weekly items")
         included_item_ids: set[str] = set()
-        excluded_item_ids: list[str] = []
+        excluded_item_ids: set[str] = set()
         for item in private_items:
             if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
                 raise RuntimeError("source private index contains an invalid item")
@@ -875,7 +876,21 @@ if modal is not None:
             if cluster_count >= minimum_cluster_count:
                 included_item_ids.add(item["id"])
             else:
-                excluded_item_ids.append(item["id"])
+                excluded_item_ids.add(item["id"])
+        operator_excluded_item_ids = {
+            value.strip()
+            for value in additional_excluded_item_ids.split(",")
+            if value.strip()
+        }
+        source_item_ids = {item["id"] for item in private_items}
+        unknown_exclusions = operator_excluded_item_ids.difference(source_item_ids)
+        if unknown_exclusions:
+            raise RuntimeError(
+                "additional excluded item IDs are absent from the source: "
+                + ", ".join(sorted(unknown_exclusions))
+            )
+        included_item_ids.difference_update(operator_excluded_item_ids)
+        excluded_item_ids.update(operator_excluded_item_ids)
         blind, promoted_private = clone_weekly_quiz_manifests(
             source["blind_manifest"],
             private_index,
@@ -899,6 +914,11 @@ if modal is not None:
                 "source_item_count": len(private_items),
                 "included_item_count": len(included_item_ids),
                 "excluded_item_ids": sorted(excluded_item_ids),
+                "additional_exclusion_policy": (
+                    "published-coordinate-frame-audit/v1"
+                    if operator_excluded_item_ids
+                    else None
+                ),
             },
         }
         response: Any = {"status": "uploaded-not-opened"}

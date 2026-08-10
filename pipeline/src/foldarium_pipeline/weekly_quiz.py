@@ -35,6 +35,7 @@ SUPPORTED_LEGACY_LIGAND_ORDER = {
 }
 LIGAND_AUTOMORPHISM_CAP = 100_000
 RECEPTOR_ANCHOR_POLICY = "minimum-total-pairwise-receptor-rmsd-medoid/v1"
+RECEPTOR_ALIGNMENT_POLICY = "stable-sequence-chain-pair/v1"
 LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
 LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
@@ -44,6 +45,16 @@ WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 
 class WeeklyQuizAssemblyError(RuntimeError):
     """Raised when completed predictions cannot form a safe blind round."""
+
+
+def _weekly_receptor_superposition(
+    reference_model: Any, predicted_model: Any
+) -> Mapping[str, Any]:
+    return best_receptor_superposition(
+        reference_model,
+        predicted_model,
+        stable_chain_pair=True,
+    )
 
 
 def _dependencies() -> tuple[Any, Any, Any]:
@@ -681,6 +692,7 @@ def stage_weekly_quiz(
             raw_choices,
             round_id=round_id,
             target_id=target_id,
+            aligner=_weekly_receptor_superposition,
         )
         reference_model = reference_choice["model"]
         reference_choice_index: int | None = None
@@ -696,10 +708,13 @@ def stage_weekly_quiz(
                     "predicted_chain": None,
                     "sequence_similarity": 1.0,
                     "receptor_rmsd": 0.0,
+                    "chain_selection_policy": RECEPTOR_ALIGNMENT_POLICY,
                 }
             else:
                 try:
-                    alignment = best_receptor_superposition(reference_model, choice["model"])
+                    alignment = _weekly_receptor_superposition(
+                        reference_model, choice["model"]
+                    )
                 except EvaluationError as exc:
                     raise WeeklyQuizAssemblyError(
                         f"could not align {target_id}/{choice['sample_id']} to the blind reference"
