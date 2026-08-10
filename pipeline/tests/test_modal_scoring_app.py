@@ -20,13 +20,13 @@ class ModalScoringAdapterTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_is_separate_cpu_only_four_container_app(self) -> None:
+    def test_is_separate_cpu_only_eight_container_app(self) -> None:
         module = self.deployment_module()
         self.assertEqual(module.APP_NAME, "foldarium-weekly-scoring")
         self.assertEqual(module.SCORING_CPU, 1.0)
         self.assertEqual(module.SCORING_MEMORY_MIB, 2048)
         self.assertEqual(module.SCORING_TIMEOUT_SECONDS, 300)
-        self.assertEqual(module.SCORING_MAX_CONTAINERS, 4)
+        self.assertEqual(module.SCORING_MAX_CONTAINERS, 8)
         self.assertNotIn("GPU", module.__dict__)
         self.assertIn("@sha256:", module.SMINA_IMAGE_REF)
         self.assertTrue(

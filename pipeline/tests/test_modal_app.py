@@ -337,7 +337,7 @@ class WeeklyScoringConcurrencyTests(unittest.TestCase):
     def deployment_module():
         return TransientMsaRetrySubmissionTests.deployment_module()
 
-    def test_scores_at_most_four_calls_and_restores_request_order(self) -> None:
+    def test_scores_at_most_eight_calls_and_restores_request_order(self) -> None:
         import threading
         import time
 
@@ -373,8 +373,8 @@ class WeeklyScoringConcurrencyTests(unittest.TestCase):
         )
         results = module._score_weekly_choices_concurrently(scorer, requests)
 
-        self.assertEqual(module.WEEKLY_SCORING_MAX_WORKERS, 4)
-        self.assertEqual(maximum_active, 4)
+        self.assertEqual(module.WEEKLY_SCORING_MAX_WORKERS, 8)
+        self.assertEqual(maximum_active, 8)
         self.assertEqual(
             [result["pose_id"] for result in results],
             [request["pose_id"] for request in requests],

@@ -41,9 +41,9 @@ modal run -e main pipeline/deploy/modal_scoring_app.py::score_local \
 The deployed function name for the coordinator is `score_pose` in app
 `foldarium-weekly-scoring`. It has no secret, GPU, schedule, or database access.
 Its hard Modal envelope is one physical CPU and 2 GiB RAM per call, five
-minutes per call, and at most four containers. The assembler writes every exact
+minutes per call, and at most eight containers. The assembler writes every exact
 protein/pose input and derives every opaque pose ID before dispatching an
-ordered batch through at most four worker threads. The inner smina subprocess
+ordered batch through at most eight worker threads. The inner smina subprocess
 has a two-minute ceiling per pose.
 
 The weekly assembler calls this deployed function only when its explicit

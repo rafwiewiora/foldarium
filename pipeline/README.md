@@ -145,7 +145,7 @@ Modal uses three independent gates:
 - `FOLDARIUM_WEEKLY_SUBMIT=1` permits GPU spawning, and only after registration reports success.
 
 Saturday quiz assembly can additionally opt into pose-only smina and ProLIF
-metrics with `include_pose_metrics=True`. Those metrics run with at most four
+metrics with `include_pose_metrics=True`. Those metrics run with at most eight
 one-CPU calls in the separate CPU-only `foldarium-weekly-scoring` Modal app, use
 each pose's exact predicted protein, and have no reference-coordinate or
 database access. The

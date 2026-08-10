@@ -3,7 +3,7 @@
 This app is intentionally separate from ``foldarium-predictions``. Deploying it
 cannot replace Brian's prediction app, reserve a GPU, access Supabase, or publish
 quiz data. Each function call accepts exactly one receptor/ligand pair and has a
-four-container deployment ceiling. Every container still receives one CPU and
+eight-container deployment ceiling. Every container still receives one CPU and
 scores only one pair per call.
 
 Build/deploy only after review::
@@ -41,7 +41,7 @@ SMINA_IMAGE_REF = (
 SCORING_CPU = 1.0
 SCORING_MEMORY_MIB = 2048
 SCORING_TIMEOUT_SECONDS = 5 * 60
-SCORING_MAX_CONTAINERS = 4
+SCORING_MAX_CONTAINERS = 8
 MAX_RECEPTOR_BYTES = 25 * 1024 * 1024
 MAX_LIGAND_BYTES = 2 * 1024 * 1024
 

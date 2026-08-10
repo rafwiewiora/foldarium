@@ -37,7 +37,8 @@ except ModuleNotFoundError:  # pragma: no cover - exercised without deployment e
 APP_NAME = "foldarium-predictions"
 WEEKLY_SCORING_APP_NAME = "foldarium-weekly-scoring"
 WEEKLY_SCORING_FUNCTION_NAME = "score_pose"
-WEEKLY_SCORING_MAX_WORKERS = 4
+WEEKLY_SCORING_MAX_WORKERS = 8
+WEEKLY_ASSEMBLY_TIMEOUT_SECONDS = 45 * 60
 PUBLIC_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
@@ -56,7 +57,7 @@ def _score_weekly_choices_concurrently(
     choice_scorer: Any,
     requests: tuple[Mapping[str, Any], ...],
 ) -> tuple[Mapping[str, Any], ...]:
-    """Score an ordered batch with a hard four-call concurrency ceiling."""
+    """Score an ordered batch with a hard eight-call concurrency ceiling."""
 
     if not requests:
         return ()
@@ -727,7 +728,7 @@ if modal is not None:
         cpu=8.0,
         memory=32768,
         secrets=[control_plane_secret],
-        timeout=30 * 60,
+        timeout=WEEKLY_ASSEMBLY_TIMEOUT_SECONDS,
         max_containers=1,
     )
     def assemble_weekly_quiz_round(
