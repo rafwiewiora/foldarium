@@ -59,7 +59,16 @@ test('dev2 shell separates inspection, preference, rejection, and optional vote 
   assert.match(html, /data-review="prefer"|grid-review-actions/);
   assert.match(html, /id="vote-comment-enabled"[^>]*checked/);
   assert.match(html, /id="vote-comment-dialog"/);
+  assert.doesNotMatch(html, /html\[data-quiz-mode="weekly"\] \.vote-comment-option/);
+  assert.match(app, /\$\('#vote-comment-option'\)\.style\.display = 'none'/);
   assert.match(html, /<span class="control-label">Layout<\/span>/);
   assert.match(html, /<span class="control-label">View<\/span>/);
   assert.match(html, />✦ Feedback</);
+});
+
+test('Grid compacts the actual Molstar residue highlight overlay', async () => {
+  const html = await read('index.html');
+  assert.match(html, /\.grid-card \.msp-highlight-toast-wrapper/);
+  assert.match(html, /\.grid-card \.msp-highlight-info\{[^}]*max-width:220px!important/);
+  assert.doesNotMatch(html, /\.grid-card \.msp-hover-box\{/);
 });

@@ -100,8 +100,14 @@
     box-shadow:0 1px 4px #16202b16}
   .grid-review-actions button:hover,.grid-review-actions button.on{border-color:var(--accent);color:var(--accent)}
   .grid-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
-  .grid-card .msp-hover-box{max-width:170px!important;padding:3px 6px!important;font-size:9px!important;
-    line-height:1.2!important;white-space:normal!important}
+  .grid-card .msp-highlight-toast-wrapper{right:6px!important;bottom:48px!important;
+    max-width:calc(100% - 12px)!important}
+  .grid-card .msp-highlight-info{max-width:220px!important;max-height:27px!important;overflow:hidden!important;
+    padding:3px 6px!important;border:1px solid #d9dfe4;border-radius:5px;background:#fffffff2!important;
+    color:#5b6672!important;font-size:9px!important;line-height:1.15!important;white-space:nowrap!important;
+    text-overflow:ellipsis;box-shadow:0 2px 7px #16202b18}
+  .grid-card .msp-highlight-info-additional{font-size:inherit!important;color:#6f7984!important}
+  .grid-card .msp-highlight-info-hr{display:none!important}
   #gridpages{overflow-x:auto}
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
   h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
@@ -167,7 +173,6 @@
   .vote-comment-option{display:none;align-items:center;gap:8px;margin:-5px 0 0;color:var(--muted);
     font-size:12px;cursor:pointer}
   .vote-comment-option input{accent-color:var(--accent)}
-  html[data-quiz-mode="weekly"] .vote-comment-option{display:flex}
   dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
     border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
   dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}

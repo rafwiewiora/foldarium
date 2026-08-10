@@ -1343,6 +1343,7 @@ function showIntro() {
     : 'crystal reference hidden · poses anonymised';
   $('#setup').style.display = '';
   $('#participant-setup').style.display = DEV ? 'none' : '';
+  $('#vote-comment-option').style.display = 'none';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
   $('#hbonds').style.display = 'none'; $('#surface').style.display = 'none';
