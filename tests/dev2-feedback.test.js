@@ -72,3 +72,10 @@ test('Grid compacts the actual Molstar residue highlight overlay', async () => {
   assert.match(html, /\.grid-card \.msp-highlight-info\{[^}]*max-width:220px!important/);
   assert.doesNotMatch(html, /\.grid-card \.msp-hover-box\{/);
 });
+
+test('View actions use independent switch affordances', async () => {
+  const [app, html] = await Promise.all([read('app.js'), read('index.html')]);
+  assert.match(html, /#view-options \.view-actions button::after/);
+  assert.match(html, /#view-options \.view-actions button\.on::after/);
+  assert.match(app, /uc\.setAttribute\('aria-pressed', String\(!clustered\)\)/);
+});

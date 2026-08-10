@@ -183,15 +183,22 @@ function setViewerControlsBusy(busy) {
   }
 }
 
+function structureRequestUrl(url) {
+  const resolved = assetUrl(url);
+  // Weekly Storage objects are content-addressed and immutable. A new random
+  // query on every page load defeats both the browser and Supabase CDN caches.
+  if (typeof url === 'string' && url.startsWith('supabase://')) return resolved;
+  return resolved + (resolved.includes('?') ? '&' : '?') + 'v=' + CACHE_BUST;
+}
 async function loadStruct(url, format, targetPlugin = plugin) {
-  const data = await targetPlugin.builders.data.download({ url: assetUrl(url) + '?v=' + CACHE_BUST, isBinary: false });
+  const data = await targetPlugin.builders.data.download({ url: structureRequestUrl(url), isBinary: false });
   const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
   const model = await targetPlugin.builders.structure.createModel(traj);
   const struct = await targetPlugin.builders.structure.createStructure(model);
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
-  const r = await fetch(assetUrl(url) + '?v=' + CACHE_BUST);
+  const r = await fetch(structureRequestUrl(url));
   return r.ok ? await r.text() : '';
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
@@ -918,10 +925,10 @@ async function buildGridCell(cell, revision) {
     }
   }
 }
-async function buildGrid(preserveCamera = true) {
+async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) {
   const previousCamera = preserveCamera
     ? (gridViewers.find(cell => cell.plugin?.canvas3d)?.plugin.canvas3d.camera.getSnapshot()
-      || plugin?.canvas3d?.camera?.getSnapshot?.())
+      || (preserveCanonicalCamera ? plugin?.canvas3d?.camera?.getSnapshot?.() : null))
     : null;
   const revision = ++gridBuildRevision;
   disposeGridViewers();
@@ -1129,16 +1136,23 @@ async function buildSingleLayer() {
 }
 async function buildLayer() {
   if (displayMode === 'grid') {
+    // On the first question the canonical viewer has no framed scene yet. Its
+    // default camera points at empty space, so it must not override the camera
+    // that each newly loaded Grid pane derives from its actual structure.
+    const hadCanonicalScene = proteinData.length > 0 || layerData.length > 0;
     // Cover the canonical viewer before it is rebuilt with the Grid pose set;
     // otherwise One-at-a-time briefly flashes as Show all during the transition.
     $('#stage').classList.add('grid-active');
     $('#gridview').classList.add('on', 'loading-grid');
+    await buildGrid(true, hadCanonicalScene);
     try {
+      // Visible panes load first. The hidden canonical scene still completes
+      // before the rebuild coordinator enables interaction and starts tracing.
       await buildCanonicalLayer(gridEntries().map(entry => entry.choice));
     } catch (error) {
       console.warn('Canonical Grid scene could not be built:', error.message);
     }
-    return buildGrid();
+    return;
   }
   if ($('#gridview').classList.contains('on')) {
     gridBuildRevision++;
@@ -1914,6 +1928,7 @@ function syncButtons() {
   const uc = $('#uncluster');
   uc.textContent = clustered ? 'Uncluster' : 'Recluster';
   uc.classList.toggle('on', !clustered);
+  uc.setAttribute('aria-pressed', String(!clustered));
   uc.style.display = cur && cur.clusters.some(c => c.members.length > 1) ? '' : 'none';
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);

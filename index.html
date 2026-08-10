@@ -48,11 +48,10 @@
   #app{position:absolute;inset:0}
   #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
-  #stage.loading-system canvas{opacity:0;transition:none}
-  #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px 10px 82px;background:#e9eef3;
+  #stage.loading-system #app canvas{opacity:0;transition:none}
+  #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px 10px 150px;background:#e9eef3;
     transition:opacity .14s ease-out}
   #gridview.on{display:block;top:84px}
-  #stage.loading-system #gridview{opacity:0;transition:none}
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
     min-height:100%;transition:opacity .14s ease-out}
   #gridview.loading-grid #gridcells{opacity:0;transition:none}
@@ -228,6 +227,13 @@
   #view-options button,#lock{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
     border:1px solid var(--line);border-radius:9px;font-size:12.5px}
   #view-options button.on{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #view-options .view-actions button{display:flex;align-items:center;gap:8px;padding-inline:9px;background:#fff}
+  #view-options .view-actions button::after{content:"";width:27px;height:16px;flex:none;border-radius:999px;
+    background:radial-gradient(circle at 8px 50%,#fff 0 4.5px,transparent 5px),#c7d0d9;
+    box-shadow:inset 0 0 0 1px #aeb9c4;transition:background .14s ease}
+  #view-options .view-actions button.on::after{background:
+    radial-gradient(circle at calc(100% - 8px) 50%,#fff 0 4.5px,transparent 5px),var(--accent);
+    box-shadow:inset 0 0 0 1px #107ba9}
   #lock:not(:disabled):hover{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
   #view-options .hint{flex-basis:100%;padding:5px 8px;text-align:center;background:#ffffffeb;border-radius:7px}
   #wrap.intro #stage{display:none}

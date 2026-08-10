@@ -136,6 +136,8 @@ function gridLayerSandbox(overrides = {}) {
     calls,
     displayMode: 'grid',
     gridBuildRevision: 0,
+    proteinData: [],
+    layerData: [],
     gridEntries: () => [
       { choice: { pose_file: 'pose-a.pdb' } },
       { choice: { pose_file: 'pose-b.pdb' } },
@@ -156,7 +158,7 @@ function gridLayerSandbox(overrides = {}) {
   return sandbox;
 }
 
-test('Grid rebuilds the hidden canonical scene before the Grid tiles so traces stay replayable', async () => {
+test('Grid builds visible tiles before the hidden replay scene', async () => {
   const app = await readApp();
   const sandbox = gridLayerSandbox();
   const buildLayer = evaluateDeclaration(app, 'async function buildLayer()', sandbox);
@@ -166,12 +168,19 @@ test('Grid rebuilds the hidden canonical scene before the Grid tiles so traces s
   assert.deepEqual(sandbox.calls, [
     '#stage:grid-active',
     '#gridview:on,loading-grid',
-    'canonical:pose-a.pdb,pose-b.pdb',
     'grid',
+    'canonical:pose-a.pdb,pose-b.pdb',
   ]);
 });
 
-test('a failed canonical rebuild still leaves the Grid tiles to load', async () => {
+test('initial Grid framing ignores the empty canonical camera', async () => {
+  const app = await readApp();
+  assert.match(app, /const hadCanonicalScene = proteinData\.length > 0 \|\| layerData\.length > 0/);
+  assert.match(app, /await buildGrid\(true, hadCanonicalScene\)/);
+  assert.match(app, /preserveCanonicalCamera \? plugin\?\.canvas3d\?\.camera\?\.getSnapshot\?\.\(\) : null/);
+});
+
+test('a failed canonical rebuild leaves the already-loaded Grid tiles intact', async () => {
   const app = await readApp();
   const sandbox = gridLayerSandbox({
     buildCanonicalLayer: async () => { throw new Error('pose download failed'); },
@@ -183,9 +192,16 @@ test('a failed canonical rebuild still leaves the Grid tiles to load', async () 
   assert.deepEqual(sandbox.calls, [
     '#stage:grid-active',
     '#gridview:on,loading-grid',
-    'warn:pose download failed',
     'grid',
+    'warn:pose download failed',
   ]);
+});
+
+test('content-addressed weekly assets retain stable cache keys', async () => {
+  const app = await readApp();
+  assert.match(app, /url\.startsWith\('supabase:\/\/'\)\) return resolved/);
+  assert.match(app, /builders\.data\.download\(\{ url: structureRequestUrl\(url\)/);
+  assert.match(app, /fetch\(structureRequestUrl\(url\)\)/);
 });
 
 test('leaving Grid keeps rebuilding the single view before disposing Grid viewers', async () => {

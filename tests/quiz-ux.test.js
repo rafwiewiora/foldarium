@@ -47,6 +47,11 @@ test('view options are anchored to the bottom of the viewer', async () => {
   assert.match(html, /#view-options\{position:absolute;[\s\S]*?bottom:16px/);
 });
 
+test('Grid reserves clearance below its final row for the floating controls', async () => {
+  const html = await readHtml();
+  assert.match(html, /#gridview\{[^}]*padding:10px 10px 150px/);
+});
+
 test('viewer controls form an always-visible bottom toolbar', async () => {
   const html = await readHtml();
 
