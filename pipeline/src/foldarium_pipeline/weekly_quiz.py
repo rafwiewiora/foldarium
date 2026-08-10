@@ -891,6 +891,7 @@ def clone_weekly_quiz_manifests(
     private_index: Mapping[str, Any],
     *,
     round_id: str,
+    include_item_ids: Iterable[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Rebind one verified blind/private manifest pair to a replacement round.
 
@@ -932,8 +933,27 @@ def clone_weekly_quiz_manifests(
             result[item["id"]] = ids
         return result
 
-    if manifest_ids(blind) != manifest_ids(private):
+    blind_ids = manifest_ids(blind)
+    if blind_ids != manifest_ids(private):
         raise WeeklyQuizAssemblyError("source blind and private manifest IDs differ")
+    if include_item_ids is not None:
+        if isinstance(include_item_ids, (str, bytes)):
+            raise WeeklyQuizAssemblyError("included weekly item IDs must be an iterable")
+        included = {
+            item_id.strip()
+            for item_id in include_item_ids
+            if isinstance(item_id, str) and item_id.strip()
+        }
+        if not included:
+            raise WeeklyQuizAssemblyError("replacement weekly round cannot be empty")
+        unknown = included.difference(blind_ids)
+        if unknown:
+            raise WeeklyQuizAssemblyError(
+                "replacement weekly item IDs are absent from the source: "
+                + ", ".join(sorted(unknown))
+            )
+        blind["items"] = [item for item in blind["items"] if item["id"] in included]
+        private["items"] = [item for item in private["items"] if item["id"] in included]
     blind["round_id"] = round_id.strip()
     private["round_id"] = round_id.strip()
     private["blind_manifest_sha256"] = manifest_sha256(blind)

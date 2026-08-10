@@ -835,6 +835,7 @@ if modal is not None:
         round_environment: str = "production",
         beta: bool = True,
         open_round: bool = False,
+        minimum_cluster_count: int = 1,
     ) -> dict[str, Any]:
         """Clone one exact reviewed round without recomputing its pose assets."""
 
@@ -853,8 +854,33 @@ if modal is not None:
             private_index = json.loads(private_content)
         except (TypeError, ValueError) as exc:
             raise RuntimeError("source private index is not valid JSON") from exc
+        if (
+            isinstance(minimum_cluster_count, bool)
+            or not isinstance(minimum_cluster_count, int)
+            or minimum_cluster_count < 1
+        ):
+            raise ValueError("minimum_cluster_count must be a positive integer")
+        private_items = private_index.get("items")
+        if not isinstance(private_items, list) or not private_items:
+            raise RuntimeError("source private index has no weekly items")
+        included_item_ids: set[str] = set()
+        excluded_item_ids: list[str] = []
+        for item in private_items:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                raise RuntimeError("source private index contains an invalid item")
+            clustering = item.get("clustering")
+            cluster_count = clustering.get("cluster_count") if isinstance(clustering, Mapping) else None
+            if isinstance(cluster_count, bool) or not isinstance(cluster_count, int):
+                raise RuntimeError("source private index item has no valid cluster count")
+            if cluster_count >= minimum_cluster_count:
+                included_item_ids.add(item["id"])
+            else:
+                excluded_item_ids.append(item["id"])
         blind, promoted_private = clone_weekly_quiz_manifests(
-            source["blind_manifest"], private_index, round_id=round_id
+            source["blind_manifest"],
+            private_index,
+            round_id=round_id,
+            include_item_ids=included_item_ids,
         )
         private_object = coordinator.store_bytes(
             canonical_json(promoted_private).encode("utf-8"), "application/json"
@@ -867,6 +893,13 @@ if modal is not None:
             "promoted_from_round_id": source_round_id,
             "promoted_from_blind_manifest_sha256": source["blind_manifest_sha256"],
             "release_channel": "beta" if beta else "standard",
+            "quiz_item_filter": {
+                "policy": "minimum-pose-cluster-count/v1",
+                "minimum_cluster_count": minimum_cluster_count,
+                "source_item_count": len(private_items),
+                "included_item_count": len(included_item_ids),
+                "excluded_item_ids": sorted(excluded_item_ids),
+            },
         }
         response: Any = {"status": "uploaded-not-opened"}
         if open_round:
@@ -890,6 +923,9 @@ if modal is not None:
             "environment": round_environment,
             "release_channel": metadata["release_channel"],
             "source_round_id": source_round_id,
+            "source_item_count": len(private_items),
+            "minimum_cluster_count": minimum_cluster_count,
+            "excluded_item_ids": sorted(excluded_item_ids),
             "item_count": len(blind["items"]),
             "choice_count": sum(len(item["choices"]) for item in blind["items"]),
             "blind_manifest_sha256": manifest_sha256(blind),

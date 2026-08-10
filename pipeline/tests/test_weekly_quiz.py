@@ -202,6 +202,48 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
         ):
             clone_weekly_quiz_manifests(blind, private, round_id="replacement")
 
+    def test_clones_an_exact_nonempty_item_subset_and_rebinds_its_digest(self) -> None:
+        blind = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [
+                {"id": "keep", "choices": [{"id": "choice-1"}]},
+                {"id": "drop", "choices": [{"id": "choice-2"}]},
+            ],
+        }
+        private = {
+            "schema_version": 1,
+            "round_id": "preview-round",
+            "items": [
+                {"id": "keep", "choices": [{"id": "choice-1", "run_id": "run-1"}]},
+                {"id": "drop", "choices": [{"id": "choice-2", "run_id": "run-2"}]},
+            ],
+            "blind_manifest_sha256": weekly_quiz_module.manifest_sha256(blind),
+        }
+
+        promoted_blind, promoted_private = clone_weekly_quiz_manifests(
+            blind,
+            private,
+            round_id="filtered-round",
+            include_item_ids={"keep"},
+        )
+
+        self.assertEqual([item["id"] for item in promoted_blind["items"]], ["keep"])
+        self.assertEqual([item["id"] for item in promoted_private["items"]], ["keep"])
+        self.assertEqual(
+            promoted_private["blind_manifest_sha256"],
+            weekly_quiz_module.manifest_sha256(promoted_blind),
+        )
+        with self.assertRaisesRegex(
+            weekly_quiz_module.WeeklyQuizAssemblyError, "cannot be empty"
+        ):
+            clone_weekly_quiz_manifests(
+                blind,
+                private,
+                round_id="empty-round",
+                include_item_ids=set(),
+            )
+
 
 class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
     def test_selects_minimum_total_pairwise_rmsd_without_method_labels(self) -> None:

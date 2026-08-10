@@ -9,12 +9,30 @@ exact selection semantics used at intake.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable, Mapping
 
 from .sizing import count_smiles_heavy_atoms
 
-SELECTION_POLICY_VERSION = "cameo-drug-like/v2"
+SELECTION_POLICY_VERSION = "cameo-drug-like/v3"
 HEAVY_ATOM_MINIMUM = 15
+
+# Pose quizzes need one drug-like organic molecule, not a disconnected salt,
+# organometallic cofactor, or crystallographic metal complex whose fragments
+# happen to exceed the heavy-atom minimum when counted together.
+METAL_ELEMENTS = frozenset(
+    {
+        "Li", "Na", "K", "Rb", "Cs", "Fr", "Be", "Mg", "Ca", "Sr", "Ba", "Ra",
+        "Al", "Ga", "In", "Tl", "Sn", "Pb", "Bi",
+        "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+        "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+        "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+        "La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho",
+        "Er", "Tm", "Yb", "Lu", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am",
+        "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr",
+    }
+)
+_BRACKET_ELEMENT = re.compile(r"^\d*([A-Z][a-z]?|[bcnops])")
 
 # Kept in sync with the historical CAMEO quiz builder.  A later migration to a
 # versioned upstream artifact list should be a new selection-policy version.
@@ -42,6 +60,24 @@ PREFER_ALTERNATIVE_TO = frozenset({"TEP"})
 
 class SelectionError(ValueError):
     """Raised when an upstream ligand record is malformed."""
+
+
+def _smiles_contains_metal(smiles: str) -> bool:
+    """Return whether a SMILES contains a bracketed metal atom."""
+
+    index = 0
+    while index < len(smiles):
+        if smiles[index] != "[":
+            index += 1
+            continue
+        close = smiles.find("]", index + 1)
+        if close == -1:
+            return False
+        match = _BRACKET_ELEMENT.match(smiles[index + 1 : close])
+        if match and match.group(1).capitalize() in METAL_ELEMENTS:
+            return True
+        index = close + 1
+    return False
 
 
 def ligand_heavy_atoms(ligand: Mapping[str, Any]) -> int:
@@ -75,10 +111,13 @@ def select_ligand(
         component = component.strip().upper()
         if component in ARTIFACT_COMPONENTS or not isinstance(smiles, str) or not smiles.strip():
             continue
+        smiles = smiles.strip()
+        if "." in smiles or _smiles_contains_metal(smiles):
+            continue
         heavy_atoms = ligand_heavy_atoms(ligand)
         if heavy_atoms < heavy_atom_minimum:
             continue
-        ligand.update(component_id=component, smiles=smiles.strip(), heavy_atoms=heavy_atoms)
+        ligand.update(component_id=component, smiles=smiles, heavy_atoms=heavy_atoms)
         candidates.append(ligand)
 
     if not candidates:
@@ -93,6 +132,7 @@ def select_ligand(
 __all__ = [
     "ARTIFACT_COMPONENTS",
     "HEAVY_ATOM_MINIMUM",
+    "METAL_ELEMENTS",
     "PREFER_ALTERNATIVE_TO",
     "SELECTION_POLICY_VERSION",
     "SelectionError",

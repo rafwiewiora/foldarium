@@ -72,6 +72,23 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select_ligand([tep, other])["component_id"], "DRG")
         self.assertEqual(select_ligand([tep])["component_id"], "TEP")
 
+    def test_rejects_disconnected_and_metal_containing_ligands(self) -> None:
+        disconnected = {
+            "component_id": "402",
+            "smiles": "NCCS.[Fe+2].C#O.C#N.CCCCCCCCCCCCCCC",
+        }
+        organometallic = {
+            "component_id": "MTL",
+            "smiles": "CCCCCCCCCCCCCCC[Fe+2]",
+        }
+        drug = {"component_id": "DRG", "smiles": "C" * 15}
+
+        self.assertEqual(
+            select_ligand([disconnected, organometallic, drug])["component_id"],
+            "DRG",
+        )
+        self.assertIsNone(select_ligand([disconnected, organometallic]))
+
 
 class WwPdbTests(unittest.TestCase):
     def test_snapshot_records_hashes_and_counts(self) -> None:
