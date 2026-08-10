@@ -96,8 +96,8 @@ test('Foldarium branding is present and the name intro starts centered', async (
   const html = await readHtml();
   const logo = await readFile(new URL('../assets/foldarium-mark.svg', import.meta.url), 'utf8');
 
-  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="assets\/foldarium-mark\.svg"/);
-  assert.match(html, /<img class="brand-mark" src="assets\/foldarium-mark\.svg" alt=""/);
+  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="assets\/foldarium-mark\.svg\?v=\d+"/);
+  assert.match(html, /<img class="brand-mark" src="assets\/foldarium-mark\.svg\?v=\d+" alt=""/);
   assert.match(html, /<h1>Foldarium<\/h1>/);
   assert.match(html, /<div id="wrap" class="intro" hidden>/);
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
