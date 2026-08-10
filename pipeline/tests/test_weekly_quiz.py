@@ -247,13 +247,13 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
 
 
 class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
-    def test_weekly_alignment_uses_the_same_task_chain_and_robust_core(self) -> None:
+    def test_weekly_alignment_uses_the_complete_task_complex_and_robust_core(self) -> None:
         expected = {
             "receptor_rmsd": 1.0,
             "sequence_similarity": 1.0,
-            "reference_chain": "B",
-            "predicted_chain": "B",
-            "sequence_binding_policy": "exact-task-sequence/v1",
+            "reference_chains": ["A", "B"],
+            "predicted_chains": ["A", "B"],
+            "sequence_binding_policy": "exact-task-chain-id-and-sequence/v1",
             "robust_core": {
                 "policy": "sequence-ca-iterative-outlier-rejection/v1",
                 "retained_residue_count": 100,
@@ -261,14 +261,13 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         }
         with patch.object(
             weekly_quiz_module,
-            "best_receptor_superposition",
+            "exact_complex_receptor_superposition",
             return_value=expected,
         ) as aligner:
             result = weekly_quiz_module._weekly_receptor_superposition(
                 "reference",
                 "predicted",
-                anchor_chain_id="B",
-                anchor_sequence="AAAAAA",
+                expected_chain_sequences={"A": "AAAA", "B": "AAAAAA"},
             )
 
         self.assertEqual(result["receptor_rmsd"], 1.0)
@@ -276,25 +275,21 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
             result["chain_selection_policy"],
             weekly_quiz_module.RECEPTOR_ALIGNMENT_POLICY,
         )
-        self.assertEqual(result["task_anchor_chain_id"], "B")
         self.assertEqual(
             result["robust_core"]["policy"],
             "sequence-ca-iterative-outlier-rejection/v1",
         )
         self.assertEqual(
-            result["sequence_binding_policy"], "exact-task-sequence/v1"
+            result["sequence_binding_policy"],
+            "exact-task-chain-id-and-sequence/v1",
         )
         aligner.assert_called_once_with(
             "reference",
             "predicted",
-            stable_chain_pair=True,
-            reference_chain_ids={"B"},
-            predicted_chain_ids={"B"},
-            robust_core=True,
-            expected_sequence="AAAAAA",
+            expected_chain_sequences={"A": "AAAA", "B": "AAAAAA"},
         )
 
-    def test_selects_longest_input_protein_then_chain_id_without_ligand_input(self) -> None:
+    def test_binds_every_input_protein_chain_without_ligand_input(self) -> None:
         receptor_target = {
             "entities": [
                 {"type": "protein", "chain_ids": ["A"], "sequence": "AAAA"},
@@ -311,8 +306,8 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
             },
         }
 
-        selected = weekly_quiz_module._receptor_anchor(receptor_target)
-        ligand_changed = weekly_quiz_module._receptor_anchor(
+        selected = weekly_quiz_module._receptor_complex(receptor_target)
+        ligand_changed = weekly_quiz_module._receptor_complex(
             {
                 **receptor_target,
                 "entities": [
@@ -327,13 +322,11 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, ligand_changed)
-        self.assertEqual(selected["policy"], weekly_quiz_module.RECEPTOR_ENTITY_POLICY)
-        self.assertEqual(selected["chain_id"], "C")
-        self.assertEqual(selected["sequence_length"], 6)
-        self.assertEqual(
-            selected["sequence_sha256"],
-            hashlib.sha256(b"GGGGGG").hexdigest(),
-        )
+        provenance, sequences = selected
+        self.assertEqual(provenance["policy"], weekly_quiz_module.RECEPTOR_ENTITY_POLICY)
+        self.assertEqual(sequences, {"A": "AAAA", "C": "GGGGGG", "D": "TTTTTT", "Z": "GGGGGG"})
+        self.assertEqual(provenance["chain_count"], 4)
+        self.assertEqual(provenance["total_sequence_length"], 22)
 
     def test_selects_minimum_total_pairwise_rmsd_without_method_labels(self) -> None:
         choices = [
@@ -503,7 +496,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 6)
+            self.assertEqual(stage["schema_version"], 7)
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
             self.assertEqual(len(scoring_calls), 2)
@@ -619,25 +612,30 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 weekly_quiz_module.RECEPTOR_ANCHOR_POLICY,
             )
             self.assertEqual(
-                clustering["receptor_anchor"]["task_receptor_anchor"],
+                clustering["receptor_anchor"]["task_receptor_complex"],
                 {
                     "policy": weekly_quiz_module.RECEPTOR_ENTITY_POLICY,
-                    "chain_id": "A",
-                    "sequence_length": 6,
-                    "sequence_sha256": hashlib.sha256(b"AAAAAA").hexdigest(),
+                    "chain_count": 1,
+                    "total_sequence_length": 6,
+                    "chains": [
+                        {
+                            "chain_id": "A",
+                            "sequence_length": 6,
+                            "sequence_sha256": hashlib.sha256(b"AAAAAA").hexdigest(),
+                        }
+                    ],
                 },
             )
             for choice in private_index["items"][0]["choices"]:
-                self.assertEqual(choice["alignment"]["reference_chain"], "A")
-                self.assertEqual(choice["alignment"]["predicted_chain"], "A")
-                self.assertEqual(choice["alignment"]["task_anchor_chain_id"], "A")
+                self.assertEqual(choice["alignment"]["reference_chains"], ["A"])
+                self.assertEqual(choice["alignment"]["predicted_chains"], ["A"])
                 self.assertEqual(
                     choice["alignment"]["chain_selection_policy"],
                     weekly_quiz_module.RECEPTOR_ALIGNMENT_POLICY,
                 )
                 self.assertEqual(
                     choice["alignment"]["sequence_binding_policy"],
-                    "exact-task-sequence/v1",
+                    "exact-task-chain-id-and-sequence/v1",
                 )
                 self.assertEqual(
                     choice["alignment"]["robust_core"]["policy"],
@@ -645,7 +643,18 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     choice["alignment"]["robust_core"]["coarse_policy"],
-                    "deterministic-75-percent-least-trimmed-plus-sequence-windows/v1",
+                    "deterministic-pooled-75-percent-least-trimmed-plus-per-chain-windows/v3",
+                )
+                self.assertEqual(
+                    choice["alignment"]["robust_core"]["per_chain"],
+                    [
+                        {
+                            "chain_id": "A",
+                            "aligned_residue_count": 6,
+                            "retained_residue_count": 6,
+                            "retained_fraction": 1.0,
+                        }
+                    ],
                 )
             mapping = clustering["ligand_atom_mapping"]
             self.assertEqual(

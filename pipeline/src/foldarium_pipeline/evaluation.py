@@ -12,7 +12,7 @@ import difflib
 import math
 import re
 from pathlib import Path
-from collections.abc import Collection
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 EVALUATOR_VERSION = "foldarium-receptor-aligned-symmetry-rmsd/v1"
@@ -46,8 +46,14 @@ def _coordinates(residue: Any, numpy: Any) -> Any:
     )
 
 
-def _polymer_chains(model: Any) -> list[tuple[str, Any]]:
-    return [(chain.name, chain.get_polymer()) for chain in model if len(chain.get_polymer()) >= 5]
+def _polymer_chains(
+    model: Any, *, minimum_residues: int = 5
+) -> list[tuple[str, Any]]:
+    return [
+        (chain.name, chain.get_polymer())
+        for chain in model
+        if len(chain.get_polymer()) >= minimum_residues
+    ]
 
 
 def _sequence(polymer: Any, gemmi: Any) -> str:
@@ -62,7 +68,11 @@ def _atom_position(residue: Any, name: str) -> Any | None:
 
 
 def _sequence_aligned_positions(
-    reference: Any, predicted: Any, gemmi: Any
+    reference: Any,
+    predicted: Any,
+    gemmi: Any,
+    *,
+    minimum_count: int = 5,
 ) -> tuple[list[Any], list[Any]]:
     reference_sequence = _sequence(reference, gemmi)
     predicted_sequence = _sequence(predicted, gemmi)
@@ -89,8 +99,10 @@ def _sequence_aligned_positions(
                 predicted_positions.append(predicted_position)
         reference_index += count
         predicted_index += count
-    if len(reference_positions) < 5:
-        raise EvaluationError("fewer than five sequence-aligned receptor C-alpha atoms")
+    if len(reference_positions) < minimum_count:
+        raise EvaluationError(
+            f"fewer than {minimum_count} sequence-aligned receptor C-alpha atoms"
+        )
     return reference_positions, predicted_positions
 
 
@@ -103,21 +115,40 @@ def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
     return gemmi.superpose_positions(reference_positions, predicted_positions)
 
 
-def _robust_sequence_superposition(
-    reference: Any,
-    predicted: Any,
+def _robust_position_superposition(
+    reference_positions: Sequence[Any],
+    predicted_positions: Sequence[Any],
     gemmi: Any,
     *,
+    group_labels: Sequence[str] | None = None,
     cutoff_angstrom: float = 2.0,
     maximum_cycles: int = 5,
 ) -> tuple[Any, dict[str, Any]]:
-    """Fit a sequence-identical rigid core while rejecting flexible outliers."""
+    """Fit the largest coherent rigid core across pre-matched C-alpha pairs."""
 
-    reference_positions, predicted_positions = _sequence_aligned_positions(
-        reference, predicted, gemmi
-    )
     original_count = len(reference_positions)
-    minimum_count = max(5, math.ceil(original_count * 0.2))
+    if original_count != len(predicted_positions):
+        raise EvaluationError("receptor C-alpha pair counts differ")
+    if original_count < 5:
+        raise EvaluationError("fewer than five sequence-aligned receptor C-alpha atoms")
+    if group_labels is None:
+        labels = ["receptor"] * original_count
+    else:
+        labels = list(group_labels)
+        if len(labels) != original_count or any(not label for label in labels):
+            raise EvaluationError("receptor C-alpha group labels are invalid")
+    grouped_indices: dict[str, list[int]] = {}
+    for index, label in enumerate(labels):
+        grouped_indices.setdefault(label, []).append(index)
+    # A complex-wide percentage would reject a large, well-defined domain just
+    # because unrelated chains are also present.  Relative chain motion is an
+    # explicit outlier case here, so meaningful support is 20% of the longest
+    # submitted chain (or five residues), while candidates and ranking still
+    # use every pooled chain and always choose the largest coherent core.
+    minimum_count = max(
+        5,
+        math.ceil(max(len(indices) for indices in grouped_indices.values()) * 0.2),
+    )
 
     def fit_positions(indices: list[int]) -> Any:
         return gemmi.superpose_positions(
@@ -205,39 +236,193 @@ def _robust_sequence_superposition(
         )
         coarse_retained = sorted(ranked[:next_count])
 
-    # The global least-trimmed path can still converge on a compact mobile
-    # domain when a long protein's lever arm biases the first rotation.  Seed a
-    # bounded set of overlapping contiguous sequence windows as alternative
-    # domain hypotheses.  A window is only a seed: final support is always
-    # measured over every aligned residue, so the largest coherent core wins.
-    window_step = max(1, minimum_count // 2)
-    window_starts = list(
-        range(0, original_count - minimum_count + 1, window_step)
-    )
-    final_start = original_count - minimum_count
-    if window_starts[-1] != final_start:
-        window_starts.append(final_start)
-    for start in window_starts:
-        record_candidate(fit_positions(list(range(start, start + minimum_count))))
+    # Global least-trimmed fitting can be trapped between independently moving
+    # chains or domains.  Build deterministic sequence-local hypotheses within
+    # each submitted chain.  A short window is only a seed: candidate support is
+    # always re-measured over the complete pooled complex and must satisfy the
+    # complex-wide 20%/five-residue floor above.
+    support_window_count = 0
+    local_window_count = 0
+    local_seed_residue_count = min(minimum_count, 12)
+    for label in sorted(grouped_indices):
+        indices = grouped_indices[label]
+        support_seed_count = min(len(indices), minimum_count)
+        support_step = max(1, support_seed_count // 2)
+        support_starts = list(
+            range(0, len(indices) - support_seed_count + 1, support_step)
+        )
+        support_final_start = len(indices) - support_seed_count
+        if support_starts[-1] != support_final_start:
+            support_starts.append(support_final_start)
+        for start in support_starts:
+            record_candidate(
+                fit_positions(indices[start : start + support_seed_count])
+            )
+        support_window_count += len(support_starts)
+
+        local_count = min(len(indices), local_seed_residue_count)
+        local_step = max(1, local_count // 2)
+        local_starts = list(range(0, len(indices) - local_count + 1, local_step))
+        local_final_start = len(indices) - local_count
+        if local_starts[-1] != local_final_start:
+            local_starts.append(local_final_start)
+        for start in local_starts:
+            record_candidate(fit_positions(indices[start : start + local_count]))
+        local_window_count += len(local_starts)
 
     if not candidates:
         raise EvaluationError(
             "robust receptor alignment retained too few sequence-aligned residues"
         )
     _score, fit, retained, cycles = min(candidates, key=lambda row: row[0])
+    per_group = []
+    retained_set = set(retained)
+    for label in sorted(grouped_indices):
+        indices = grouped_indices[label]
+        retained_count = sum(index in retained_set for index in indices)
+        per_group.append(
+            {
+                "group_id": label,
+                "aligned_residue_count": len(indices),
+                "retained_residue_count": retained_count,
+                "retained_fraction": retained_count / len(indices),
+            }
+        )
     return fit, {
         "policy": "sequence-ca-iterative-outlier-rejection/v1",
         "cutoff_angstrom": float(cutoff_angstrom),
         "maximum_cycles": int(maximum_cycles),
         "cycles_completed": cycles,
+        "minimum_support_policy": "20-percent-longest-submitted-chain-or-five/v1",
+        "minimum_retained_residue_count": minimum_count,
         "coarse_policy": (
-            "deterministic-75-percent-least-trimmed-plus-sequence-windows/v1"
+            "deterministic-pooled-75-percent-least-trimmed-plus-per-chain-windows/v3"
         ),
         "coarse_retained_counts": coarse_retained_counts,
-        "coarse_window_count": len(window_starts),
+        "coarse_window_count": support_window_count,
+        "local_seed_residue_count": local_seed_residue_count,
+        "local_window_count": local_window_count,
         "aligned_residue_count": original_count,
         "retained_residue_count": len(retained),
         "retained_fraction": len(retained) / original_count,
+        "per_group": per_group,
+    }
+
+
+def _robust_sequence_superposition(
+    reference: Any,
+    predicted: Any,
+    gemmi: Any,
+    *,
+    cutoff_angstrom: float = 2.0,
+    maximum_cycles: int = 5,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit a sequence-aligned rigid core while rejecting flexible outliers."""
+
+    reference_positions, predicted_positions = _sequence_aligned_positions(
+        reference, predicted, gemmi
+    )
+    return _robust_position_superposition(
+        reference_positions,
+        predicted_positions,
+        gemmi,
+        cutoff_angstrom=cutoff_angstrom,
+        maximum_cycles=maximum_cycles,
+    )
+
+
+def exact_complex_receptor_superposition(
+    reference_model: Any,
+    predicted_model: Any,
+    *,
+    expected_chain_sequences: Mapping[str, str],
+) -> dict[str, Any]:
+    """Align all submitted protein chains through one robust complex-wide fit.
+
+    Chain identity is immutable task input, not inferred from ligand proximity
+    or prediction geometry.  Every expected chain must occur exactly once under
+    its submitted ID and exact sequence in both models.  Sequence-aligned CA
+    pairs from all chains are pooled; independently moving chains and flexible
+    domains can then be rejected as geometric outliers from one shared frame.
+    """
+
+    try:
+        import gemmi
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise EvaluationError("receptor alignment requires Gemmi") from exc
+    if not isinstance(expected_chain_sequences, Mapping) or not expected_chain_sequences:
+        raise EvaluationError("expected receptor chain sequences must be non-empty")
+    normalized: dict[str, str] = {}
+    for chain_id, sequence in expected_chain_sequences.items():
+        if (
+            not isinstance(chain_id, str)
+            or not chain_id
+            or not isinstance(sequence, str)
+            or not sequence
+            or not sequence.isalpha()
+        ):
+            raise EvaluationError("expected receptor chain sequences are invalid")
+        normalized[chain_id] = sequence.upper()
+
+    def model_chains(model: Any, role: str) -> dict[str, Any]:
+        chains: dict[str, Any] = {}
+        for chain_id, polymer in _polymer_chains(model, minimum_residues=1):
+            if chain_id in normalized:
+                if chain_id in chains:
+                    raise EvaluationError(f"{role} receptor chain {chain_id} is duplicated")
+                chains[chain_id] = polymer
+        missing = sorted(set(normalized) - set(chains))
+        if missing:
+            raise EvaluationError(
+                f"{role} receptor lacks submitted protein chain(s): {', '.join(missing)}"
+            )
+        for chain_id, expected_sequence in normalized.items():
+            if _sequence(chains[chain_id], gemmi) != expected_sequence:
+                raise EvaluationError(
+                    f"{role} receptor chain {chain_id} does not match its submitted sequence"
+                )
+        return chains
+
+    reference_chains = model_chains(reference_model, "reference")
+    predicted_chains = model_chains(predicted_model, "predicted")
+    reference_positions: list[Any] = []
+    predicted_positions: list[Any] = []
+    group_labels: list[str] = []
+    for chain_id in sorted(normalized):
+        chain_reference, chain_predicted = _sequence_aligned_positions(
+            reference_chains[chain_id],
+            predicted_chains[chain_id],
+            gemmi,
+            minimum_count=1,
+        )
+        reference_positions.extend(chain_reference)
+        predicted_positions.extend(chain_predicted)
+        group_labels.extend([chain_id] * len(chain_reference))
+    superposition, robust_audit = _robust_position_superposition(
+        reference_positions,
+        predicted_positions,
+        gemmi,
+        group_labels=group_labels,
+    )
+    robust_audit["per_chain"] = [
+        {
+            "chain_id": row["group_id"],
+            "aligned_residue_count": row["aligned_residue_count"],
+            "retained_residue_count": row["retained_residue_count"],
+            "retained_fraction": row["retained_fraction"],
+        }
+        for row in robust_audit.pop("per_group")
+    ]
+    chain_ids = sorted(normalized)
+    return {
+        "reference_chains": chain_ids,
+        "predicted_chains": chain_ids,
+        "sequence_similarity": 1.0,
+        "receptor_rmsd": float(superposition.rmsd),
+        "transform": superposition.transform,
+        "chain_selection_policy": "exact-task-complex-robust-core/v1",
+        "sequence_binding_policy": "exact-task-chain-id-and-sequence/v1",
+        "robust_core": robust_audit,
     }
 
 

@@ -5,6 +5,7 @@ import unittest
 from foldarium_pipeline.evaluation import (
     EvaluationError,
     best_receptor_superposition,
+    exact_complex_receptor_superposition,
     _receptor_candidate_key,
     _robust_sequence_superposition,
     _sequence_superposition,
@@ -120,8 +121,9 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
         self.assertEqual(audit["retained_residue_count"], 30)
         self.assertEqual(
             audit["coarse_policy"],
-            "deterministic-75-percent-least-trimmed-plus-sequence-windows/v1",
+            "deterministic-pooled-75-percent-least-trimmed-plus-per-chain-windows/v3",
         )
+        self.assertEqual(audit["local_seed_residue_count"], 8)
         self.assertEqual(audit["coarse_retained_counts"][0], 40)
         self.assertIn(30, audit["coarse_retained_counts"])
         self.assertLess(robust.rmsd, 1e-5)
@@ -129,6 +131,66 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
         self.assertAlmostEqual(transformed.x, reference[10][0].pos.x, places=5)
         self.assertAlmostEqual(transformed.y, reference[10][0].pos.y, places=5)
         self.assertAlmostEqual(transformed.z, reference[10][0].pos.z, places=5)
+
+    def test_pools_exact_task_chains_and_rejects_relative_chain_motion(self) -> None:
+        translation = (7.0, -4.0, 3.0)
+        reference_model = [
+            FakeChain("A", self.translated_polymer(40)),
+            FakeChain("B", self.translated_polymer(60, translation=(0.0, 50.0, 0.0))),
+            FakeChain("C", self.translated_polymer(40, translation=(0.0, 100.0, 0.0))),
+        ]
+        predicted_model = [
+            FakeChain("A", self.translated_polymer(40, translation=translation)),
+            FakeChain("B", self.translated_polymer(60, translation=(40.0, 50.0, 0.0))),
+            FakeChain(
+                "C",
+                self.translated_polymer(
+                    40,
+                    translation=(
+                        translation[0],
+                        100.0 + translation[1],
+                        translation[2],
+                    ),
+                ),
+            ),
+        ]
+
+        result = exact_complex_receptor_superposition(
+            reference_model,
+            predicted_model,
+            expected_chain_sequences={
+                "A": "A" * 40,
+                "B": "A" * 60,
+                "C": "A" * 40,
+            },
+        )
+
+        self.assertEqual(result["reference_chains"], ["A", "B", "C"])
+        self.assertEqual(result["predicted_chains"], ["A", "B", "C"])
+        self.assertEqual(
+            result["sequence_binding_policy"],
+            "exact-task-chain-id-and-sequence/v1",
+        )
+        self.assertLess(result["receptor_rmsd"], 1e-5)
+        self.assertEqual(result["robust_core"]["aligned_residue_count"], 140)
+        contributions = {
+            row["chain_id"]: row
+            for row in result["robust_core"]["per_chain"]
+        }
+        self.assertEqual(contributions["A"]["retained_residue_count"], 40)
+        self.assertEqual(contributions["B"]["retained_residue_count"], 0)
+        self.assertEqual(contributions["C"]["retained_residue_count"], 40)
+
+    def test_exact_task_complex_fails_closed_for_missing_chain(self) -> None:
+        reference_model = [FakeChain("A", self.translated_polymer(6))]
+        predicted_model = [FakeChain("A", self.translated_polymer(6))]
+
+        with self.assertRaisesRegex(EvaluationError, "lacks submitted protein chain"):
+            exact_complex_receptor_superposition(
+                reference_model,
+                predicted_model,
+                expected_chain_sequences={"A": "AAAAAA", "B": "AAAAAA"},
+            )
 
     def test_rejects_flexible_ca_outliers_and_recovers_the_shared_core_frame(self) -> None:
         translation = (7.0, -4.0, 3.0)
@@ -163,6 +225,7 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
         self.assertEqual(audit["aligned_residue_count"], 62)
         self.assertEqual(audit["retained_residue_count"], 60)
         self.assertLess(audit["retained_fraction"], 1.0)
+        self.assertEqual(audit["local_seed_residue_count"], 12)
         transformed = robust.transform.apply(predicted[10][0].pos)
         self.assertAlmostEqual(transformed.x, reference[10][0].pos.x, places=5)
         self.assertAlmostEqual(transformed.y, reference[10][0].pos.y, places=5)
