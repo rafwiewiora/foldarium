@@ -230,18 +230,22 @@ class WeeklyMetricReuseTests(unittest.TestCase):
             ligand_path = root / "ligand.sdf"
             protein_path.write_bytes(b"protein-bytes")
             ligand_path.write_bytes(b"ligand-bytes")
-            scorer = kwargs["choice_scorer"]
-            captured["reused"] = scorer(
-                protein_path=protein_path,
-                ligand_path=ligand_path,
-                ligand_smiles="CCO",
-                pose_id=existing_pose_id,
-            )
-            captured["missing"] = scorer(
-                protein_path=protein_path,
-                ligand_path=ligand_path,
-                ligand_smiles="CCO",
-                pose_id=missing_pose_id,
+            scorer = kwargs["choice_batch_scorer"]
+            captured["reused"], captured["missing"] = scorer(
+                (
+                    {
+                        "protein_path": protein_path,
+                        "ligand_path": ligand_path,
+                        "ligand_smiles": "CCO",
+                        "pose_id": existing_pose_id,
+                    },
+                    {
+                        "protein_path": protein_path,
+                        "ligand_path": ligand_path,
+                        "ligand_smiles": "CCO",
+                        "pose_id": missing_pose_id,
+                    },
+                )
             )
             return {"items": [{"clustering": {"cluster_count": 2}}]}
 
@@ -304,11 +308,15 @@ class WeeklyMetricReuseTests(unittest.TestCase):
             ligand_path = root / "ligand.sdf"
             protein_path.write_bytes(b"protein-bytes")
             ligand_path.write_bytes(b"ligand-bytes")
-            return kwargs["choice_scorer"](
-                protein_path=protein_path,
-                ligand_path=ligand_path,
-                ligand_smiles="CCO",
-                pose_id=missing_pose_id,
+            return kwargs["choice_batch_scorer"](
+                (
+                    {
+                        "protein_path": protein_path,
+                        "ligand_path": ligand_path,
+                        "ligand_smiles": "CCO",
+                        "pose_id": missing_pose_id,
+                    },
+                )
             )
 
         with patch.object(module.modal.Function, "from_name") as from_name:
@@ -322,6 +330,55 @@ class WeeklyMetricReuseTests(unittest.TestCase):
                     scoring={"pose_id": "source-pose-id"},
                 )
         from_name.assert_not_called()
+
+
+class WeeklyScoringConcurrencyTests(unittest.TestCase):
+    @staticmethod
+    def deployment_module():
+        return TransientMsaRetrySubmissionTests.deployment_module()
+
+    def test_scores_at_most_four_calls_and_restores_request_order(self) -> None:
+        import threading
+        import time
+
+        module = self.deployment_module()
+        lock = threading.Lock()
+        first_wave = threading.Barrier(module.WEEKLY_SCORING_MAX_WORKERS)
+        active = 0
+        maximum_active = 0
+
+        def scorer(*, pose_id, **_kwargs):
+            nonlocal active, maximum_active
+            index = int(pose_id.split("-")[-1])
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                if index < module.WEEKLY_SCORING_MAX_WORKERS:
+                    first_wave.wait(timeout=2)
+                time.sleep((8 - index) * 0.002)
+                return {"pose_id": pose_id}
+            finally:
+                with lock:
+                    active -= 1
+
+        requests = tuple(
+            {
+                "protein_path": Path(f"protein-{index}.pdb"),
+                "ligand_path": Path(f"ligand-{index}.pdb"),
+                "ligand_smiles": "CCO",
+                "pose_id": f"pose-{index}",
+            }
+            for index in range(8)
+        )
+        results = module._score_weekly_choices_concurrently(scorer, requests)
+
+        self.assertEqual(module.WEEKLY_SCORING_MAX_WORKERS, 4)
+        self.assertEqual(maximum_active, 4)
+        self.assertEqual(
+            [result["pose_id"] for result in results],
+            [request["pose_id"] for request in requests],
+        )
 
 
 class WednesdayRevealDeploymentTests(unittest.TestCase):

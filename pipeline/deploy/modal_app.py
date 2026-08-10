@@ -20,7 +20,9 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised without deployment e
 APP_NAME = "foldarium-predictions"
 WEEKLY_SCORING_APP_NAME = "foldarium-weekly-scoring"
 WEEKLY_SCORING_FUNCTION_NAME = "score_pose"
+WEEKLY_SCORING_MAX_WORKERS = 4
 PUBLIC_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
@@ -47,6 +50,35 @@ def _weekly_public_bucket(explicit: str | None = None) -> str:
             "public quiz bucket must be an explicit safe Storage bucket name"
         )
     return value
+
+
+def _score_weekly_choices_concurrently(
+    choice_scorer: Any,
+    requests: tuple[Mapping[str, Any], ...],
+) -> tuple[Mapping[str, Any], ...]:
+    """Score an ordered batch with a hard four-call concurrency ceiling."""
+
+    if not requests:
+        return ()
+    results: list[Mapping[str, Any] | None] = [None] * len(requests)
+    with ThreadPoolExecutor(
+        max_workers=min(WEEKLY_SCORING_MAX_WORKERS, len(requests)),
+        thread_name_prefix="foldarium-pose-score",
+    ) as executor:
+        futures = {
+            executor.submit(choice_scorer, **dict(request)): index
+            for index, request in enumerate(requests)
+        }
+        try:
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    if any(result is None for result in results):
+        raise RuntimeError("weekly pose scoring batch returned an incomplete result set")
+    return tuple(result for result in results if result is not None)
 
 # Official OpenFold3 0.4-pixi (OpenFold3 0.4.4) OCI index. Keep this immutable;
 # upgrading the model runtime should be an explicit, reviewed change with a new
@@ -766,15 +798,19 @@ if modal is not None:
             raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
 
         choice_scorer = None
+        choice_batch_scorer = None
         remote_scorer = None
+        remote_scorer_lock = threading.Lock()
 
         def score_choice_remotely(*, protein_path, ligand_path, ligand_smiles, pose_id):
             nonlocal remote_scorer
             if remote_scorer is None:
-                remote_scorer = modal.Function.from_name(
-                    WEEKLY_SCORING_APP_NAME,
-                    WEEKLY_SCORING_FUNCTION_NAME,
-                )
+                with remote_scorer_lock:
+                    if remote_scorer is None:
+                        remote_scorer = modal.Function.from_name(
+                            WEEKLY_SCORING_APP_NAME,
+                            WEEKLY_SCORING_FUNCTION_NAME,
+                        )
             protein = Path(protein_path).read_bytes()
             ligand = Path(ligand_path).read_bytes()
             return remote_scorer.remote(
@@ -856,6 +892,12 @@ if modal is not None:
         elif include_pose_metrics:
             choice_scorer = score_choice_remotely
 
+        if choice_scorer is not None:
+            def score_choice_batch(requests):
+                return _score_weekly_choices_concurrently(choice_scorer, requests)
+
+            choice_batch_scorer = score_choice_batch
+
         with tempfile.TemporaryDirectory(prefix="foldarium-weekly-quiz-") as temporary:
             stage = stage_weekly_quiz(
                 complete,
@@ -863,7 +905,7 @@ if modal is not None:
                 round_id=round_id,
                 campaign_id=campaign_id,
                 downloader=private.download_content_object,
-                choice_scorer=choice_scorer,
+                choice_batch_scorer=choice_batch_scorer,
             )
             published = publish_staged_weekly_quiz(
                 temporary,

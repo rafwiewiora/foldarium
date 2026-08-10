@@ -2,7 +2,7 @@
 
 `modal_scoring_app.py` is a separate, CPU-only Modal app. It must not be folded
 into or deployed over `foldarium-predictions`: Brian can use that production app
-independently while scoring stays serialized in `foldarium-weekly-scoring`.
+independently while scoring stays bounded in `foldarium-weekly-scoring`.
 
 The scientific unit is one exact cofolded pair:
 
@@ -40,13 +40,19 @@ modal run -e main pipeline/deploy/modal_scoring_app.py::score_local \
 
 The deployed function name for the coordinator is `score_pose` in app
 `foldarium-weekly-scoring`. It has no secret, GPU, schedule, or database access.
-Its hard Modal envelope is one physical CPU, 2 GiB RAM, five minutes, and one
-container. The inner smina subprocess has a two-minute ceiling per pose.
+Its hard Modal envelope is one physical CPU and 2 GiB RAM per call, five
+minutes per call, and at most four containers. The assembler writes every exact
+protein/pose input and derives every opaque pose ID before dispatching an
+ordered batch through at most four worker threads. The inner smina subprocess
+has a two-minute ceiling per pose.
 
 The weekly assembler calls this deployed function only when its explicit
 `include_pose_metrics` argument is true. A normal assembly remains metric-free.
 Scoring happens before the immutable blind-manifest digest is created, and any
 missing, mismatched, or malformed result aborts assembly before a round can open.
+Completed results are rebound to their deterministic request positions only
+after the whole batch returns and validates; completion timing cannot reorder
+quiz choices.
 
 The reviewed production-runtime canary on 2026-08-08 used only synthetic local
 coordinates. It verified the pinned smina binary and ProLIF runtime end to end;
@@ -55,9 +61,11 @@ scoring a full round, run a reviewed real cofolded receptor/pose pair and inspec
 both the score provenance and interaction summary.
 
 At Modal's 2026-08-08 list rates, the requested resources cost approximately
-`$0.00001754/second` (`$0.00105/minute`): one CPU at `$0.0000131/second` plus
+`$0.00001754/second` (`$0.00105/minute`) per active call: one CPU at
+`$0.0000131/second` plus
 2 GiB at `$0.00000222/GiB/second`. A 330-pose weekly set taking two to five CPU
 seconds per pose is about `$0.012-$0.029`, plus cold-start/image-transfer time.
 The deliberately pessimistic two-minute-per-pose ceiling would be about `$0.69`
-for 330 poses. Confirm actual duration on a handful of representative pairs
-before submitting the whole set.
+for 330 poses. Four-way execution reduces expected scoring wall time without
+changing total CPU/memory-seconds materially. Confirm actual duration on a
+handful of representative pairs before submitting the whole set.

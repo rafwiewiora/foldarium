@@ -680,6 +680,111 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     round_metadata={"stage_sha256": "operator-value"},
                 )
 
+    def test_batch_scores_only_after_all_exact_inputs_are_staged_in_order(self) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+        observed_pose_ids: list[str] = []
+
+        def score_batch(requests):
+            self.assertIsInstance(requests, tuple)
+            self.assertEqual(len(requests), 2)
+            self.assertTrue(
+                all(
+                    Path(request["protein_path"]).is_file()
+                    and Path(request["ligand_path"]).is_file()
+                    for request in requests
+                )
+            )
+            observed_pose_ids.extend(request["pose_id"] for request in requests)
+            return [
+                {
+                    "pose_id": request["pose_id"],
+                    "schema_version": "foldarium.pose-score/v1",
+                    "status": "succeeded",
+                    "scores": {"smina_affinity_kcal_mol": -7.0 - index},
+                    "provenance": {
+                        "mode": "score_only",
+                        "scoring_function": "vina",
+                    },
+                    "interaction_summary": {
+                        "engine": "prolif",
+                        "policy": "prolif-implicit-hbond-unique-protein-residue/v1",
+                        "count": index,
+                    },
+                }
+                for index, request in enumerate(requests)
+            ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-batch",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+                choice_batch_scorer=score_batch,
+            )
+
+        choices = stage["items"][0]["choices"]
+        self.assertEqual(
+            [choice["scoring"]["pose_id"] for choice in choices],
+            observed_pose_ids,
+        )
+        self.assertEqual(
+            [choice["smina_score"]["value"] for choice in choices],
+            [-7.0, -8.0],
+        )
+
+    def test_batch_score_failure_never_writes_a_publishable_stage(self) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        def score_batch(requests):
+            results = []
+            for request in requests:
+                results.append(
+                    {
+                        "pose_id": request["pose_id"],
+                        "schema_version": "foldarium.pose-score/v1",
+                        "status": "succeeded",
+                        "scores": {"smina_affinity_kcal_mol": -7.0},
+                        "provenance": {
+                            "mode": "score_only",
+                            "scoring_function": "vina",
+                        },
+                        "interaction_summary": {
+                            "engine": "prolif",
+                            "policy": "test-policy/v1",
+                            "count": 1,
+                        },
+                    }
+                )
+            results[-1]["pose_id"] = "wrong-pose-id"
+            return results
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "wrong pose identity",
+            ):
+                stage_weekly_quiz(
+                    [boltz, openfold],
+                    temporary,
+                    round_id="weekly-batch-failure",
+                    campaign_id="weekly-2026-08-08",
+                    downloader=lambda uri, **_: downloads[uri],
+                    choice_batch_scorer=score_batch,
+                )
+            self.assertFalse(Path(temporary, "stage.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

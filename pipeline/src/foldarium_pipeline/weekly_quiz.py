@@ -663,11 +663,25 @@ def stage_weekly_quiz(
     downloader: Callable[..., bytes],
     required_methods: frozenset[str] = REQUIRED_METHODS,
     choice_scorer: Callable[..., Mapping[str, Any]] | None = None,
+    choice_batch_scorer: (
+        Callable[[tuple[Mapping[str, Any], ...]], Iterable[Mapping[str, Any]]] | None
+    ) = None,
 ) -> dict[str, Any]:
-    """Download private complexes and write a common-frame weekly local stage."""
+    """Download private complexes and write a common-frame weekly local stage.
+
+    ``choice_scorer`` retains the original synchronous, per-choice contract.
+    ``choice_batch_scorer`` receives an immutable, deterministically ordered
+    tuple only after every exact scoring input has been written.  Batch results
+    must use that same order; no score is attached to the stage until the whole
+    batch has returned and validated successfully.
+    """
 
     if not isinstance(round_id, str) or not round_id or not isinstance(campaign_id, str) or not campaign_id:
         raise WeeklyQuizAssemblyError("round_id and campaign_id are required")
+    if choice_scorer is not None and choice_batch_scorer is not None:
+        raise WeeklyQuizAssemblyError(
+            "choice_scorer and choice_batch_scorer are mutually exclusive"
+        )
     root = Path(destination).resolve()
     if (root / "stage.json").exists():
         raise WeeklyQuizAssemblyError("stage destination already contains stage.json")
@@ -675,6 +689,9 @@ def stage_weekly_quiz(
     gemmi, numpy, Chem = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
     staged_items: list[dict[str, Any]] = []
+    pending_choice_scores: list[
+        tuple[dict[str, Any], dict[str, Any]]
+    ] = []
 
     for target_id, target_runs in sorted(grouped.items()):
         ordered_runs = sorted(
@@ -850,6 +867,27 @@ def stage_weekly_quiz(
                     pose_id=pose_id,
                 )
                 row.update(_choice_scoring_fields(scoring, expected_pose_id=pose_id))
+            elif choice_batch_scorer is not None:
+                pose_id = choice_order_digest(
+                    round_id,
+                    target_id,
+                    {
+                        "run_id": choice["run_id"],
+                        "sample_id": choice["sample_id"],
+                        "artifact_sha256": choice["artifact_sha256"],
+                    },
+                )
+                pending_choice_scores.append(
+                    (
+                        row,
+                        {
+                            "protein_path": root / choice_protein_relative,
+                            "ligand_path": root / pose_relative,
+                            "ligand_smiles": ligand_smiles,
+                            "pose_id": pose_id,
+                        },
+                    )
+                )
             choice_rows.append(row)
         atom_counts = {len(coordinates) for coordinates in pose_coordinates}
         if atom_counts != {heavy_atom_count}:
@@ -950,6 +988,30 @@ def stage_weekly_quiz(
                 "choices": choice_rows,
             }
         )
+
+    if choice_batch_scorer is not None:
+        requests = tuple(request for _, request in pending_choice_scores)
+        for request in requests:
+            if not Path(request["protein_path"]).is_file() or not Path(
+                request["ligand_path"]
+            ).is_file():
+                raise WeeklyQuizAssemblyError(
+                    "batch pose scoring input disappeared before dispatch"
+                )
+        try:
+            results = list(choice_batch_scorer(requests))
+        except Exception as exc:
+            raise WeeklyQuizAssemblyError("batch pose scoring failed") from exc
+        if len(results) != len(pending_choice_scores):
+            raise WeeklyQuizAssemblyError(
+                "batch pose scorer returned the wrong number of results"
+            )
+        validated_updates = [
+            _choice_scoring_fields(result, expected_pose_id=request["pose_id"])
+            for (_, request), result in zip(pending_choice_scores, results)
+        ]
+        for (row, _), updates in zip(pending_choice_scores, validated_updates):
+            row.update(updates)
 
     stage = {
         "schema_version": WEEKLY_QUIZ_STAGE_VERSION,
