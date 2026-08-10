@@ -262,7 +262,8 @@ test('switching display mode renders choices after the queued mutation', async (
 
   assert.deepEqual(calls, ['rememberView', 'syncButtons', 'rebuild:all', 'renderUI', 'trace:display_mode_changed']);
   assert.equal(sandbox.displayMode, 'all');
-  assert.equal(sandbox.cur.selected, null, 'leaving Grid clears the Grid-exact selection');
+  assert.deepEqual(sandbox.cur.selected, { label: 'A' },
+    'layout changes preserve the explicit preference');
 });
 
 test('cluster toggles preserve the exact One-at-a-time pose and Show-all context', async () => {
@@ -318,7 +319,7 @@ test('Grid page switching rebuilds once with the new page already applied', asyn
   const sandbox = {
     displayMode: 'grid',
     gridMethodIndex: 0,
-    cur: { gridMethods: ['af3', 'boltz'], showAnswer: false },
+    cur: { item: { source: 'rnp' }, gridMethods: ['af3', 'boltz'], showAnswer: false },
     methodName: method => method.toUpperCase(),
     interactionBlocked: () => false,
     renderUI: () => { calls.push('renderUI'); },
@@ -637,7 +638,7 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   assert.deepEqual(calls, [[3, exact]]);
 });
 
-test('Weekly One at a time selects the exact pose clicked in Molstar', async () => {
+test('Weekly One at a time inspects without preferring the exact pose clicked in Molstar', async () => {
   const app = await readApp();
   const exact = { pose_file: 'exact.pdb' };
   const calls = [];
@@ -650,15 +651,14 @@ test('Weekly One at a time selects the exact pose clicked in Molstar', async () 
     visibleIndexForChoice: () => 2,
     clearTransientPoseSelection: () => {},
     plugin: {},
-    onPick: async (...args) => { calls.push(args); },
+    inspectCanonicalChoice: (...args) => { calls.push(args); },
     console,
   });
 
   handler({ current: { repr: {} } });
   await Promise.resolve();
 
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[2, exact, { preserveScene: true }]]);
-  assert.match(app, /if \(preserveScene\) selectShownPose\(\);/);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[exact]]);
 });
 
 test('pose clicks clear only Molstar selection marking after the native click', async () => {
@@ -682,7 +682,7 @@ test('pose clicks clear only Molstar selection marking after the native click', 
     'ligand focus and its pocket interactions must remain intact');
 });
 
-test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async () => {
+test('Weekly Grid inspects without preferring the exact pose clicked inside its Molstar pane', async () => {
   const app = await readApp();
   const choice = { pose_file: 'grid-pose.pdb', color: 0x5B8FF9 };
   const calls = [];
@@ -713,7 +713,7 @@ test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async
     locked: () => false,
     activatePane: (...args) => { calls.push(['pane', ...args]); },
     selectedPaneId: null,
-    onPick: async (...args) => { calls.push(['pick', ...args]); },
+    inspectGridChoice: (...args) => { calls.push(['inspect', ...args]); },
     acceptedChoiceCorrect: () => false,
     sameChoice: (left, right) => left?.pose_file === right?.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
@@ -736,8 +736,7 @@ test('Weekly Grid selects the exact pose clicked inside its Molstar pane', async
   await Promise.resolve();
 
   assert.deepEqual(calls, [
-    ['pane', 'pane-0-4', 'ligand-click'],
-    ['pick', 4, choice],
+    ['inspect', cell.entry, 'pane-0-4', 'ligand-click'],
   ]);
 });
 
@@ -775,7 +774,14 @@ test('Weekly Show all waits for the click zoom before activating pose context', 
     displayMode: 'all',
     plugin,
     cameraSnapshotAfterInteraction: async () => zoomedCamera,
-    onPick: async (...args) => { calls.push(args); },
+    shownOne: 0,
+    selectedPaneId: 'pane-old',
+    nextCanonicalCameraSnapshot: null,
+    renderUI: () => { calls.push(['render']); },
+    recordAppEvent: action => { calls.push(['trace', action]); },
+    viewerRebuild: {
+      enqueue: async (mutate, finalize) => { await mutate(); await finalize(); },
+    },
   };
   const activate = evaluateDeclaration(
     app,
@@ -785,13 +791,12 @@ test('Weekly Show all waits for the click zoom before activating pose context', 
 
   await activate(2, choice);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[
-    2,
-    choice,
-    { rebuildCameraSnapshot: zoomedCamera },
-  ]]);
+  assert.equal(activationSandbox.shownOne, 2);
+  assert.equal(activationSandbox.cur.contextChoice, choice);
+  assert.equal(activationSandbox.nextCanonicalCameraSnapshot, zoomedCamera);
+  assert.deepEqual(calls, [['render'], ['trace', 'pose_inspected']]);
   assert.match(app, /let preservedCamera = nextCanonicalCameraSnapshot;\s*nextCanonicalCameraSnapshot = null;/);
-  assert.match(app, /nextCanonicalCameraSnapshot = rebuildCameraSnapshot;/);
+  assert.match(app, /nextCanonicalCameraSnapshot = cameraSnapshot;/);
 });
 
 test('all Molstar viewers disable the axes helper', async () => {

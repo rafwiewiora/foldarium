@@ -11,6 +11,8 @@ const LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 // RnP keeps these names hidden until reveal; Weekly shows them with per-pose ligand confidence during play.
 const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', boltz2: 'Boltz-2', chai: 'Chai-1', protenix: 'Protenix' };
 const methodName = m => METHOD_NAMES[m] || m;
+const DEV2_FEEDBACK = window.foldariumDev2Feedback || {};
+const GRID_PAGE_SIZE = DEV2_FEEDBACK.GRID_PAGE_SIZE || 9;
 function weeklyPoseEvidence(choice) {
   if (!choice?._method) return '';
   const confidence = choice._confidence;
@@ -91,7 +93,7 @@ let participantDisplayName = '';
 let viewerTraceRecorder = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
-let displayMode = WEEKLY_ONLY ? 'one' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
+let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 let showProteinEnsemble = false; // optional faint receptor backbones for the Weekly visual experiment
 let showSurface = false;
@@ -101,6 +103,7 @@ let stopGridCameraSync = null, stopGridLayout = null;
 let poseChoiceByRepresentation = new WeakMap();
 let canonicalPoseClickSubscription = null;
 let nextCanonicalCameraSnapshot = null, canonicalPoseActivationRevision = 0;
+let weeklyCountdownTimer = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
 // remember the user's real choice here and restore/seed from it (loadQuestion, back-to-my-view).
@@ -146,6 +149,8 @@ function currentReplayableAppState() {
     selected_pane_id: selectedPaneId,
     selection_kind: selectionKind,
     context_choice_id: cur?.contextChoice?._weeklyChoiceId || null,
+    rejected_choice_ids: cur ? [...(cur.rejectedChoiceIds || [])].slice(0, 50) : [],
+    vote_comment: typeof cur?.voteCommentText === 'string' ? cur.voteCommentText : null,
     viewer_busy: viewerTransitionBusy || revealRequested,
     viewport: {
       width: window.innerWidth,
@@ -171,7 +176,7 @@ function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
     '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #surface, #protein-ensemble, #lock, '
-    + '#next, #prev, #myview, #showXtal, #start, #gridpages button',
+    + '#next, #prev, #myview, #showXtal, #start, #gridpages button, .grid-review-actions button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
     $('#lock').disabled = revealRequested || cur.selected == null;
@@ -236,6 +241,86 @@ function visibleChoices() {
 
 function clusterForChoice(choice) {
   return cur?.clusters?.find(cluster => cluster.members.includes(choice)) || null;
+}
+
+function reviewChoiceIds(choice) {
+  const cluster = clusterForChoice(choice);
+  if (DEV2_FEEDBACK.reviewChoiceIds) {
+    return DEV2_FEEDBACK.reviewChoiceIds(choice, cluster, clustered);
+  }
+  const members = clustered ? (cluster?.members || [choice]) : [choice];
+  return members.map(member => String(member?._weeklyChoiceId || member?.pose_file || member?.label || ''))
+    .filter(Boolean);
+}
+
+function choiceRejected(choice) {
+  if (!cur?.rejectedChoiceIds) return false;
+  const cluster = clusterForChoice(choice);
+  if (DEV2_FEEDBACK.rejectedState) {
+    return DEV2_FEEDBACK.rejectedState(cur.rejectedChoiceIds, choice, cluster, clustered);
+  }
+  const ids = reviewChoiceIds(choice);
+  return ids.length > 0 && ids.every(id => cur.rejectedChoiceIds.has(id));
+}
+
+function syncReviewState() {
+  for (const cell of gridViewers) {
+    cell.card?.classList.toggle('rejected', choiceRejected(cell.entry.choice));
+    cell.card?.classList.toggle('inspecting', sameChoice(cur?.contextChoice, cell.entry.choice));
+    const reject = cell.card?.querySelector('[data-review="reject"]');
+    if (reject) {
+      const rejected = choiceRejected(cell.entry.choice);
+      reject.classList.toggle('on', rejected);
+      reject.textContent = rejected ? 'Undo reject' : 'Reject';
+      reject.setAttribute('aria-pressed', String(rejected));
+    }
+    const prefer = cell.card?.querySelector('[data-review="prefer"]');
+    if (prefer) {
+      const preferred = gridChoiceSelected(cell.entry.choice);
+      prefer.classList.toggle('on', preferred);
+      prefer.textContent = preferred ? 'Preferred ✓' : 'Prefer';
+      prefer.setAttribute('aria-pressed', String(preferred));
+    }
+  }
+  syncGridSelection();
+}
+
+function toggleChoiceRejected(choice) {
+  if (!cur || cur.revealed) return;
+  const ids = reviewChoiceIds(choice);
+  const rejecting = !choiceRejected(choice);
+  ids.forEach(id => rejecting ? cur.rejectedChoiceIds.add(id) : cur.rejectedChoiceIds.delete(id));
+  if (rejecting && cur.selected && !cur.selected.none
+      && reviewChoiceIds(cur.selected).some(id => ids.includes(id))) {
+    cur.selected = null;
+    cur.selectionExact = false;
+    cur.selectedAsCluster = false;
+    $('#lock').disabled = true;
+  }
+  recordAppEvent(rejecting ? 'choice_rejected' : 'choice_rejection_undone');
+  renderUI();
+  syncReviewState();
+}
+
+function inspectGridChoice(entry, paneId, reason = 'inspect') {
+  if (!cur || interactionBlocked()) return;
+  cur.contextChoice = entry.choice;
+  cur.poseFocusChoice = entry.choice;
+  selectedPaneId = paneId;
+  activatePane(paneId, reason);
+  syncReviewState();
+  recordAppEvent('pose_inspected');
+}
+
+function inspectCanonicalChoice(choice) {
+  if (!cur || interactionBlocked()) return;
+  const index = visibleIndexForChoice(choice);
+  if (index < 0) return;
+  shownOne = index;
+  cur.contextChoice = choice;
+  cur.poseFocusChoice = choice;
+  selectedPaneId = null;
+  recordAppEvent('pose_inspected');
 }
 
 function poseFocusBeforeClusterToggle() {
@@ -419,7 +504,16 @@ async function activateCanonicalPoseChoice(index, choice) {
   const cameraSnapshot = await cameraSnapshotAfterInteraction(plugin);
   if (revision !== canonicalPoseActivationRevision || cur?.item !== item
       || displayMode !== 'all' || cur?.revealed) return;
-  await onPick(index, choice, { rebuildCameraSnapshot: cameraSnapshot });
+  await viewerRebuild.enqueue(() => {
+    shownOne = index;
+    cur.contextChoice = choice;
+    cur.poseFocusChoice = choice;
+    selectedPaneId = null;
+    nextCanonicalCameraSnapshot = cameraSnapshot;
+  }, () => {
+    renderUI();
+    recordAppEvent('pose_inspected');
+  });
 }
 async function clearWeeklyShowAllContext() {
   canonicalPoseActivationRevision++;
@@ -454,9 +548,7 @@ function onCanonicalPoseInteraction(event) {
   const index = visibleIndexForChoice(choice);
   if (index < 0) return;
   if (displayMode === 'one') {
-    void onPick(index, choice, { preserveScene: true }).catch(error => {
-      console.warn('Could not select the clicked pose:', error.message);
-    });
+    inspectCanonicalChoice(choice);
     return;
   }
   if (sameChoice(choice, cur.contextChoice)) return;
@@ -474,6 +566,7 @@ function displayedPoseLabel(choice, asCluster = clustered) {
   return asCluster ? (clusterForChoice(choice)?.label || choice.label) : choice.label;
 }
 function gridPageMethod() {
+  if (cur?.item?.source === 'weekly') return null;
   const methods = cur?.gridMethods || [];
   if (!methods.length) return null;
   gridMethodIndex = Math.min(gridMethodIndex, methods.length - 1);
@@ -494,8 +587,18 @@ function gridEntriesFor(method) {
     return choice ? { choice, choiceIndex, cluster, memberCount: members.length } : null;
   }).filter(Boolean);
 }
-function gridEntries() { return gridEntriesFor(gridPageMethod()); }
+function weeklyGridPage() {
+  const entries = gridEntriesFor(null);
+  if (DEV2_FEEDBACK.gridPage) return DEV2_FEEDBACK.gridPage(entries, gridMethodIndex, GRID_PAGE_SIZE);
+  const pages = Math.max(1, Math.ceil(entries.length / GRID_PAGE_SIZE));
+  const index = Math.min(Math.max(0, gridMethodIndex), pages - 1);
+  return { index, pages, entries: entries.slice(index * GRID_PAGE_SIZE, (index + 1) * GRID_PAGE_SIZE) };
+}
+function gridEntries() {
+  return cur?.item?.source === 'weekly' ? weeklyGridPage().entries : gridEntriesFor(gridPageMethod());
+}
 function allGridEntries() {
+  if (cur?.item?.source === 'weekly') return gridEntriesFor(null);
   const methods = cur?.gridMethods || [];
   return methods.length ? methods.flatMap(gridEntriesFor) : gridEntriesFor(null);
 }
@@ -510,7 +613,30 @@ function syncGridSelection() {
 }
 function renderGridPages() {
   const nav = $('#gridpages'), methods = cur?.gridMethods || [];
-  if (!cur || displayMode !== 'grid' || methods.length < 2) { nav.style.display = 'none'; nav.innerHTML = ''; return; }
+  if (!cur || displayMode !== 'grid') { nav.style.display = 'none'; nav.innerHTML = ''; return; }
+  if (cur.item.source === 'weekly') {
+    const page = weeklyGridPage();
+    gridMethodIndex = page.index;
+    if (page.pages < 2) { nav.style.display = 'none'; nav.innerHTML = ''; return; }
+    nav.style.display = ''; nav.innerHTML = '';
+    for (let i = 0; i < page.pages; i++) {
+      const b = document.createElement('button');
+      b.classList.toggle('on', i === page.index);
+      const start = i * GRID_PAGE_SIZE + 1;
+      const end = Math.min((i + 1) * GRID_PAGE_SIZE, allGridEntries().length);
+      b.textContent = `${start}–${end}`;
+      b.onclick = async () => {
+        if (i === gridMethodIndex || interactionBlocked()) return;
+        await viewerRebuild.enqueue(
+          () => { gridMethodIndex = i; },
+          () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
+        );
+      };
+      nav.appendChild(b);
+    }
+    return;
+  }
+  if (methods.length < 2) { nav.style.display = 'none'; nav.innerHTML = ''; return; }
   nav.style.display = ''; nav.innerHTML = '';
   methods.forEach((method, i) => {
     const b = document.createElement('button');
@@ -659,7 +785,7 @@ function layoutGrid() {
   if (!n || !view.classList.contains('on')) return;
   const width = view.clientWidth - 20, height = view.clientHeight - 20, gap = 10, aspect = 4 / 3;
   let best = null;
-  for (let columns = 1; columns <= n; columns++) {
+  for (let columns = 1; columns <= Math.min(3, n); columns++) {
     const rows = Math.ceil(n / columns);
     const tileWidth = Math.min((width - gap * (columns - 1)) / columns, (height - gap * (rows - 1)) / rows * aspect);
     if (!best || tileWidth > best.tileWidth) best = { tileWidth, tileHeight: tileWidth / aspect };
@@ -763,11 +889,7 @@ async function buildGridCell(cell, revision) {
     cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
       if (locked() || !sameChoice(choiceFromPoseInteraction(event), c)) return;
       clearTransientPoseSelection(cell.plugin);
-      activatePane(cell.paneId, 'ligand-click');
-      selectedPaneId = cell.paneId;
-      void onPick(cell.entry.choiceIndex, c).catch(error => {
-        console.warn('Could not select the clicked Grid pose:', error.message);
-      });
+      inspectGridChoice(cell.entry, cell.paneId, 'ligand-click');
     }) || null;
     if (cell.spec.showHbonds && urls.pocket) {
       await buildInteractions(urls.pocket, [c.pose_file], cell.plugin);
@@ -808,7 +930,10 @@ async function buildGrid(preserveCamera = true) {
   const cells = gridEntries().map((entry, paneIndex) => {
     const paneId = `pane-${gridMethodIndex}-${paneIndex}`;
     const card = document.createElement('div');
-    card.className = 'grid-card' + ((cur.revealed && cur.showAnswer) ? (acceptedChoiceCorrect(entry.choice) ? ' correct' : ' wrong') : '');
+    card.className = 'grid-card'
+      + ((cur.revealed && cur.showAnswer) ? (acceptedChoiceCorrect(entry.choice) ? ' correct' : ' wrong') : '')
+      + (choiceRejected(entry.choice) ? ' rejected' : '')
+      + (sameChoice(cur.contextChoice, entry.choice) ? ' inspecting' : '');
     card.dataset.paneId = paneId;
     for (const [eventName, reason] of [['pointerenter', 'hover'], ['focusin', 'focus'], ['wheel', 'scroll']]) {
       card.addEventListener(eventName, () => activatePane(paneId, reason), { passive: true });
@@ -818,11 +943,29 @@ async function buildGrid(preserveCamera = true) {
     attachPoseInfo(head, weeklyEntryEvidence(entry));
     head.onclick = () => {
       if (locked()) return;
-      activatePane(paneId, 'click');
-      selectedPaneId = paneId;
-      onPick(entry.choiceIndex, entry.choice);
+      inspectGridChoice(entry, paneId, 'header-click');
     };
-    const host = document.createElement('div'); host.className = 'grid-host'; card.append(host, head); cellsBox.appendChild(card);
+    const actions = document.createElement('div'); actions.className = 'grid-review-actions';
+    const prefer = document.createElement('button');
+    prefer.type = 'button'; prefer.dataset.review = 'prefer'; prefer.textContent = 'Prefer';
+    prefer.setAttribute('aria-label', `Prefer Pose ${displayedPoseLabel(entry.choice)}`);
+    prefer.onclick = event => {
+      event.stopPropagation();
+      selectedPaneId = paneId;
+      void onPick(entry.choiceIndex, entry.choice);
+    };
+    const reject = document.createElement('button');
+    reject.type = 'button'; reject.dataset.review = 'reject'; reject.className = 'reject';
+    reject.textContent = choiceRejected(entry.choice) ? 'Undo reject' : 'Reject';
+    reject.classList.toggle('on', choiceRejected(entry.choice));
+    reject.setAttribute('aria-pressed', String(choiceRejected(entry.choice)));
+    reject.onclick = event => {
+      event.stopPropagation();
+      toggleChoiceRejected(entry.choice);
+    };
+    actions.append(prefer, reject);
+    const host = document.createElement('div'); host.className = 'grid-host';
+    card.append(host, head, actions); cellsBox.appendChild(card);
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
       detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
@@ -838,7 +981,7 @@ async function buildGrid(preserveCamera = true) {
     try { await pinCameraSnapshot(plugin, snapshot); } catch (e) {}
     stopGridCameraSync = syncGridCameras(active);
   }
-  view.classList.remove('loading-grid'); syncGridSelection();
+  view.classList.remove('loading-grid'); syncReviewState();
 }
 
 // ---- two layers: a protein/pocket context (fixed for classic questions; pose-specific for Weekly
@@ -1031,7 +1174,8 @@ async function loadQuestion(i) {
       const gridMethods = item.source === 'rnp'
         ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : [];
       cur = { item, clusters, gridMethods, selected: null, selectionExact: false,
-        selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false };
+        selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false,
+        rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null };
       if (item.source === 'weekly') {
         const prior = WEEKLY_VOTES.get(item.id);
         if (prior?.picked_none) {
@@ -1103,7 +1247,8 @@ function renderUI() {
   uiEntries.forEach(entry => {
     const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');
-    b.className = 'choice'; b.dataset.k = k; b.disabled = viewerTransitionBusy;
+    b.className = 'choice' + (choiceRejected(c) ? ' rejected' : '');
+    b.dataset.k = k; b.disabled = viewerTransitionBusy;
     b.style.setProperty('--choice-color', hex(c.color));
     let nm;
     if (clustered) {
@@ -1136,9 +1281,10 @@ function renderUI() {
     }
     selected?.classList.add('sel');
     const tag = selected?.querySelector('[data-tag]');
-    if (tag) tag.textContent = 'Selected ✓';
+    if (tag) tag.textContent = 'Preferred ✓';
   }
   box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
+  $('#vote-comment-option').style.display = quizSource === 'weekly' && !cur.revealed ? '' : 'none';
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
@@ -1233,7 +1379,16 @@ function renderWeeklyResultsStatus() {
   panel.dataset.status = revealed ? 'revealed' : 'pending';
   copy.textContent = revealed
     ? 'Results are available. Reveal a choice for scores and vote totals.'
-    : 'Available Wednesday after released-coordinate evaluation.';
+    : (DEV2_FEEDBACK.formatReleaseCountdown?.(WEEKLY_ROUND?.closes_at)
+      || 'Results Wednesday.');
+}
+
+function startWeeklyCountdown() {
+  if (weeklyCountdownTimer) clearInterval(weeklyCountdownTimer);
+  weeklyCountdownTimer = null;
+  if (!WEEKLY_ONLY || WEEKLY_ROUND?.public_status === 'revealed') return;
+  renderWeeklyResultsStatus();
+  weeklyCountdownTimer = setInterval(renderWeeklyResultsStatus, 30_000);
 }
 
 const SESSION_SIZE = 30;   // a completable sitting; re-play draws a fresh random subset
@@ -1272,6 +1427,9 @@ function beginQuiz() {
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = ''; $('#view-options').hidden = false;
+  $('#instruction').textContent = quizSource === 'weekly'
+    ? 'Inspect freely. Prefer one pose; reject any you rule out.'
+    : 'Pick the pose that best fits the binding pocket.';
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
@@ -1361,6 +1519,18 @@ function fallbackSuggestionContext(appState) {
   };
 }
 
+function captureSuggestionContext() {
+  const appState = currentReplayableAppState();
+  try {
+    return viewerTraceRecorder?.captureContext?.(appState)
+      || fallbackSuggestionContext(appState);
+  } catch (error) {
+    const context = fallbackSuggestionContext(appState);
+    context.viewer_snapshot.viewer_state_omitted = `capture_failed:${error.name || 'Error'}`;
+    return context;
+  }
+}
+
 function openSuggestionDialog() {
   const status = $('#suggestion-status');
   status.textContent = remoteSessionId
@@ -1392,15 +1562,7 @@ async function submitSuggestion(event) {
   status.textContent = 'Saving…';
   try {
     recordAppEvent('suggestion_submitted');
-    const appState = currentReplayableAppState();
-    let contextSnapshot;
-    try {
-      contextSnapshot = viewerTraceRecorder?.captureContext?.(appState)
-        || fallbackSuggestionContext(appState);
-    } catch (error) {
-      contextSnapshot = fallbackSuggestionContext(appState);
-      contextSnapshot.viewer_snapshot.viewer_state_omitted = `capture_failed:${error.name || 'Error'}`;
-    }
+    const contextSnapshot = captureSuggestionContext();
     const backend = researchBackend();
     if (!backend) throw new Error('Suggestion persistence is unavailable.');
     await backend.submitUserSuggestion({
@@ -1433,6 +1595,7 @@ async function onPick(k, exactChoice = null, {
     const selectShownPose = () => {
       shownOne = k;
       if (!cur.revealed) {
+        reviewChoiceIds(selected).forEach(id => cur.rejectedChoiceIds.delete(id));
         cur.selected = selected;
         cur.selectionExact = !clustered;
         cur.selectedAsCluster = clustered;
@@ -1443,13 +1606,13 @@ async function onPick(k, exactChoice = null, {
           const on = el.dataset.k == k;
           el.classList.toggle('sel', on);
           const tag = el.querySelector('[data-tag]');
-          if (tag) tag.textContent = on ? 'Selected ✓' : '';
+          if (tag) tag.textContent = on ? 'Preferred ✓' : '';
         });
       }
     };
     if (preserveScene) selectShownPose();
     else await viewerRebuild.enqueue(selectShownPose);
-    recordAppEvent('pose_navigated');
+    recordAppEvent('choice_preferred');
     return;
   }
   if (cur.revealed) return;  // my-view navigation is meaningful only in one-at-a-time mode
@@ -1473,14 +1636,15 @@ async function onPick(k, exactChoice = null, {
       const on = el.dataset.k === 'none';
       el.classList.toggle('sel', on);
       const tag = el.querySelector('[data-tag]');
-      if (tag) tag.textContent = on ? 'Selected ✓' : '';
+      if (tag) tag.textContent = on ? 'Preferred ✓' : '';
     });
     $('#lock').disabled = false;
-    recordAppEvent('choice_selected');
+    recordAppEvent('choice_preferred');
     return;
   }
   const choice = exactChoice || visibleChoices()[k];
   const choosePose = () => {
+    reviewChoiceIds(choice).forEach(id => cur.rejectedChoiceIds.delete(id));
     cur.selected = choice;
     cur.selectionExact = !clustered;
     cur.selectedAsCluster = clustered;
@@ -1501,15 +1665,53 @@ async function onPick(k, exactChoice = null, {
     const on = el.dataset.k == k;
     el.classList.toggle('sel', on);
     const tag = el.querySelector('[data-tag]');
-    if (tag) tag.textContent = on ? 'Selected ✓' : '';
+    if (tag) tag.textContent = on ? 'Preferred ✓' : '';
   });
   syncGridSelection();
   $('#lock').disabled = false;
-  recordAppEvent('choice_selected');
+  recordAppEvent('choice_preferred');
+}
+
+function shouldPromptForVoteComment() {
+  return quizSource === 'weekly'
+    && WEEKLY_ROUND?.public_status !== 'revealed'
+    && $('#vote-comment-enabled')?.checked
+    && !cur?.voteCommentHandled;
+}
+
+function openVoteCommentDialog() {
+  $('#vote-comment-status').textContent = '';
+  $('#vote-comment-text').value = '';
+  $('#vote-comment-dialog').showModal();
+  requestAnimationFrame(() => $('#vote-comment-text').focus());
+  recordAppEvent('vote_comment_prompted');
+}
+
+function skipVoteComment() {
+  if (!cur) return;
+  cur.voteCommentHandled = true;
+  $('#vote-comment-dialog').close();
+  recordAppEvent('vote_comment_skipped');
+  void reveal();
+}
+
+async function submitVoteComment(event) {
+  event.preventDefault();
+  const text = $('#vote-comment-text').value.trim();
+  if (!text) { skipVoteComment(); return; }
+  cur.voteCommentText = text;
+  cur.voteCommentHandled = true;
+  $('#vote-comment-dialog').close();
+  recordAppEvent('vote_comment_attached');
+  void reveal();
 }
 
 async function reveal() {
   if (cur.selected == null || cur.revealed || revealRequested) return;
+  if (shouldPromptForVoteComment()) {
+    openVoteCommentDialog();
+    return;
+  }
   recordAppEvent('lock_requested');
   revealRequested = true;
   $('#lock').disabled = true;
@@ -2030,6 +2232,7 @@ async function init() {
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
     });
     renderWeeklyResultsStatus();
+    startWeeklyCountdown();
   } else {
     document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
       if (b.disabled) return;
@@ -2060,11 +2263,13 @@ async function init() {
     const mode = b.dataset.m;
     const wasGrid = displayMode === 'grid';
     await viewerRebuild.enqueue(() => {
-      displayMode = mode; if (displayMode === 'one') shownOne = 0;
-      if (!cur.revealed && wasGrid !== (displayMode === 'grid')) {
-        cur.selected = null; cur.selectionExact = false; cur.selectedAsCluster = false;
-        cur.contextChoice = null; cur.answerChoices = [];
+      displayMode = mode;
+      if (displayMode === 'one') {
+        const focus = cur.contextChoice || (!cur.selected?.none ? cur.selected : null);
+        const index = focus ? visibleIndexForChoice(focus) : -1;
+        shownOne = index >= 0 ? index : 0;
       }
+      if (!cur.revealed && wasGrid !== (displayMode === 'grid')) selectedPaneId = null;
       if (!cur.revealed) rememberView();       // record the user's choice (persist across questions)
       syncButtons();
     }, () => { renderUI(); recordAppEvent('display_mode_changed'); });
@@ -2083,10 +2288,15 @@ async function init() {
     if (interactionBlocked()) return;
     await viewerRebuild.enqueue(() => {
       const focusedChoice = poseFocusBeforeClusterToggle();
+      const preferredChoice = cur.selected?.none ? null : cur.selected;
       clustered = !clustered;
-      if (!cur.revealed) {
-        cur.selected = null; cur.selectionExact = false; cur.selectedAsCluster = false;
-        cur.answerChoices = [];
+      if (!cur.revealed && preferredChoice) {
+        const cluster = clusterForChoice(preferredChoice);
+        const exactChoice = focusedChoice && clusterForChoice(focusedChoice) === cluster
+          ? focusedChoice : preferredChoice;
+        cur.selected = clustered ? (cluster?.rep || preferredChoice) : exactChoice;
+        cur.selectionExact = !clustered;
+        cur.selectedAsCluster = clustered;
       }
       restorePoseFocusAfterClusterToggle(focusedChoice);
       if (!cur.revealed) rememberView();
@@ -2133,6 +2343,8 @@ async function init() {
   $('#suggestion-open').onclick = openSuggestionDialog;
   $('#suggestion-form').addEventListener('submit', submitSuggestion);
   $('#suggestion-cancel').onclick = () => $('#suggestion-dialog').close();
+  $('#vote-comment-form').addEventListener('submit', submitVoteComment);
+  $('#vote-comment-skip').onclick = skipVoteComment;
   $('#myview').onclick = toggleAnswer;
   $('#showXtal').onchange = async (e) => {
     if (viewerTransitionBusy) return;

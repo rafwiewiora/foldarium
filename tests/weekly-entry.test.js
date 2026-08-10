@@ -31,7 +31,7 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   }
   assert.match(app, /const WEEKLY_ONLY = window\.FOLDARIUM_QUIZ_MODE === 'weekly'/);
   assert.match(app, /quizSource = WEEKLY_ONLY \? 'weekly' : 'cameo'/);
-  assert.match(app, /displayMode = WEEKLY_ONLY \? 'one' : 'all'/);
+  assert.match(app, /displayMode = WEEKLY_ONLY \? 'grid' : 'all'/);
   assert.match(app, /question \$\{idx \+ 1\} \/ \$\{ITEMS\.length\}/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);

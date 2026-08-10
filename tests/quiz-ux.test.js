@@ -52,7 +52,9 @@ test('viewer controls form an always-visible bottom toolbar', async () => {
 
   assert.match(html, /#view-options\{[\s\S]*?display:flex;[\s\S]*?background:transparent;[\s\S]*?border:0/);
   assert.doesNotMatch(html, /<summary>View options<\/summary>/);
-  assert.match(html, /#view-options \.seg\{display:contents/);
+  assert.match(html, /#view-options \.control-group\{display:flex/);
+  assert.match(html, /<span class="control-label">Layout<\/span>/);
+  assert.match(html, /<span class="control-label">View<\/span>/);
 });
 
 test('question context is arranged at the top of the viewer', async () => {
@@ -64,7 +66,7 @@ test('question context is arranged at the top of the viewer', async () => {
 
   assert.ok(stage < context && context < ligand && ligand < instruction);
   assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
-  assert.match(html, /\.badge\{[\s\S]*?right:16px/);
+  assert.match(html, /\.badge\{[\s\S]*?right:64px/);
   assert.match(html, /#gridview\.on\{display:block;top:84px\}/);
 });
 
@@ -102,7 +104,7 @@ test('Foldarium branding is present and the name intro starts centered', async (
   assert.match(html, /<div id="wrap" class="intro" hidden>/);
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);
   assert.match(html, /#wrap\.intro #question-head,[\s\S]*?#wrap\.intro #answer-details\{display:none!important\}/);
-  assert.match(html, /html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
+  assert.doesNotMatch(html, /html\[data-quiz-mode="weekly"\] #instruction\{display:none!important\}/);
   for (const color of ['#5b8ff9', '#f6bd16', '#9270ca', '#5ad8a6']) {
     assert.match(logo.toLowerCase(), new RegExp(color));
   }
@@ -127,7 +129,7 @@ test('left pose selections use calm cards with pose-color rails', async () => {
 test('weekly entry hides irrelevant setup and uses light research controls', async () => {
   const html = await readHtml();
 
-  assert.match(html, /html\[data-quiz-mode="weekly"\] #setup,[\s\S]*?#score-summary,[\s\S]*?#instruction\{display:none!important\}/);
+  assert.match(html, /html\[data-quiz-mode="weekly"\] #setup,[\s\S]*?#score-summary\{display:none!important\}/);
   assert.match(html, /\.participant-setup\{[\s\S]*?background:#f6f8fa\}/);
   assert.match(html, /\.dialog-form input,\.dialog-form textarea\{[\s\S]*?background:#fff/);
   assert.match(html, /\.privacy-note\{[\s\S]*?background:#f6f8fa/);

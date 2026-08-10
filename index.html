@@ -49,7 +49,7 @@
   #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
   #stage.loading-system canvas{opacity:0;transition:none}
-  #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
+  #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px 10px 82px;background:#e9eef3;
     transition:opacity .14s ease-out}
   #gridview.on{display:block;top:84px}
   #stage.loading-system #gridview{opacity:0;transition:none}
@@ -60,6 +60,9 @@
     height:var(--grid-card-h,225px);min-width:0;overflow:hidden;background:#fff;
     border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
   .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
+  .grid-card.inspecting{border-color:#6c7b8a;box-shadow:0 0 0 2px #6c7b8a2c}
+  .grid-card.rejected{opacity:.32;filter:grayscale(.8)}
+  .grid-card.rejected:hover,.grid-card.rejected:focus-within{opacity:.62}
   .grid-card.correct{border-color:var(--good)}
   .grid-card.wrong{border-color:var(--bad)}
   .grid-card.failed{border-color:var(--bad);background:#fff4f2}
@@ -91,6 +94,14 @@
     overflow-wrap:anywhere}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
+  .grid-review-actions{position:absolute;z-index:6;right:8px;bottom:8px;display:flex;gap:5px}
+  .grid-review-actions button{min-height:30px;padding:5px 9px;border:1px solid #d5dde5;border-radius:7px;
+    background:#fffffff2;color:#425161;font:650 10.5px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;
+    box-shadow:0 1px 4px #16202b16}
+  .grid-review-actions button:hover,.grid-review-actions button.on{border-color:var(--accent);color:var(--accent)}
+  .grid-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
+  .grid-card .msp-hover-box{max-width:170px!important;padding:3px 6px!important;font-size:9px!important;
+    line-height:1.2!important;white-space:normal!important}
   #gridpages{overflow-x:auto}
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
   h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
@@ -132,6 +143,7 @@
   #choices .choice.sel{background:#eef7fb;border-color:var(--accent);border-left-color:var(--choice-color);
     outline:0;box-shadow:0 0 0 1px var(--accent)}
   #choices .choice.none{border-left-style:dashed}
+  #choices .choice.rejected{opacity:.38;text-decoration:line-through}
   #choices .sw{display:none}
   #choices .choice .nm{flex:1;min-width:0}
   #choices .pose-count{margin-left:5px;color:var(--muted);font-size:12px;font-weight:500;white-space:nowrap}
@@ -152,6 +164,10 @@
   .score b{font-variant-numeric:tabular-nums}
   .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
   .weekly-results .hint{margin-top:6px}
+  .vote-comment-option{display:none;align-items:center;gap:8px;margin:-5px 0 0;color:var(--muted);
+    font-size:12px;cursor:pointer}
+  .vote-comment-option input{accent-color:var(--accent)}
+  html[data-quiz-mode="weekly"] .vote-comment-option{display:flex}
   dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
     border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
   dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
@@ -173,12 +189,12 @@
   .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
     color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
   .participant-setup input:focus{outline:none;border-color:var(--accent)}
-  #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:var(--panel)}
+  #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:#edf8fc;
+    color:#116d94;border-color:#b8dce9;font-weight:700;box-shadow:0 3px 12px #16202b18}
   html[data-quiz-mode="weekly"] #setup,
   html[data-quiz-mode="weekly"] #leaderboard-link,
   html[data-quiz-mode="weekly"] #score,
-  html[data-quiz-mode="weekly"] #score-summary,
-  html[data-quiz-mode="weekly"] #instruction{display:none!important}
+  html[data-quiz-mode="weekly"] #score-summary{display:none!important}
   html[data-quiz-mode="weekly"] #lock{min-height:44px;padding-inline:20px;background:var(--accent);
     color:#fff;border-color:var(--accent);font-weight:700;box-shadow:0 3px 10px #1687b82b}
   html[data-quiz-mode="weekly"] #lock:not(:disabled):hover{background:#1178a4;color:#fff;border-color:#1178a4}
@@ -200,8 +216,10 @@
   #view-options[hidden]{display:none}
   #view-options .details-body{width:100%;max-height:min(48vh,420px);padding:0;display:flex;
     flex-flow:row wrap;justify-content:center;align-items:center;gap:6px;overflow-y:auto}
-  #view-options .seg{display:contents}
-  #view-options .view-actions{display:contents}
+  #view-options .control-group{display:flex;align-items:center;gap:5px;padding:5px 6px 5px 9px;
+    border:1px solid var(--line);border-radius:11px;background:#fffffff2;box-shadow:0 2px 9px #16202b10}
+  #view-options .control-label{color:#7a8693;font-size:9px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+  #view-options .seg,#view-options .view-actions{display:flex;gap:4px;background:transparent;border:0;overflow:visible}
   #view-options button,#lock{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
     border:1px solid var(--line);border-radius:9px;font-size:12.5px}
   #view-options button.on{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
@@ -222,6 +240,7 @@
     #viewer-question{top:8px;left:8px;max-width:calc(100% - 16px);padding:8px 10px}
     #view-options{bottom:8px;width:calc(100% - 16px)}
     .badge{display:none}
+    #view-options .control-label{display:none}
   }
 </style>
 </head>
@@ -280,6 +299,9 @@
 
     <div class="choices" id="choices"></div>
 
+    <label class="vote-comment-option" id="vote-comment-option">
+      <input id="vote-comment-enabled" type="checkbox" checked/> Add a comment with this vote
+    </label>
     <button class="primary" id="lock" disabled>Submit answer</button>
     <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
     <button class="primary" id="start" style="display:none">Start →</button>
@@ -319,28 +341,34 @@
     <div id="gridview"><div id="gridcells"></div></div>
     <div id="view-options" hidden>
       <div class="details-body">
-        <div class="seg" id="mode">
-          <button data-m="all" class="on" aria-pressed="true">Show all</button>
-          <button data-m="one" aria-pressed="false">One at a time</button>
-          <button data-m="grid" aria-pressed="false">Grid</button>
+        <div class="control-group">
+          <span class="control-label">Layout</span>
+          <div class="seg" id="mode">
+            <button data-m="all" class="on" aria-pressed="true">Show all</button>
+            <button data-m="one" aria-pressed="false">One at a time</button>
+            <button data-m="grid" aria-pressed="false">Grid</button>
+          </div>
         </div>
         <div class="seg" id="gridpages" style="display:none"></div>
         <div class="seg" id="protmode">
           <button data-p="crystal" class="on" aria-pressed="true">Crystal protein</button>
           <button data-p="af3" aria-pressed="false">AF3 protein</button>
         </div>
-        <div class="view-actions">
-          <button class="ghost mini" id="surface" style="display:none">Surface</button>
-          <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
-          <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
-          <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
+        <div class="control-group">
+          <span class="control-label">View</span>
+          <div class="view-actions">
+            <button class="ghost mini" id="surface" style="display:none">Surface</button>
+            <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+            <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
+            <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
+          </div>
         </div>
         <div class="hint" id="modehint"></div>
       </div>
     </div>
   </div>
 </div>
-<button class="ghost mini" id="suggestion-open" type="button" disabled hidden>Suggestions</button>
+<button class="ghost mini" id="suggestion-open" type="button" disabled hidden>✦ Feedback</button>
 <div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden></div>
 <dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
   <form class="dialog-form" id="suggestion-form">
@@ -353,6 +381,19 @@
     <div class="dialog-actions">
       <button class="ghost" id="suggestion-cancel" type="button">Cancel</button>
       <button class="primary" id="suggestion-submit" type="submit">Send</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="vote-comment-dialog" aria-labelledby="vote-comment-title">
+  <form class="dialog-form" id="vote-comment-form">
+    <h2 id="vote-comment-title">Add a note about this choice</h2>
+    <label>What influenced your decision?
+      <textarea id="vote-comment-text" maxlength="4000" placeholder="Optional observations, uncertainty, or anything that felt confusing"></textarea>
+    </label>
+    <p class="dialog-status" id="vote-comment-status" role="status" aria-live="polite"></p>
+    <div class="dialog-actions">
+      <button class="ghost" id="vote-comment-skip" type="button">Skip</button>
+      <button class="primary" id="vote-comment-submit" type="submit">Save note &amp; record vote</button>
     </div>
   </form>
 </dialog>
@@ -409,6 +450,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
       await import('./structure-assets.js');
+      await import('./dev2-feedback.js');
       const rebuildModule = await import('./viewer-rebuild-coordinator.js');
       window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
       window.createRevealAfterIdle = rebuildModule.createRevealAfterIdle;
@@ -421,7 +463,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-      await loadScript('app.js?v=2026080909');
+      await loadScript('app.js?v=202608102');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;
