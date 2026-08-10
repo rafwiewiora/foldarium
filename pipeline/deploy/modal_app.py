@@ -870,7 +870,7 @@ if modal is not None:
         }
         response: Any = {"status": "uploaded-not-opened"}
         if open_round:
-            response = coordinator.open_weekly_quiz_round(
+            opened = coordinator.open_weekly_quiz_round(
                 round_id=round_id,
                 campaign_id=source["campaign_id"],
                 opens_at=opens_at,
@@ -879,6 +879,10 @@ if modal is not None:
                 metadata=metadata,
                 environment=round_environment,
             )
+            response = {
+                "status": opened.get("status"),
+                "round_id": opened.get("round_id"),
+            }
         result = {
             "status": "opened" if open_round else "uploaded-not-opened",
             "round_id": round_id,
