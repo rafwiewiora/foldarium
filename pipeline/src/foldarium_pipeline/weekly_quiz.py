@@ -25,7 +25,7 @@ from .evaluation import (
 )
 from .quiz import build_blind_manifest, manifest_sha256
 
-WEEKLY_QUIZ_STAGE_VERSION = 4
+WEEKLY_QUIZ_STAGE_VERSION = 6
 POCKET_RADIUS_ANGSTROM = 5.0
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
@@ -34,8 +34,11 @@ SUPPORTED_LEGACY_LIGAND_ORDER = {
     "boltz2": "2.2.1",
 }
 LIGAND_AUTOMORPHISM_CAP = 100_000
-RECEPTOR_ANCHOR_POLICY = "minimum-total-pairwise-receptor-rmsd-medoid/v1"
-RECEPTOR_ALIGNMENT_POLICY = "stable-sequence-chain-pair/v1"
+RECEPTOR_ANCHOR_POLICY = (
+    "minimum-total-pairwise-task-anchor-robust-core-rmsd-medoid/v3"
+)
+RECEPTOR_ALIGNMENT_POLICY = "task-anchor-sequence-robust-core/v1"
+RECEPTOR_ENTITY_POLICY = "longest-input-protein-then-chain-id/v1"
 LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
 LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
@@ -48,13 +51,26 @@ class WeeklyQuizAssemblyError(RuntimeError):
 
 
 def _weekly_receptor_superposition(
-    reference_model: Any, predicted_model: Any
+    reference_model: Any,
+    predicted_model: Any,
+    *,
+    anchor_chain_id: str,
+    anchor_sequence: str,
 ) -> Mapping[str, Any]:
-    return best_receptor_superposition(
-        reference_model,
-        predicted_model,
-        stable_chain_pair=True,
+    alignment = dict(
+        best_receptor_superposition(
+            reference_model,
+            predicted_model,
+            stable_chain_pair=True,
+            reference_chain_ids={anchor_chain_id},
+            predicted_chain_ids={anchor_chain_id},
+            robust_core=True,
+            expected_sequence=anchor_sequence,
+        )
     )
+    alignment["chain_selection_policy"] = RECEPTOR_ALIGNMENT_POLICY
+    alignment["task_anchor_chain_id"] = anchor_chain_id
+    return alignment
 
 
 def _dependencies() -> tuple[Any, Any, Any]:
@@ -119,6 +135,41 @@ def _selected_ligand(target: Mapping[str, Any]) -> tuple[str, int, set[str], str
         if isinstance(chain_id, str)
     }
     return component, heavy_atoms, chain_ids, smiles.strip()
+
+
+def _receptor_anchor(target: Mapping[str, Any]) -> dict[str, Any]:
+    """Select one immutable input protein identity as the shared display frame.
+
+    The ligand cannot participate in this choice: doing so would erase a real
+    prediction disagreement when two methods place it beside different chains.
+    """
+
+    candidates: list[tuple[int, str, str]] = []
+    for entity in target.get("entities", []):
+        if not isinstance(entity, Mapping) or entity.get("type") != "protein":
+            continue
+        sequence = entity.get("sequence")
+        chain_ids = entity.get("chain_ids")
+        if not isinstance(sequence, str) or not sequence or not isinstance(chain_ids, list):
+            continue
+        valid_chain_ids = sorted(
+            chain_id for chain_id in chain_ids if isinstance(chain_id, str) and chain_id
+        )
+        if valid_chain_ids:
+            candidates.append((len(sequence), valid_chain_ids[0], sequence))
+    if not candidates:
+        raise WeeklyQuizAssemblyError("weekly alignment requires an input protein entity")
+    length, chain_id, sequence = min(
+        candidates,
+        key=lambda row: (-row[0], row[1], row[2]),
+    )
+    return {
+        "policy": RECEPTOR_ENTITY_POLICY,
+        "chain_id": chain_id,
+        "sequence_length": length,
+        "sequence_sha256": hashlib.sha256(sequence.encode("ascii")).hexdigest(),
+        "sequence": sequence,
+    }
 
 
 def _prediction_ligand(model: Any, heavy_atoms: int, preferred_chains: set[str]) -> Any:
@@ -629,6 +680,9 @@ def stage_weekly_quiz(
         target = ordered_runs[0]["task_payload"]["target"]
         if any(row["task_payload"]["target"] != target for row in ordered_runs[1:]):
             raise WeeklyQuizAssemblyError(f"target {target_id} differs across method tasks")
+        task_receptor_anchor = _receptor_anchor(target)
+        anchor_chain_id = task_receptor_anchor["chain_id"]
+        anchor_sequence = task_receptor_anchor.pop("sequence")
         component_id, heavy_atom_count, ligand_chains, ligand_smiles = _selected_ligand(target)
         for row in ordered_runs:
             expected_version = SUPPORTED_LEGACY_LIGAND_ORDER.get(row["method"])
@@ -662,6 +716,7 @@ def stage_weekly_quiz(
                 raw_path.parent.mkdir(parents=True, exist_ok=True)
                 raw_path.write_bytes(content)
                 structure, model = _load_model(raw_path, gemmi)
+                ligand = _prediction_ligand(model, heavy_atom_count, ligand_chains)
                 raw_choices.append(
                     {
                         "run_id": row["run_id"],
@@ -672,6 +727,7 @@ def stage_weekly_quiz(
                         "method_version": row["method_version"],
                         "structure": structure,
                         "model": model,
+                        "ligand": ligand,
                     }
                 )
 
@@ -688,13 +744,22 @@ def stage_weekly_quiz(
                 },
             )
         )
+        def align_receptors(reference: Any, predicted: Any) -> Mapping[str, Any]:
+            return _weekly_receptor_superposition(
+                reference,
+                predicted,
+                anchor_chain_id=anchor_chain_id,
+                anchor_sequence=anchor_sequence,
+            )
+
         reference_choice, receptor_anchor = _select_receptor_medoid(
             raw_choices,
             round_id=round_id,
             target_id=target_id,
-            aligner=_weekly_receptor_superposition,
+            aligner=align_receptors,
         )
         reference_model = reference_choice["model"]
+        receptor_anchor["task_receptor_anchor"] = task_receptor_anchor
         reference_choice_index: int | None = None
         choice_rows: list[dict[str, Any]] = []
         pose_coordinates: list[list[list[float]]] = []
@@ -703,24 +768,34 @@ def stage_weekly_quiz(
             if choice is reference_choice:
                 reference_choice_index = index - 1
                 transform = _identity_transform(gemmi)
-                alignment = {
-                    "reference_chain": None,
-                    "predicted_chain": None,
-                    "sequence_similarity": 1.0,
-                    "receptor_rmsd": 0.0,
-                    "chain_selection_policy": RECEPTOR_ALIGNMENT_POLICY,
-                }
+                try:
+                    alignment = dict(
+                        _weekly_receptor_superposition(
+                            reference_model,
+                            reference_model,
+                            anchor_chain_id=anchor_chain_id,
+                            anchor_sequence=anchor_sequence,
+                        )
+                    )
+                except EvaluationError as exc:
+                    raise WeeklyQuizAssemblyError(
+                        f"target {target_id} lacks its task anchor chain in the reference pose"
+                    ) from exc
+                alignment["receptor_rmsd"] = 0.0
             else:
                 try:
                     alignment = _weekly_receptor_superposition(
-                        reference_model, choice["model"]
+                        reference_model,
+                        choice["model"],
+                        anchor_chain_id=anchor_chain_id,
+                        anchor_sequence=anchor_sequence,
                     )
                 except EvaluationError as exc:
                     raise WeeklyQuizAssemblyError(
                         f"could not align {target_id}/{choice['sample_id']} to the blind reference"
                     ) from exc
                 transform = alignment["transform"]
-            ligand = _prediction_ligand(choice["model"], heavy_atom_count, ligand_chains)
+            ligand = choice["ligand"]
             ligands.append(ligand)
             ligand_confidence = _ligand_confidence(ligand)
             pose_relative = f"assets/{target_id}/pose-{index}.pdb"

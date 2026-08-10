@@ -12,6 +12,7 @@ import difflib
 import math
 import re
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any
 
 EVALUATOR_VERSION = "foldarium-receptor-aligned-symmetry-rmsd/v1"
@@ -60,9 +61,9 @@ def _atom_position(residue: Any, name: str) -> Any | None:
     return None
 
 
-def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
-    """Superpose predicted onto reference using sequence-aligned C-alpha pairs."""
-
+def _sequence_aligned_positions(
+    reference: Any, predicted: Any, gemmi: Any
+) -> tuple[list[Any], list[Any]]:
     reference_sequence = _sequence(reference, gemmi)
     predicted_sequence = _sequence(predicted, gemmi)
     alignment = gemmi.align_string_sequences(
@@ -90,7 +91,154 @@ def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
         predicted_index += count
     if len(reference_positions) < 5:
         raise EvaluationError("fewer than five sequence-aligned receptor C-alpha atoms")
+    return reference_positions, predicted_positions
+
+
+def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
+    """Superpose predicted onto reference using sequence-aligned C-alpha pairs."""
+
+    reference_positions, predicted_positions = _sequence_aligned_positions(
+        reference, predicted, gemmi
+    )
     return gemmi.superpose_positions(reference_positions, predicted_positions)
+
+
+def _robust_sequence_superposition(
+    reference: Any,
+    predicted: Any,
+    gemmi: Any,
+    *,
+    cutoff_angstrom: float = 2.0,
+    maximum_cycles: int = 5,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit a sequence-identical rigid core while rejecting flexible outliers."""
+
+    reference_positions, predicted_positions = _sequence_aligned_positions(
+        reference, predicted, gemmi
+    )
+    original_count = len(reference_positions)
+    minimum_count = max(5, math.ceil(original_count * 0.2))
+
+    def fit_positions(indices: list[int]) -> Any:
+        return gemmi.superpose_positions(
+            [reference_positions[index] for index in indices],
+            [predicted_positions[index] for index in indices],
+        )
+
+    def residuals(fit: Any) -> list[float]:
+        values: list[float] = []
+        for index in range(original_count):
+            transformed = fit.transform.apply(predicted_positions[index])
+            reference_position = reference_positions[index]
+            values.append(
+                math.sqrt(
+                    (transformed.x - reference_position.x) ** 2
+                    + (transformed.y - reference_position.y) ** 2
+                    + (transformed.z - reference_position.z) ** 2
+                )
+            )
+        return values
+
+    def refine(seed: list[int]) -> tuple[Any, list[int], int] | None:
+        retained = seed
+        cycles = 0
+        for _ in range(maximum_cycles):
+            fit = fit_positions(retained)
+            next_retained = [
+                index
+                for index, distance in enumerate(residuals(fit))
+                if distance <= cutoff_angstrom
+            ]
+            if len(next_retained) < minimum_count:
+                return None
+            cycles += 1
+            if next_retained == retained:
+                return fit, retained, cycles
+            retained = next_retained
+        return fit_positions(retained), retained, cycles
+
+    # An all-residue fit can sit between two domains, leaving even a large true
+    # core outside the final 2 A cutoff.  Build one deterministic least-trimmed
+    # path first: repeatedly retain the 75% lowest-residual pairs, never fewer
+    # than the documented 20%/five-residue floor.  Every coarse fit that already
+    # has enough absolute-cutoff support seeds a full refinement over all pairs,
+    # which also permits previously trimmed residues to re-enter.
+    coarse_retained = list(range(original_count))
+    coarse_retained_counts: list[int] = []
+    candidates: list[tuple[tuple[Any, ...], Any, list[int], int]] = []
+
+    def record_candidate(seed_fit: Any) -> None:
+        inliers = [
+            index
+            for index, distance in enumerate(residuals(seed_fit))
+            if distance <= cutoff_angstrom
+        ]
+        if len(inliers) < minimum_count:
+            return
+        refined = refine(inliers)
+        if refined is None:
+            return
+        fit, retained, cycles = refined
+        candidates.append(
+            (
+                (-len(retained), float(fit.rmsd), tuple(retained)),
+                fit,
+                retained,
+                cycles,
+            )
+        )
+
+    while True:
+        coarse_fit = fit_positions(coarse_retained)
+        coarse_retained_counts.append(len(coarse_retained))
+        coarse_residuals = residuals(coarse_fit)
+        record_candidate(coarse_fit)
+        if len(coarse_retained) == minimum_count:
+            break
+        next_count = max(
+            minimum_count,
+            math.floor(len(coarse_retained) * 0.75),
+        )
+        ranked = sorted(
+            range(original_count),
+            key=lambda index: (coarse_residuals[index], index),
+        )
+        coarse_retained = sorted(ranked[:next_count])
+
+    # The global least-trimmed path can still converge on a compact mobile
+    # domain when a long protein's lever arm biases the first rotation.  Seed a
+    # bounded set of overlapping contiguous sequence windows as alternative
+    # domain hypotheses.  A window is only a seed: final support is always
+    # measured over every aligned residue, so the largest coherent core wins.
+    window_step = max(1, minimum_count // 2)
+    window_starts = list(
+        range(0, original_count - minimum_count + 1, window_step)
+    )
+    final_start = original_count - minimum_count
+    if window_starts[-1] != final_start:
+        window_starts.append(final_start)
+    for start in window_starts:
+        record_candidate(fit_positions(list(range(start, start + minimum_count))))
+
+    if not candidates:
+        raise EvaluationError(
+            "robust receptor alignment retained too few sequence-aligned residues"
+        )
+    _score, fit, retained, cycles = min(candidates, key=lambda row: row[0])
+    return fit, {
+        "policy": "sequence-ca-iterative-outlier-rejection/v1",
+        "cutoff_angstrom": float(cutoff_angstrom),
+        "maximum_cycles": int(maximum_cycles),
+        "cycles_completed": cycles,
+        "coarse_policy": (
+            "deterministic-75-percent-least-trimmed-plus-sequence-windows/v1"
+        ),
+        "coarse_retained_counts": coarse_retained_counts,
+        "coarse_window_count": len(window_starts),
+        "aligned_residue_count": original_count,
+        "retained_residue_count": len(retained),
+        "retained_fraction": len(retained) / original_count,
+    }
 
 
 def _receptor_candidate_key(
@@ -116,6 +264,10 @@ def best_receptor_superposition(
     predicted_model: Any,
     *,
     stable_chain_pair: bool = False,
+    reference_chain_ids: Collection[str] | None = None,
+    predicted_chain_ids: Collection[str] | None = None,
+    robust_core: bool = False,
+    expected_sequence: str | None = None,
 ) -> dict[str, Any]:
     """Return a sequence-compatible transform from prediction to reference.
 
@@ -128,20 +280,53 @@ def best_receptor_superposition(
         import gemmi
     except (ImportError, ModuleNotFoundError) as exc:
         raise EvaluationError("receptor alignment requires Gemmi") from exc
+    allowed_reference = set(reference_chain_ids) if reference_chain_ids is not None else None
+    allowed_predicted = set(predicted_chain_ids) if predicted_chain_ids is not None else None
+    if allowed_reference is not None and not allowed_reference:
+        raise EvaluationError("reference receptor-chain filter is empty")
+    if allowed_predicted is not None and not allowed_predicted:
+        raise EvaluationError("predicted receptor-chain filter is empty")
+    if expected_sequence is not None and (
+        not expected_sequence or not expected_sequence.isalpha()
+    ):
+        raise EvaluationError("expected receptor sequence must contain letters only")
+    normalized_expected_sequence = (
+        expected_sequence.upper() if expected_sequence is not None else None
+    )
     best: dict[str, Any] | None = None
     for reference_chain, reference_polymer in _polymer_chains(reference_model):
+        if allowed_reference is not None and reference_chain not in allowed_reference:
+            continue
         reference_sequence = _sequence(reference_polymer, gemmi)
+        if (
+            normalized_expected_sequence is not None
+            and reference_sequence != normalized_expected_sequence
+        ):
+            continue
         for predicted_chain, predicted_polymer in _polymer_chains(predicted_model):
+            if allowed_predicted is not None and predicted_chain not in allowed_predicted:
+                continue
             predicted_sequence = _sequence(predicted_polymer, gemmi)
+            if (
+                normalized_expected_sequence is not None
+                and predicted_sequence != normalized_expected_sequence
+            ):
+                continue
             similarity = difflib.SequenceMatcher(
                 None, reference_sequence, predicted_sequence, autojunk=False
             ).ratio()
             if similarity < 0.5:
                 continue
             try:
-                superposition = _sequence_superposition(
-                    reference_polymer, predicted_polymer, gemmi
-                )
+                if robust_core:
+                    superposition, robust_audit = _robust_sequence_superposition(
+                        reference_polymer, predicted_polymer, gemmi
+                    )
+                else:
+                    superposition = _sequence_superposition(
+                        reference_polymer, predicted_polymer, gemmi
+                    )
+                    robust_audit = None
             except Exception:
                 continue
             if not math.isfinite(superposition.rmsd):
@@ -153,11 +338,19 @@ def best_receptor_superposition(
                 "receptor_rmsd": float(superposition.rmsd),
                 "transform": superposition.transform,
                 "chain_selection_policy": (
-                    "stable-sequence-chain-pair/v1"
-                    if stable_chain_pair
-                    else "best-sequence-then-rmsd/v1"
+                    "filtered-stable-sequence-chain-pair/v1"
+                    if stable_chain_pair and allowed_reference is not None
+                    else (
+                        "stable-sequence-chain-pair/v1"
+                        if stable_chain_pair
+                        else "best-sequence-then-rmsd/v1"
+                    )
                 ),
             }
+            if robust_audit is not None:
+                candidate["robust_core"] = robust_audit
+            if normalized_expected_sequence is not None:
+                candidate["sequence_binding_policy"] = "exact-task-sequence/v1"
             if best is None or _receptor_candidate_key(
                 candidate, stable_chain_pair=stable_chain_pair
             ) < _receptor_candidate_key(best, stable_chain_pair=stable_chain_pair):

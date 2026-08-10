@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -707,6 +708,8 @@ if modal is not None:
         beta: bool = False,
         round_environment: str = "production",
         public_quiz_bucket: str | None = None,
+        excluded_target_ids: str = "",
+        reuse_pose_metrics_from_round_id: str | None = None,
     ) -> dict[str, Any]:
         """Assemble complete method pairs and optionally open the blind round."""
 
@@ -725,6 +728,28 @@ if modal is not None:
         complete, omitted, replacements = select_complete_method_pairs(
             outputs, REQUIRED_METHODS
         )
+        operator_excluded_target_ids = {
+            value.strip()
+            for value in excluded_target_ids.split(",")
+            if value.strip()
+        }
+        available_target_ids = {
+            row.get("target_id") for row in complete if isinstance(row.get("target_id"), str)
+        }
+        unknown_exclusions = operator_excluded_target_ids.difference(
+            available_target_ids
+        )
+        if unknown_exclusions:
+            raise RuntimeError(
+                "excluded target IDs are absent from complete method pairs: "
+                + ", ".join(sorted(unknown_exclusions))
+            )
+        if operator_excluded_target_ids:
+            complete = [
+                row
+                for row in complete
+                if row.get("target_id") not in operator_excluded_target_ids
+            ]
         if not complete:
             raise RuntimeError("campaign has no complete two-method target pairs")
 
@@ -741,7 +766,64 @@ if modal is not None:
             raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
 
         choice_scorer = None
-        if include_pose_metrics:
+        if reuse_pose_metrics_from_round_id:
+            from foldarium_pipeline.clustering import choice_order_digest
+
+            source_round, source_private_bytes = private.weekly_quiz_reveal_inputs(
+                reuse_pose_metrics_from_round_id
+            )
+            if source_round.get("campaign_id") != campaign_id:
+                raise RuntimeError("pose-metric source round belongs to another campaign")
+            try:
+                source_private = json.loads(source_private_bytes)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("pose-metric source private index is invalid") from exc
+            reusable_scores: dict[str, Mapping[str, Any]] = {}
+            for item in source_private.get("items", []):
+                if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                    raise RuntimeError("pose-metric source contains an invalid item")
+                for choice in item.get("choices", []):
+                    if not isinstance(choice, Mapping):
+                        raise RuntimeError("pose-metric source contains an invalid choice")
+                    identity = {
+                        "run_id": choice.get("run_id"),
+                        "sample_id": choice.get("sample_id"),
+                        "artifact_sha256": choice.get("artifact_sha256"),
+                    }
+                    pose_id = choice_order_digest(
+                        round_id, item["id"], identity
+                    )
+                    scoring = choice.get("scoring")
+                    if not isinstance(scoring, Mapping) or pose_id in reusable_scores:
+                        raise RuntimeError(
+                            "pose-metric source is incomplete or contains duplicate choices"
+                        )
+                    reusable_scores[pose_id] = scoring
+
+            def score_choice(*, protein_path, ligand_path, ligand_smiles, pose_id):
+                del ligand_smiles
+                source_scoring = reusable_scores.get(pose_id)
+                if source_scoring is None:
+                    raise RuntimeError("pose-metric source lacks an exact run/sample choice")
+                reused = deepcopy(dict(source_scoring))
+                reused["pose_id"] = pose_id
+                provenance = deepcopy(dict(reused.get("provenance") or {}))
+                provenance["inputs"] = {
+                    "protein_sha256": hashlib.sha256(
+                        Path(protein_path).read_bytes()
+                    ).hexdigest(),
+                    "ligand_pose_sha256": hashlib.sha256(
+                        Path(ligand_path).read_bytes()
+                    ).hexdigest(),
+                }
+                provenance["metric_reuse"] = {
+                    "source_round_id": reuse_pose_metrics_from_round_id,
+                    "policy": "rigid-transform-invariant-fixed-pose-metrics/v1",
+                }
+                reused["provenance"] = provenance
+                return reused
+
+        elif include_pose_metrics:
             remote_scorer = modal.Function.from_name(
                 WEEKLY_SCORING_APP_NAME,
                 WEEKLY_SCORING_FUNCTION_NAME,
@@ -778,7 +860,20 @@ if modal is not None:
                 closes_at=closes_at,
                 open_round=open_round,
                 round_environment=round_environment,
-                round_metadata={"release_channel": "beta"} if beta else None,
+                round_metadata={
+                    "release_channel": "beta" if beta else "standard",
+                    "assembly_excluded_target_ids": sorted(
+                        operator_excluded_target_ids
+                    ),
+                    "assembly_exclusion_policy": (
+                        "explicit-operator-reviewed-target-exclusion/v1"
+                        if operator_excluded_target_ids
+                        else None
+                    ),
+                    "pose_metrics_reused_from_round_id": (
+                        reuse_pose_metrics_from_round_id
+                    ),
+                },
             )
         cluster_counts = [
             int(item["clustering"]["cluster_count"])
@@ -792,9 +887,13 @@ if modal is not None:
             "cluster_count_max": max(cluster_counts),
             "omitted_succeeded_partial_targets": omitted,
             "ignored_succeeded_replacement_runs": replacements,
-            "pose_metrics_included": include_pose_metrics,
+            "pose_metrics_included": bool(
+                include_pose_metrics or reuse_pose_metrics_from_round_id
+            ),
+            "pose_metrics_reused_from_round_id": reuse_pose_metrics_from_round_id,
             "release_channel": "beta" if beta else "standard",
             "environment": round_environment,
+            "assembly_excluded_target_ids": sorted(operator_excluded_target_ids),
         }
         print(
             "foldarium.weekly_quiz_assembly "
