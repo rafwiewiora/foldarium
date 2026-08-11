@@ -50,9 +50,9 @@ def pdb_fixture(shift: float) -> bytes:
     return ("\n".join(lines) + "\nEND\n").encode()
 
 
-def target() -> dict:
+def target(target_id: str = "2026-08-08_00000001") -> dict:
     return {
-        "target_id": "2026-08-08_00000001",
+        "target_id": target_id,
         "entities": [
             {"type": "protein", "chain_ids": ["A"], "sequence": "AAAAAA"},
             {"type": "ligand", "chain_ids": ["B"], "smiles": "CCCCCCCCCCCCCCC"},
@@ -64,11 +64,16 @@ def target() -> dict:
     }
 
 
-def run_row(method: str, content: bytes) -> tuple[dict, str]:
+def run_row(
+    method: str,
+    content: bytes,
+    *,
+    target_payload: dict | None = None,
+) -> tuple[dict, str]:
     version = "0.4.4" if method == "openfold3" else "2.2.1"
     task = make_prediction_task(
         campaign_id="weekly-2026-08-08",
-        target=target(),
+        target=target_payload or target(),
         method=method,
         method_version=version,
         container_image=f"registry.example/{method}@sha256:" + "a" * 64,
@@ -364,6 +369,116 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         self.assertRegex(audit["choice_digest"], r"^[0-9a-f]{64}$")
         self.assertRegex(audit["distance_matrix_sha256"], r"^[0-9a-f]{64}$")
 
+    @staticmethod
+    def alignment_qa_fixture(*, aligned, retained, per_chain):
+        return {
+            "robust_core": {
+                "aligned_residue_count": aligned,
+                "retained_residue_count": retained,
+                "per_chain": per_chain,
+            },
+            "post_transform_ca": {
+                "policy": "all-sequence-matched-ca-displacement-without-refit/v1",
+                "count": aligned,
+                "rmsd": 12.0,
+                "p50": 1.0,
+                "p90": 20.0,
+                "p95": 30.0,
+                "p99": 40.0,
+                "max": 50.0,
+                "per_chain": [],
+            },
+        }
+
+    def test_display_qa_rejects_a_small_core_confined_away_from_the_pocket(self) -> None:
+        result = weekly_quiz_module._weekly_display_alignment_qa(
+            self.alignment_qa_fixture(
+                aligned=653,
+                retained=116,
+                per_chain=[
+                    {
+                        "chain_id": "A",
+                        "aligned_residue_count": 144,
+                        "retained_residue_count": 116,
+                    },
+                    {
+                        "chain_id": "B",
+                        "aligned_residue_count": 342,
+                        "retained_residue_count": 0,
+                    },
+                    {
+                        "chain_id": "C",
+                        "aligned_residue_count": 167,
+                        "retained_residue_count": 0,
+                    },
+                ],
+            ),
+            contact_residue_counts={"B": 17, "C": 12},
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["complex"]["minimum_retained_residue_count"], 131)
+        self.assertEqual(
+            [failure["code"] for failure in result["failures"]],
+            [
+                "insufficient_complex_core_support",
+                "unsupported_ligand_contact_chain",
+                "unsupported_ligand_contact_chain",
+            ],
+        )
+
+    def test_display_qa_rejects_an_unsupported_significant_contact_chain(self) -> None:
+        result = weekly_quiz_module._weekly_display_alignment_qa(
+            self.alignment_qa_fixture(
+                aligned=337,
+                retained=316,
+                per_chain=[
+                    {
+                        "chain_id": "A",
+                        "aligned_residue_count": 316,
+                        "retained_residue_count": 316,
+                    },
+                    {
+                        "chain_id": "B",
+                        "aligned_residue_count": 21,
+                        "retained_residue_count": 0,
+                    },
+                ],
+            ),
+            contact_residue_counts={"A": 4, "B": 4},
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertEqual(
+            [failure["code"] for failure in result["failures"]],
+            ["unsupported_ligand_contact_chain"],
+        )
+        self.assertEqual(result["failures"][0]["minimum_retained_residue_count"], 5)
+
+    def test_display_qa_allows_flexible_noncontact_chains_and_incidental_contacts(self) -> None:
+        result = weekly_quiz_module._weekly_display_alignment_qa(
+            self.alignment_qa_fixture(
+                aligned=140,
+                retained=80,
+                per_chain=[
+                    {
+                        "chain_id": "A",
+                        "aligned_residue_count": 60,
+                        "retained_residue_count": 40,
+                    },
+                    {
+                        "chain_id": "B",
+                        "aligned_residue_count": 80,
+                        "retained_residue_count": 40,
+                    },
+                ],
+            ),
+            contact_residue_counts={"A": 10, "B": 2},
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["failures"], [])
+
 
 def fake_ligand(atomic_numbers: list[int]) -> list[SimpleNamespace]:
     from rdkit import Chem
@@ -503,7 +618,8 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 7)
+            self.assertEqual(stage["schema_version"], 8)
+            self.assertEqual(stage["alignment_rejections"], [])
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
             self.assertEqual(len(scoring_calls), 2)
@@ -512,6 +628,11 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 {"openfold3", "boltz2"},
             )
             for choice in stage["items"][0]["choices"]:
+                self.assertTrue(choice["alignment"]["display_qa"]["passed"])
+                self.assertEqual(
+                    choice["alignment"]["display_qa"]["policy"],
+                    weekly_quiz_module.DISPLAY_ALIGNMENT_QA_POLICY,
+                )
                 self.assertEqual(
                     choice["confidence"],
                     {
@@ -575,6 +696,8 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             )
             self.assertIn("stage_sha256", private.opened["metadata"])
             self.assertEqual(summary["choice_count"], 2)
+            self.assertEqual(summary["display_alignment_rejected_target_count"], 0)
+            self.assertEqual(summary["display_alignment_rejected_target_ids"], [])
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
             self.assertNotIn("run_id", json.dumps(blind))
@@ -606,6 +729,16 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 )
             )
             private_index = json.loads(private.stored[0][0])
+            rejection_index = json.loads(private.stored[1][0])
+            self.assertEqual(
+                rejection_index,
+                {
+                    "policy": weekly_quiz_module.DISPLAY_ALIGNMENT_QA_POLICY,
+                    "rejections": [],
+                    "round_id": "weekly-2026-08-08",
+                    "schema_version": 1,
+                },
+            )
             self.assertEqual(
                 {choice["method"] for choice in private_index["items"][0]["choices"]},
                 {"openfold3", "boltz2"},
@@ -652,6 +785,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     choice["alignment"]["robust_core"]["coarse_policy"],
                     "deterministic-pooled-75-percent-least-trimmed-plus-per-chain-windows/v3",
                 )
+                self.assertTrue(choice["alignment"]["display_qa"]["passed"])
                 self.assertEqual(
                     choice["alignment"]["robust_core"]["per_chain"],
                     [
@@ -686,6 +820,159 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     closes_at="2026-08-12T00:00:00Z",
                     round_metadata={"stage_sha256": "operator-value"},
                 )
+
+    def test_rejects_a_whole_target_before_batch_scoring_when_any_pose_fails_display_qa(
+        self,
+    ) -> None:
+        first = target("2026-08-08_00000001")
+        second = target("2026-08-08_00000002")
+        rows_and_uris = [
+            run_row(method, pdb_fixture(shift), target_payload=target_payload)
+            for target_payload in (first, second)
+            for method, shift in (("openfold3", 0.0), ("boltz2", 20.0))
+        ]
+        rows = [row for row, _uri in rows_and_uris]
+        downloads = {
+            uri: pdb_fixture(0.0 if row["method"] == "openfold3" else 20.0)
+            for row, uri in rows_and_uris
+        }
+        passing = WeeklyQuizReceptorMedoidTests.alignment_qa_fixture(
+            aligned=6,
+            retained=6,
+            per_chain=[{
+                "chain_id": "A",
+                "aligned_residue_count": 6,
+                "retained_residue_count": 6,
+            }],
+        )
+        passing = weekly_quiz_module._weekly_display_alignment_qa(
+            passing,
+            contact_residue_counts={"A": 3},
+        )
+        failing = json.loads(json.dumps(passing))
+        failing["passed"] = False
+        failing["failures"] = [{"code": "unsupported_ligand_contact_chain"}]
+        scored_pose_ids: list[str] = []
+
+        def score_batch(requests):
+            self.assertEqual(len(requests), 2)
+            scored_pose_ids.extend(request["pose_id"] for request in requests)
+            return [
+                {
+                    "pose_id": request["pose_id"],
+                    "schema_version": "foldarium.pose-score/v1",
+                    "status": "succeeded",
+                    "scores": {"smina_affinity_kcal_mol": -7.0},
+                    "provenance": {
+                        "mode": "score_only",
+                        "scoring_function": "vina",
+                    },
+                    "interaction_summary": {
+                        "engine": "prolif",
+                        "policy": "test-policy/v1",
+                        "count": 1,
+                    },
+                }
+                for request in requests
+            ]
+
+        with tempfile.TemporaryDirectory() as temporary, patch.object(
+            weekly_quiz_module,
+            "_weekly_display_alignment_qa",
+            side_effect=[failing, failing, passing, passing],
+        ):
+            stage = stage_weekly_quiz(
+                rows,
+                temporary,
+                round_id="weekly-two-targets",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+                choice_batch_scorer=score_batch,
+            )
+
+        self.assertEqual([item["target_id"] for item in stage["items"]], [second["target_id"]])
+        self.assertEqual(len(scored_pose_ids), 2)
+        self.assertEqual(
+            [row["target_id"] for row in stage["alignment_rejections"]],
+            [first["target_id"]],
+        )
+        self.assertEqual(len(stage["alignment_rejections"][0]["failed_choices"]), 2)
+
+    def test_publication_rejects_missing_display_qa_before_any_storage_access(self) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-tampered",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+            )
+            alignment = stage["items"][0]["choices"][0]["alignment"]
+            display_qa = alignment.pop("display_qa")
+            unhashed = {key: value for key, value in stage.items() if key != "stage_sha256"}
+            stage["stage_sha256"] = hashlib.sha256(
+                weekly_quiz_module.canonical_json(unhashed).encode("utf-8")
+            ).hexdigest()
+            Path(temporary, "stage.json").write_text(
+                json.dumps(stage, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            private = FakeCoordinator("private")
+            public = FakeCoordinator("quiz-public")
+
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "lacks a passing display alignment QA",
+            ):
+                publish_staged_weekly_quiz(
+                    temporary,
+                    private_coordinator=private,
+                    public_coordinator=public,
+                    opens_at="2026-08-08T03:00:00Z",
+                    closes_at="2026-08-12T00:00:00Z",
+                )
+
+            self.assertFalse(public.public_bucket_checked)
+            self.assertEqual(public.stored, [])
+            self.assertEqual(private.stored, [])
+
+            alignment["display_qa"] = display_qa
+            alignment["robust_core"]["retained_residue_count"] = 0
+            alignment["robust_core"]["per_chain"][0]["retained_residue_count"] = 0
+            alignment["robust_core"]["per_chain"][0]["retained_fraction"] = 0.0
+            unhashed = {key: value for key, value in stage.items() if key != "stage_sha256"}
+            stage["stage_sha256"] = hashlib.sha256(
+                weekly_quiz_module.canonical_json(unhashed).encode("utf-8")
+            ).hexdigest()
+            Path(temporary, "stage.json").write_text(
+                json.dumps(stage, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            private = FakeCoordinator("private")
+            public = FakeCoordinator("quiz-public")
+
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "does not match its provenance",
+            ):
+                publish_staged_weekly_quiz(
+                    temporary,
+                    private_coordinator=private,
+                    public_coordinator=public,
+                    opens_at="2026-08-08T03:00:00Z",
+                    closes_at="2026-08-12T00:00:00Z",
+                )
+
+            self.assertFalse(public.public_bucket_checked)
+            self.assertEqual(public.stored, [])
+            self.assertEqual(private.stored, [])
 
     def test_batch_scores_only_after_all_exact_inputs_are_staged_in_order(self) -> None:
         openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))

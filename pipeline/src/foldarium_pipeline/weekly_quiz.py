@@ -26,8 +26,13 @@ from .evaluation import (
 )
 from .quiz import build_blind_manifest, manifest_sha256
 
-WEEKLY_QUIZ_STAGE_VERSION = 7
+WEEKLY_QUIZ_STAGE_VERSION = 8
 POCKET_RADIUS_ANGSTROM = 5.0
+DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION = 0.20
+DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION = 0.20
+DISPLAY_ALIGNMENT_MIN_ABSOLUTE_SUPPORT = 5
+DISPLAY_ALIGNMENT_MIN_SIGNIFICANT_CONTACT_RESIDUES = 3
+DISPLAY_ALIGNMENT_QA_POLICY = "shared-frame-complex-and-contact-chain-support/v1"
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
 SUPPORTED_LEGACY_LIGAND_ORDER = {
@@ -329,6 +334,174 @@ def _polymer_residues(model: Any) -> list[tuple[Any, Any]]:
         for residue in chain.get_polymer()
         if _heavy_atoms(residue)
     ]
+
+
+def _minimum_display_support(aligned_residue_count: int, fraction: float) -> int:
+    if aligned_residue_count <= 0:
+        raise WeeklyQuizAssemblyError("display alignment has no aligned receptor residues")
+    return min(
+        aligned_residue_count,
+        max(
+            DISPLAY_ALIGNMENT_MIN_ABSOLUTE_SUPPORT,
+            math.ceil(aligned_residue_count * fraction),
+        ),
+    )
+
+
+def _ligand_contact_residue_counts(model: Any, ligand: Any, numpy: Any) -> dict[str, int]:
+    """Count sequence-addressable receptor residues within the display pocket cutoff."""
+
+    ligand_coordinates = numpy.array(
+        [[atom.pos.x, atom.pos.y, atom.pos.z] for atom in _heavy_atoms(ligand)],
+        dtype=float,
+    )
+    if not len(ligand_coordinates):
+        raise WeeklyQuizAssemblyError("display alignment ligand has no heavy atoms")
+    counts: dict[str, int] = defaultdict(int)
+    for chain, residue in _polymer_residues(model):
+        residue_coordinates = numpy.array(
+            [[atom.pos.x, atom.pos.y, atom.pos.z] for atom in _heavy_atoms(residue)],
+            dtype=float,
+        )
+        if len(residue_coordinates) and float(
+            numpy.min(
+                numpy.linalg.norm(
+                    residue_coordinates[:, None] - ligand_coordinates[None],
+                    axis=2,
+                )
+            )
+        ) < POCKET_RADIUS_ANGSTROM:
+            counts[chain.name] += 1
+    return dict(sorted(counts.items()))
+
+
+def _weekly_display_alignment_qa(
+    alignment: Mapping[str, Any],
+    *,
+    contact_residue_counts: Mapping[str, int],
+) -> dict[str, Any]:
+    """Fail closed when the shared frame omits the complex or a binding chain."""
+
+    robust = alignment.get("robust_core")
+    post_transform = alignment.get("post_transform_ca")
+    if not isinstance(robust, Mapping) or not isinstance(post_transform, Mapping):
+        raise WeeklyQuizAssemblyError("display alignment lacks post-transform QA provenance")
+    aligned = robust.get("aligned_residue_count")
+    retained = robust.get("retained_residue_count")
+    per_chain = robust.get("per_chain")
+    if (
+        isinstance(aligned, bool)
+        or not isinstance(aligned, int)
+        or aligned <= 0
+        or isinstance(retained, bool)
+        or not isinstance(retained, int)
+        or retained < 0
+        or retained > aligned
+        or not isinstance(per_chain, list)
+    ):
+        raise WeeklyQuizAssemblyError("display alignment robust-core provenance is invalid")
+    chain_support: dict[str, dict[str, int]] = {}
+    for row in per_chain:
+        if not isinstance(row, Mapping):
+            raise WeeklyQuizAssemblyError("display alignment per-chain provenance is invalid")
+        chain_id = row.get("chain_id")
+        chain_aligned = row.get("aligned_residue_count")
+        chain_retained = row.get("retained_residue_count")
+        if (
+            not isinstance(chain_id, str)
+            or not chain_id
+            or isinstance(chain_aligned, bool)
+            or not isinstance(chain_aligned, int)
+            or chain_aligned <= 0
+            or isinstance(chain_retained, bool)
+            or not isinstance(chain_retained, int)
+            or not 0 <= chain_retained <= chain_aligned
+            or chain_id in chain_support
+        ):
+            raise WeeklyQuizAssemblyError("display alignment per-chain provenance is invalid")
+        chain_support[chain_id] = {
+            "aligned_residue_count": chain_aligned,
+            "retained_residue_count": chain_retained,
+        }
+    if (
+        sum(row["aligned_residue_count"] for row in chain_support.values()) != aligned
+        or sum(row["retained_residue_count"] for row in chain_support.values()) != retained
+    ):
+        raise WeeklyQuizAssemblyError(
+            "display alignment per-chain provenance does not match complex totals"
+        )
+
+    failures: list[dict[str, Any]] = []
+    minimum_complex_support = _minimum_display_support(
+        aligned, DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION
+    )
+    if retained < minimum_complex_support:
+        failures.append(
+            {
+                "code": "insufficient_complex_core_support",
+                "aligned_residue_count": aligned,
+                "retained_residue_count": retained,
+                "minimum_retained_residue_count": minimum_complex_support,
+            }
+        )
+
+    contact_chains: list[dict[str, Any]] = []
+    for chain_id, contact_count in sorted(contact_residue_counts.items()):
+        if (
+            isinstance(contact_count, bool)
+            or not isinstance(contact_count, int)
+            or contact_count < 0
+        ):
+            raise WeeklyQuizAssemblyError("display alignment contact provenance is invalid")
+        support = chain_support.get(chain_id)
+        if support is None:
+            raise WeeklyQuizAssemblyError(
+                f"display alignment contact chain {chain_id} lacks robust-core provenance"
+            )
+        minimum_chain_support = _minimum_display_support(
+            support["aligned_residue_count"],
+            DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION,
+        )
+        significant = contact_count >= DISPLAY_ALIGNMENT_MIN_SIGNIFICANT_CONTACT_RESIDUES
+        row = {
+            "chain_id": chain_id,
+            "contact_residue_count": contact_count,
+            **support,
+            "minimum_retained_residue_count": minimum_chain_support,
+            "significant": significant,
+        }
+        contact_chains.append(row)
+        if significant and support["retained_residue_count"] < minimum_chain_support:
+            failures.append(
+                {
+                    "code": "unsupported_ligand_contact_chain",
+                    **row,
+                }
+            )
+
+    return {
+        "policy": DISPLAY_ALIGNMENT_QA_POLICY,
+        "passed": not failures,
+        "thresholds": {
+            "complex_support_fraction": DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION,
+            "contact_chain_support_fraction": (
+                DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION
+            ),
+            "minimum_absolute_support": DISPLAY_ALIGNMENT_MIN_ABSOLUTE_SUPPORT,
+            "minimum_significant_contact_residues": (
+                DISPLAY_ALIGNMENT_MIN_SIGNIFICANT_CONTACT_RESIDUES
+            ),
+            "contact_cutoff_angstrom": POCKET_RADIUS_ANGSTROM,
+        },
+        "complex": {
+            "aligned_residue_count": aligned,
+            "retained_residue_count": retained,
+            "minimum_retained_residue_count": minimum_complex_support,
+        },
+        "contact_chains": contact_chains,
+        "post_transform_ca": deepcopy(dict(post_transform)),
+        "failures": failures,
+    }
 
 
 def _write_polymer(
@@ -695,6 +868,7 @@ def stage_weekly_quiz(
     gemmi, numpy, Chem = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
     staged_items: list[dict[str, Any]] = []
+    alignment_rejections: list[dict[str, Any]] = []
     pending_choice_scores: list[
         tuple[dict[str, Any], dict[str, Any]]
     ] = []
@@ -784,13 +958,10 @@ def stage_weekly_quiz(
         )
         reference_model = reference_choice["model"]
         receptor_anchor["task_receptor_complex"] = task_receptor_complex
-        reference_choice_index: int | None = None
-        choice_rows: list[dict[str, Any]] = []
-        pose_coordinates: list[list[list[float]]] = []
-        ligands: list[Any] = []
-        for index, choice in enumerate(raw_choices, start=1):
+        prepared_choices: list[tuple[dict[str, Any], dict[str, Any], Any]] = []
+        failed_choices: list[dict[str, Any]] = []
+        for choice in raw_choices:
             if choice is reference_choice:
-                reference_choice_index = index - 1
                 transform = _identity_transform(gemmi)
                 try:
                     alignment = dict(
@@ -807,16 +978,56 @@ def stage_weekly_quiz(
                 alignment["receptor_rmsd"] = 0.0
             else:
                 try:
-                    alignment = _weekly_receptor_superposition(
-                        reference_model,
-                        choice["model"],
-                        expected_chain_sequences=expected_chain_sequences,
+                    alignment = dict(
+                        _weekly_receptor_superposition(
+                            reference_model,
+                            choice["model"],
+                            expected_chain_sequences=expected_chain_sequences,
+                        )
                     )
                 except EvaluationError as exc:
                     raise WeeklyQuizAssemblyError(
                         f"could not align {target_id}/{choice['sample_id']} to the blind reference"
                     ) from exc
                 transform = alignment["transform"]
+            display_qa = _weekly_display_alignment_qa(
+                alignment,
+                contact_residue_counts=_ligand_contact_residue_counts(
+                    choice["model"], choice["ligand"], numpy
+                ),
+            )
+            alignment["display_qa"] = display_qa
+            prepared_choices.append((choice, alignment, transform))
+            if not display_qa["passed"]:
+                failed_choices.append(
+                    {
+                        "run_id": choice["run_id"],
+                        "sample_id": choice["sample_id"],
+                        "sample_index": choice["sample_index"],
+                        "artifact_sha256": choice["artifact_sha256"],
+                        "method": choice["method"],
+                        "method_version": choice["method_version"],
+                        "display_qa": display_qa,
+                    }
+                )
+        if failed_choices:
+            alignment_rejections.append(
+                {
+                    "target_id": target_id,
+                    "reason": "display_alignment_qa_failed",
+                    "policy": DISPLAY_ALIGNMENT_QA_POLICY,
+                    "failed_choices": failed_choices,
+                }
+            )
+            continue
+
+        reference_choice_index: int | None = None
+        choice_rows: list[dict[str, Any]] = []
+        pose_coordinates: list[list[list[float]]] = []
+        ligands: list[Any] = []
+        for index, (choice, alignment, transform) in enumerate(prepared_choices, start=1):
+            if choice is reference_choice:
+                reference_choice_index = index - 1
             ligand = choice["ligand"]
             ligands.append(ligand)
             ligand_confidence = _ligand_confidence(ligand)
@@ -995,6 +1206,13 @@ def stage_weekly_quiz(
             }
         )
 
+    if not staged_items:
+        rejected = ", ".join(row["target_id"] for row in alignment_rejections)
+        raise WeeklyQuizAssemblyError(
+            "display alignment QA rejected every complete target"
+            + (f": {rejected}" if rejected else "")
+        )
+
     if choice_batch_scorer is not None:
         requests = tuple(request for _, request in pending_choice_scores)
         for request in requests:
@@ -1025,6 +1243,7 @@ def stage_weekly_quiz(
         "campaign_id": campaign_id,
         "required_methods": sorted(required_methods),
         "items": staged_items,
+        "alignment_rejections": alignment_rejections,
     }
     stage["stage_sha256"] = hashlib.sha256(canonical_json(stage).encode("utf-8")).hexdigest()
     (root / "stage.json").write_text(
@@ -1041,6 +1260,116 @@ def _aware_timestamp(value: str, field: str) -> str:
     if parsed.tzinfo is None:
         raise WeeklyQuizAssemblyError(f"{field} must include a timezone")
     return value
+
+
+def _validate_staged_display_alignment_qa(
+    stage: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Validate every alignment decision before publication can touch storage."""
+
+    items = stage.get("items")
+    if not isinstance(items, list) or not items:
+        raise WeeklyQuizAssemblyError("stage items must be a non-empty list")
+    staged_target_ids: set[str] = set()
+    normalized_items: list[Mapping[str, Any]] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise WeeklyQuizAssemblyError("stage items must be objects")
+        target_id = item.get("target_id")
+        if not isinstance(target_id, str) or not target_id or target_id in staged_target_ids:
+            raise WeeklyQuizAssemblyError("stage target IDs must be non-empty and unique")
+        staged_target_ids.add(target_id)
+        choices = item.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise WeeklyQuizAssemblyError("stage items must contain blind choices")
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                raise WeeklyQuizAssemblyError("stage choices must be objects")
+            alignment = choice.get("alignment")
+            display_qa = alignment.get("display_qa") if isinstance(alignment, Mapping) else None
+            contact_chains = (
+                display_qa.get("contact_chains")
+                if isinstance(display_qa, Mapping)
+                else None
+            )
+            if (
+                not isinstance(display_qa, Mapping)
+                or display_qa.get("policy") != DISPLAY_ALIGNMENT_QA_POLICY
+                or not isinstance(contact_chains, list)
+            ):
+                raise WeeklyQuizAssemblyError(
+                    "staged choice lacks a passing display alignment QA result"
+                )
+            contact_residue_counts: dict[str, int] = {}
+            for row in contact_chains:
+                chain_id = row.get("chain_id") if isinstance(row, Mapping) else None
+                count = row.get("contact_residue_count") if isinstance(row, Mapping) else None
+                if (
+                    not isinstance(chain_id, str)
+                    or not chain_id
+                    or chain_id in contact_residue_counts
+                    or isinstance(count, bool)
+                    or not isinstance(count, int)
+                    or count < 0
+                ):
+                    raise WeeklyQuizAssemblyError(
+                        "staged choice display alignment contact provenance is invalid"
+                    )
+                contact_residue_counts[chain_id] = count
+            recomputed_qa = _weekly_display_alignment_qa(
+                alignment,
+                contact_residue_counts=contact_residue_counts,
+            )
+            if dict(display_qa) != recomputed_qa:
+                raise WeeklyQuizAssemblyError(
+                    "staged choice display alignment QA does not match its provenance"
+                )
+            if recomputed_qa.get("passed") is not True:
+                raise WeeklyQuizAssemblyError(
+                    "staged choice lacks a passing display alignment QA result"
+                )
+        normalized_items.append(item)
+
+    alignment_rejections = stage.get("alignment_rejections")
+    if not isinstance(alignment_rejections, list):
+        raise WeeklyQuizAssemblyError("stage alignment_rejections must be a list")
+    rejected_target_ids: set[str] = set()
+    normalized_rejections: list[Mapping[str, Any]] = []
+    for rejection in alignment_rejections:
+        if not isinstance(rejection, Mapping):
+            raise WeeklyQuizAssemblyError("stage alignment rejections must be objects")
+        target_id = rejection.get("target_id")
+        failed_choices = rejection.get("failed_choices")
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_id in rejected_target_ids
+            or target_id in staged_target_ids
+            or rejection.get("policy") != DISPLAY_ALIGNMENT_QA_POLICY
+            or rejection.get("reason") != "display_alignment_qa_failed"
+            or not isinstance(failed_choices, list)
+            or not failed_choices
+        ):
+            raise WeeklyQuizAssemblyError("stage alignment rejection provenance is invalid")
+        for failed_choice in failed_choices:
+            failed_qa = (
+                failed_choice.get("display_qa")
+                if isinstance(failed_choice, Mapping)
+                else None
+            )
+            if (
+                not isinstance(failed_qa, Mapping)
+                or failed_qa.get("policy") != DISPLAY_ALIGNMENT_QA_POLICY
+                or failed_qa.get("passed") is not False
+                or not isinstance(failed_qa.get("failures"), list)
+                or not failed_qa["failures"]
+            ):
+                raise WeeklyQuizAssemblyError(
+                    "stage alignment rejection lacks a failed QA result"
+                )
+        rejected_target_ids.add(target_id)
+        normalized_rejections.append(rejection)
+    return normalized_items, normalized_rejections
 
 
 def clone_weekly_quiz_manifests(
@@ -1153,15 +1482,32 @@ def publish_staged_weekly_quiz(
             "round_environment must be production, preview, or development"
         )
 
+    # Validate the full stage before the first bucket check or object upload.
+    # This keeps a tampered or legacy stage strictly fail-closed.
+    stage_items, alignment_rejections = _validate_staged_display_alignment_qa(stage)
+    supplied_metadata = dict(round_metadata or {})
+    reserved_metadata = {
+        "stage_sha256",
+        "private_index",
+        "public_quiz_bucket",
+        "display_alignment_qa_policy",
+        "display_alignment_rejections",
+        "display_alignment_rejected_target_ids",
+    }
+    overlap = reserved_metadata.intersection(supplied_metadata)
+    if overlap:
+        raise WeeklyQuizAssemblyError(
+            "round_metadata cannot override publication metadata: "
+            + ", ".join(sorted(overlap))
+        )
+
     # Service-role uploads also succeed for private buckets, but the browser
     # resolves every URI below through Supabase's unauthenticated public object
     # endpoint. Verify visibility before the first upload.
     public_coordinator.require_public_bucket()
 
     manifest_items: list[dict[str, Any]] = []
-    for item in stage.get("items", []):
-        if not isinstance(item, Mapping):
-            raise WeeklyQuizAssemblyError("stage items must be objects")
+    for item in stage_items:
         protein = _safe_path(root, item.get("protein_path"), "item.protein_path")
         pocket = _safe_path(root, item.get("pocket_path"), "item.pocket_path")
         if not protein.is_file() or not pocket.is_file():
@@ -1225,19 +1571,29 @@ def publish_staged_weekly_quiz(
     private_object = private_coordinator.store_bytes(
         canonical_json(private_index).encode("utf-8"), "application/json"
     )
-    supplied_metadata = dict(round_metadata or {})
-    reserved_metadata = {"stage_sha256", "private_index", "public_quiz_bucket"}
-    overlap = reserved_metadata.intersection(supplied_metadata)
-    if overlap:
-        raise WeeklyQuizAssemblyError(
-            "round_metadata cannot override publication metadata: "
-            + ", ".join(sorted(overlap))
-        )
+    rejection_object = private_coordinator.store_bytes(
+        canonical_json(
+            {
+                "schema_version": 1,
+                "round_id": stage["round_id"],
+                "policy": DISPLAY_ALIGNMENT_QA_POLICY,
+                "rejections": alignment_rejections,
+            }
+        ).encode("utf-8"),
+        "application/json",
+    )
     metadata = {
         **supplied_metadata,
         "stage_sha256": declared_digest,
         "private_index": private_object,
         "public_quiz_bucket": public_coordinator.storage_bucket,
+        "display_alignment_qa_policy": DISPLAY_ALIGNMENT_QA_POLICY,
+        "display_alignment_rejections": rejection_object,
+        "display_alignment_rejected_target_ids": sorted(
+            row.get("target_id")
+            for row in alignment_rejections
+            if isinstance(row, Mapping) and isinstance(row.get("target_id"), str)
+        ),
     }
     response: Any = {"status": "uploaded-not-opened"}
     if open_round:
@@ -1262,6 +1618,10 @@ def publish_staged_weekly_quiz(
         "environment": round_environment,
         "item_count": len(blind["items"]),
         "choice_count": sum(len(item["choices"]) for item in blind["items"]),
+        "display_alignment_rejected_target_count": len(alignment_rejections),
+        "display_alignment_rejected_target_ids": metadata[
+            "display_alignment_rejected_target_ids"
+        ],
         "blind_manifest_sha256": manifest_sha256(blind),
         "private_index": private_object,
         "open_response": response,
@@ -1269,6 +1629,7 @@ def publish_staged_weekly_quiz(
 
 
 __all__ = [
+    "DISPLAY_ALIGNMENT_QA_POLICY",
     "POCKET_RADIUS_ANGSTROM",
     "LIGAND_CONFIDENCE_AGGREGATION",
     "LIGAND_CONFIDENCE_METRIC",

@@ -331,6 +331,38 @@ def _robust_sequence_superposition(
     )
 
 
+def _percentile(values: Sequence[float], fraction: float) -> float:
+    """Return a deterministic linearly interpolated percentile."""
+
+    if not values:
+        raise EvaluationError("cannot summarize an empty receptor displacement set")
+    ordered = sorted(float(value) for value in values)
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _displacement_summary(values: Sequence[float]) -> dict[str, Any]:
+    """Summarize post-transform C-alpha displacement without another fit."""
+
+    normalized = [float(value) for value in values]
+    if not normalized or any(not math.isfinite(value) or value < 0 for value in normalized):
+        raise EvaluationError("receptor displacements must be finite non-negative values")
+    return {
+        "count": len(normalized),
+        "rmsd": math.sqrt(sum(value * value for value in normalized) / len(normalized)),
+        "p50": _percentile(normalized, 0.50),
+        "p90": _percentile(normalized, 0.90),
+        "p95": _percentile(normalized, 0.95),
+        "p99": _percentile(normalized, 0.99),
+        "max": max(normalized),
+    }
+
+
 def exact_complex_receptor_superposition(
     reference_model: Any,
     predicted_model: Any,
@@ -404,6 +436,23 @@ def exact_complex_receptor_superposition(
         gemmi,
         group_labels=group_labels,
     )
+    post_transform_displacements: list[float] = []
+    post_transform_by_chain: dict[str, list[float]] = {
+        chain_id: [] for chain_id in sorted(normalized)
+    }
+    for reference_position, predicted_position, chain_id in zip(
+        reference_positions,
+        predicted_positions,
+        group_labels,
+    ):
+        transformed = superposition.transform.apply(predicted_position)
+        displacement = math.sqrt(
+            (transformed.x - reference_position.x) ** 2
+            + (transformed.y - reference_position.y) ** 2
+            + (transformed.z - reference_position.z) ** 2
+        )
+        post_transform_displacements.append(displacement)
+        post_transform_by_chain[chain_id].append(displacement)
     robust_audit["per_chain"] = [
         {
             "chain_id": row["group_id"],
@@ -423,6 +472,17 @@ def exact_complex_receptor_superposition(
         "chain_selection_policy": "exact-task-complex-robust-core/v1",
         "sequence_binding_policy": "exact-task-chain-id-and-sequence/v1",
         "robust_core": robust_audit,
+        "post_transform_ca": {
+            "policy": "all-sequence-matched-ca-displacement-without-refit/v1",
+            **_displacement_summary(post_transform_displacements),
+            "per_chain": [
+                {
+                    "chain_id": chain_id,
+                    **_displacement_summary(post_transform_by_chain[chain_id]),
+                }
+                for chain_id in sorted(post_transform_by_chain)
+            ],
+        },
     }
 
 

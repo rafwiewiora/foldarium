@@ -131,6 +131,13 @@ Foldarium owns the orchestration from end to end:
 5. A privileged publisher exposes the redacted blind round on Saturday; Postgres accepts votes only
    before the Wednesday close and exposes answers/vote totals only after the reveal transaction.
 
+Weekly stage schema v8 also fails closed on shared-display alignment. The fitted receptor core must
+retain at least 20% of all sequence-matched C-alpha atoms, and every chain with at least three ligand-
+contact residues inside 5 Angstrom must independently retain at least 20% (with a five-residue floor,
+capped by chain length). Ligand coordinates identify contact chains but never enter the alignment fit.
+If any pose fails, the whole target is omitted before CPU scoring; the publisher revalidates every
+passing decision before storage access and stores excluded-target provenance in a private object.
+
 ## Weekly timing and safety switches
 
 wwPDB prerelease and CAMEO target selection begin Saturday at 03:00 UTC. CAMEO accepts participant

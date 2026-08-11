@@ -192,6 +192,15 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
         self.assertEqual(contributions["A"]["retained_residue_count"], 40)
         self.assertEqual(contributions["B"]["retained_residue_count"], 0)
         self.assertEqual(contributions["C"]["retained_residue_count"], 40)
+        post_transform = result["post_transform_ca"]
+        self.assertEqual(post_transform["count"], 140)
+        self.assertGreater(post_transform["rmsd"], 20.0)
+        post_by_chain = {
+            row["chain_id"]: row for row in post_transform["per_chain"]
+        }
+        self.assertLess(post_by_chain["A"]["rmsd"], 1e-5)
+        self.assertGreater(post_by_chain["B"]["rmsd"], 30.0)
+        self.assertLess(post_by_chain["C"]["rmsd"], 1e-5)
 
     def test_exact_complex_rmsd_is_symmetric_to_numerical_tolerance(self) -> None:
         reference = self.translated_polymer(80)
