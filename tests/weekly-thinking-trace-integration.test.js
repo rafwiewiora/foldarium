@@ -1,0 +1,47 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const appUrl = new URL('../app.js', import.meta.url);
+const htmlUrl = new URL('../index.html', import.meta.url);
+
+test('weekly thinking trace covers periodic, navigation, vote, visibility, and completion boundaries', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  const html = await readFile(htmlUrl, 'utf8');
+
+  assert.match(html, /import \{ createWeeklyTraceStream \} from '\.\/weekly-trace-stream\.js'/);
+  assert.match(app, /onEntry: entry => weeklyTraceStream\?\.recordEntry\?\.\(entry\)/);
+  assert.match(app, /weeklyTraceStream\?\.startVisit\?\.\(\{ itemId: item\.id, questionIndex: i \}\)/);
+  assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\('navigation'\)/);
+  assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\(idx \+ 1 < ITEMS\.length \? 'vote' : 'completion'\)/);
+  assert.match(app, /weeklyTraceStream\?\.flush\?\.\('visibility'\)/);
+  assert.match(app, /selected_choice_ids: selectedChoiceIds/);
+  assert.match(app, /rejected_choice_ids:/);
+});
+
+test('weekly vote feedback bypasses the Molstar idle gate while classic reveal keeps it', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  const reveal = app.slice(app.indexOf('async function reveal()'), app.indexOf('async function finalizeReveal()'));
+
+  assert.match(reveal, /verdict\.textContent = 'Recording…';\s*await finalizeReveal\(\);/);
+  assert.match(reveal, /else \{\s*await revealAfterIdle\(\);/);
+  assert.match(reveal, /viewerTransitionBusy/);
+});
+
+test('name form exposes an immediate loading Start state and overlaps persistence initialization', async () => {
+  const html = await readFile(htmlUrl, 'utf8');
+  const persistenceStart = html.indexOf('void initPersistence();');
+  const molstarLoad = html.indexOf("await loadScript('https://cdn.jsdelivr.net/npm/molstar");
+
+  assert.match(html, /start\.textContent = 'Loading quiz…'/);
+  assert.match(html, /name-status'\)\.textContent = 'Preparing quiz…'/);
+  assert.ok(persistenceStart > 0 && persistenceStart < molstarLoad);
+});
+
+test('the next question immutable structure assets are prefetched with bounded concurrency', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(app, /async function prefetchQuestionAssets\(questionIndex\)/);
+  assert.match(app, /Array\.from\(\{ length: Math\.min\(4, urls\.length\) \}, worker\)/);
+  assert.match(app, /void prefetchQuestionAssets\(i \+ 1\)/);
+  assert.match(app, /fetch\(url, \{ cache: 'force-cache' \}\)/);
+});

@@ -145,6 +145,21 @@ test('returns ordered weekly vote attempts and bounded suggestion records from s
   assert.match(fetchImpl.url, /limit=100/);
 });
 
+test('returns append-only weekly thinking batches in acknowledged order', async () => {
+  const fetchImpl = recordingFetch([]);
+  const response = await invoke(handler({ fetchImpl }), {
+    password: 'correct horse',
+    action: 'weekly-trace-batches',
+    session_id: '00000000-0000-4000-8000-000000000001',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.match(fetchImpl.url, /replay_weekly_trace_batches_safe/);
+  assert.match(fetchImpl.url, /order=submitted_at\.asc,trace_batch_id\.asc/);
+  assert.match(fetchImpl.url, /limit=1000/);
+  assert.doesNotMatch(fetchImpl.url, /user_id|display_name,/);
+});
+
 test('Preview replay service never falls back to production credentials', async () => {
   const fetchImpl = failIfCalled();
   const response = await invoke(handler({

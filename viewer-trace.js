@@ -183,6 +183,7 @@ function subscribe(observable, callback) {
 
 export function createViewerTraceRecorder({
   plugin,
+  onEntry = () => {},
   now = () => performance.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -253,6 +254,9 @@ export function createViewerTraceRecorder({
       return false;
     }
     compactRecordedEntries();
+    try { onEntry(candidate); } catch (error) {
+      console.warn('Viewer trace stream entry skipped:', error.message);
+    }
     if (snapshots.length === entryLimit) {
       truncated = true;
       stopCaptureWork();
@@ -266,8 +270,12 @@ export function createViewerTraceRecorder({
       appTrace.shift();
       truncated = true;
     }
-    appTrace.push({ t_ms: elapsed(), seq: sequence++, ...entry });
+    const candidate = { t_ms: elapsed(), seq: sequence++, ...entry };
+    appTrace.push(candidate);
     compactRecordedEntries();
+    try { onEntry(candidate); } catch (error) {
+      console.warn('Viewer trace stream entry skipped:', error.message);
+    }
     return true;
   };
 

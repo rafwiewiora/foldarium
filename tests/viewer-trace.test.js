@@ -180,6 +180,24 @@ test('captures an initial data-tree snapshot and a settled camera endpoint', () 
   assert.equal(trace.snapshots[1].t_ms, 400);
 });
 
+test('streams each accepted state, camera, and semantic entry once', () => {
+  const plugin = fakePlugin();
+  const streamed = [];
+  const recorder = createViewerTraceRecorder({
+    plugin,
+    onEntry: entry => streamed.push(structuredClone(entry)),
+  });
+  recorder.start({ appState: { item_id: 'item-1' } });
+  recorder.captureCamera();
+  recorder.recordAppEvent('choice_rejected', { rejected_choice_ids: ['choice-2'] });
+  recorder.stop();
+
+  assert.deepEqual(streamed.map(entry => entry.kind), ['state', 'app', 'camera', 'app']);
+  assert.deepEqual(streamed.map(entry => entry.seq), [0, 1, 2, 3]);
+  assert.equal(streamed[1].action, 'question_start');
+  assert.equal(streamed[3].action, 'choice_rejected');
+});
+
 test('captureState records rebuilt scenes and stop prevents later captures', () => {
   const clock = fakeClock();
   const plugin = fakePlugin();

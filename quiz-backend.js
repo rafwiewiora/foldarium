@@ -76,6 +76,9 @@ const disabledBackend = {
   submitWeeklyVoteAttempt: async () => {
     throw new Error('Weekly quiz replay persistence is unavailable.');
   },
+  submitWeeklyTraceBatch: async () => {
+    throw new Error('Weekly thinking-trace persistence is unavailable.');
+  },
   submitUserSuggestion: async () => {
     throw new Error('Suggestion persistence is unavailable.');
   },
@@ -102,6 +105,7 @@ function readOnlyBackend(readBackend) {
     getWeeklyVoteTotals: (...args) => readBackend.getWeeklyVoteTotals(...args),
     submitWeeklyVote: async () => unavailable(),
     submitWeeklyVoteAttempt: async () => unavailable(),
+    submitWeeklyTraceBatch: async () => unavailable(),
     submitUserSuggestion: async () => unavailable(),
   };
 }
@@ -174,6 +178,9 @@ export function createDeferredBackend({
     },
     async submitWeeklyVoteAttempt(...args) {
       return (await requireTarget()).submitWeeklyVoteAttempt(...args);
+    },
+    async submitWeeklyTraceBatch(...args) {
+      return (await requireTarget()).submitWeeklyTraceBatch(...args);
     },
     async submitUserSuggestion(...args) {
       return (await requireTarget()).submitUserSuggestion(...args);
@@ -518,6 +525,51 @@ export function createQuizBackend({
         p_viewer_trace: normalizedTrace.value,
         p_app_state: submittedState,
         p_active_pane_id: submittedState?.active_pane_id || null,
+      }, true);
+    },
+    async submitWeeklyTraceBatch({
+      traceBatchId, sessionId, roundId, itemId, questionIndex, visitId,
+      firstSequence, lastSequence, reason, trace, appState = null,
+    }) {
+      const reasons = new Set([
+        'interval', 'byte_budget', 'navigation', 'vote', 'visibility', 'completion',
+      ]);
+      if (!traceBatchId || !sessionId || !roundId || !itemId || !visitId
+        || !Number.isInteger(questionIndex) || questionIndex < 0
+        || !Number.isInteger(firstSequence) || firstSequence < 0
+        || !Number.isInteger(lastSequence) || lastSequence < firstSequence
+        || !reasons.has(reason)) {
+        throw new Error('Weekly trace-batch identity is invalid.');
+      }
+      const normalizedTrace = normalizeJsonObject(trace, 'Weekly trace batch');
+      if (normalizedTrace.version !== 1 || !Array.isArray(normalizedTrace.entries)
+        || !normalizedTrace.entries.length || normalizedTrace.entries.length > 500) {
+        throw new Error('Weekly trace batch is invalid.');
+      }
+      const sequences = normalizedTrace.entries.map(entry => entry?.seq);
+      if (normalizedTrace.visit_id !== visitId
+        || sequences.some(sequence => !Number.isInteger(sequence) || sequence < 0)
+        || sequences.some((sequence, index) => index > 0 && sequence <= sequences[index - 1])
+        || sequences[0] !== firstSequence || sequences.at(-1) !== lastSequence) {
+        throw new Error('Weekly trace batch sequence binding is invalid.');
+      }
+      if (new TextEncoder().encode(JSON.stringify(normalizedTrace)).byteLength > 480 * 1024) {
+        throw new Error('Weekly trace batch exceeds its 491520-byte limit.');
+      }
+      const normalizedState = appState == null
+        ? null : normalizeJsonObject(appState, 'Weekly trace app state', 64 * 1024);
+      return leaderboardRpc('append_weekly_quiz_trace_batch', {
+        p_trace_batch_id: traceBatchId,
+        p_session_id: sessionId,
+        p_round_id: roundId,
+        p_item_id: itemId,
+        p_question_index: questionIndex,
+        p_visit_id: visitId,
+        p_first_sequence: firstSequence,
+        p_last_sequence: lastSequence,
+        p_flush_reason: reason,
+        p_trace: normalizedTrace,
+        p_app_state: normalizedState,
       }, true);
     },
     async submitUserSuggestion({

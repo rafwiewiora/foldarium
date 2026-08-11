@@ -431,6 +431,72 @@ test('rejects malformed named research events before any RPC', async () => {
   assert.deepEqual(rpcs, []);
 });
 
+test('submits one bounded idempotent weekly thinking-trace batch', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+  const trace = {
+    version: 1,
+    visit_id: '00000000-0000-4000-8000-000000000003',
+    entries: [
+      { seq: 0, t_ms: 0, kind: 'app', action: 'question_start' },
+      { seq: 1, t_ms: 250, kind: 'app', action: 'choice_rejected' },
+    ],
+  };
+  const appState = { item_id: 'item-3', rejected_choice_ids: ['choice-2'] };
+  await backend.submitWeeklyTraceBatch({
+    traceBatchId: '00000000-0000-4000-8000-000000000001',
+    sessionId: '00000000-0000-4000-8000-000000000002',
+    roundId: 'weekly-1',
+    itemId: 'item-3',
+    questionIndex: 3,
+    visitId: '00000000-0000-4000-8000-000000000003',
+    firstSequence: 0,
+    lastSequence: 1,
+    reason: 'navigation',
+    trace,
+    appState,
+  });
+
+  assert.deepEqual(rpcs, [{
+    name: 'append_weekly_quiz_trace_batch',
+    args: {
+      p_trace_batch_id: '00000000-0000-4000-8000-000000000001',
+      p_session_id: '00000000-0000-4000-8000-000000000002',
+      p_round_id: 'weekly-1',
+      p_item_id: 'item-3',
+      p_question_index: 3,
+      p_visit_id: '00000000-0000-4000-8000-000000000003',
+      p_first_sequence: 0,
+      p_last_sequence: 1,
+      p_flush_reason: 'navigation',
+      p_trace: trace,
+      p_app_state: appState,
+    },
+  }]);
+});
+
+test('rejects a trace batch whose visit or sequence bounds do not match its entries', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+  await assert.rejects(() => backend.submitWeeklyTraceBatch({
+    traceBatchId: '00000000-0000-4000-8000-000000000011',
+    sessionId: '00000000-0000-4000-8000-000000000012',
+    roundId: 'weekly-1',
+    itemId: 'item-3',
+    questionIndex: 3,
+    visitId: '00000000-0000-4000-8000-000000000013',
+    firstSequence: 1,
+    lastSequence: 2,
+    reason: 'navigation',
+    trace: {
+      version: 1,
+      visit_id: '00000000-0000-4000-8000-000000000099',
+      entries: [{ seq: 1 }, { seq: 2 }],
+    },
+  }), /sequence binding/);
+  assert.deepEqual(rpcs, []);
+});
+
 test('weekly vote-attempt callers can reuse one id across a network retry', async () => {
   const { client, rpcs } = fakeSupabase();
   const backend = createQuizBackend({
@@ -740,7 +806,8 @@ test('quiz application loading does not await persistence startup', async () => 
   assert.match(html, /window\.foldariumBackend = createDeferredBackend\(\);/);
   assert.match(html, /window\.foldariumBackend\.attach\(initQuizBackend/);
   assert.match(html, /window\.foldariumBackend\.fail\(e\);/);
-  assert.match(html, /void initPersistence\(\);\s*await loadScript\('app\.js\?v=\d+'\);/);
+  assert.ok(html.indexOf('void initPersistence();') < html.indexOf("await loadScript('app.js?v="));
+  assert.doesNotMatch(html, /await initPersistence\(\)/);
   assert.doesNotMatch(html, /await initQuizBackend/);
 });
 

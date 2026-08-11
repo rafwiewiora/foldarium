@@ -63,6 +63,15 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
           + '&viewer_trace=not.is.null&order=question_index.asc,submitted_at.asc',
         ));
       }
+      if (body.action === 'weekly-trace-batches' && validSessionId(body.session_id)) {
+        const id = encodeURIComponent(body.session_id);
+        return send(response, 200, await fetchRows(
+          '/rest/v1/replay_weekly_trace_batches_safe?select=trace_batch_id,session_id,'
+          + 'round_id,participant_hash,display_name_hash,item_id,question_index,visit_id,'
+          + 'first_sequence,last_sequence,flush_reason,trace,app_state,submitted_at'
+          + `&session_id=eq.${id}&order=submitted_at.asc,trace_batch_id.asc&limit=1000`,
+        ));
+      }
       if (body.action === 'suggestions') {
         return send(response, 200, await fetchRows(
           '/rest/v1/replay_user_suggestions_safe?select=suggestion_id,participant_hash,'

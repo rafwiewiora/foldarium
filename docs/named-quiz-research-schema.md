@@ -2,6 +2,8 @@
 
 Migration `20260808010500_add_named_quiz_research_events.sql` adds the database
 contract for named quiz sessions, contextual feedback, and replayable weekly votes.
+Migration `20260811192000_add_weekly_thinking_trace_batches.sql` extends that
+contract with continuous, append-only weekly interaction batches.
 It is intentionally not a production runbook: applying it changes the production
 schema and must go through the normal migration review and backup process.
 
@@ -19,6 +21,11 @@ count as authenticated). The browser does not calculate or submit identity hashe
   p_app_state, p_active_pane_id)` appends an ordered replay event and updates the
   existing latest-vote projection in the same transaction.
 - `complete_named_weekly_quiz_session(p_session_id)` marks a weekly session done.
+- `append_weekly_quiz_trace_batch(p_trace_batch_id, p_session_id, p_round_id,
+  p_item_id, p_question_index, p_visit_id, p_first_sequence, p_last_sequence,
+  p_flush_reason, p_trace, p_app_state)` appends one idempotent segment of a
+  weekly visit, including visits that end without a vote. Batches are accepted
+  after navigation, voting, tab hiding, completion, or a five-second interval.
 - `submit_user_suggestion(p_suggestion_id, p_suggestion_text, p_context,
   p_quiz_session_id, p_weekly_session_id, p_item_id, p_page_path,
   p_app_state, p_viewer_snapshot, p_viewer_trace_tail)` stores feedback for exactly
@@ -48,6 +55,7 @@ The service-side replay API should query only:
 - `replay_weekly_sessions_safe`
 - `replay_quiz_answers_safe`
 - `replay_weekly_vote_attempts_safe`
+- `replay_weekly_trace_batches_safe`
 - `replay_user_suggestions_safe`
 
 Suggestions are free text and display names are personal data. Before production,
@@ -58,6 +66,15 @@ confirm who can use the replay service credential.
 
 JSON payloads have database-enforced serialized size ceilings: viewer traces 512
 KiB, app traces 256 KiB, app state 64 KiB, and suggestion snapshots/tails 128 KiB.
+Continuous weekly batches are limited to 480 KiB and 500 ordered events each.
+The browser first writes each batch to IndexedDB, then deletes it only after the
+server acknowledges the same idempotency key and payload. This preserves
+unsubmitted visits and permits retry after a refresh or transient network loss.
+Plaintext player names are stripped from streamed trace entries and app state;
+the replay-safe view exposes only the existing server-derived participant hashes.
+The password-protected replay API exposes these rows through the
+`weekly-trace-batches` action for one validated session UUID; it does not expose
+the underlying table or raw Auth user ID.
 The RPCs also cap named sessions, weekly vote events, and suggestions per user in
 rolling time windows. New tables have RLS enabled with no browser table policies;
 authenticated clients receive RPC execution only.
@@ -72,3 +89,5 @@ authenticated JWT and a service-role key. Verify there that:
 4. closed-round, cross-user, oversized, and rate-limit requests fail;
 5. replay-safe views return traces and suggestions without `user_id` or plaintext
    `display_name` fields.
+6. interval, navigation, and vote batches remain ordered and idempotent across a
+   simulated offline retry, including a visit with no submitted vote.

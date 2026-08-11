@@ -94,6 +94,7 @@ let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
 let participantDisplayName = '';
 let viewerTraceRecorder = null;
+let weeklyTraceStream = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
 let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
@@ -133,6 +134,9 @@ const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDD
 function currentReplayableAppState() {
   const selectionKind = !cur?.selected ? null
     : (cur.selected.none ? 'none' : (cur.selectionExact ? 'exact' : 'cluster'));
+  const selectedChoiceIds = cur?.selected && !cur.selected.none
+    ? reviewChoiceIds(cur.selected).slice(0, 20) : [];
+  const shownChoice = cur && displayMode === 'one' ? visibleChoices()[shownOne] : null;
   return {
     schema_version: 1,
     source: quizSource,
@@ -152,6 +156,9 @@ function currentReplayableAppState() {
     active_pane_id: activePaneId,
     selected_pane_id: selectedPaneId,
     selection_kind: selectionKind,
+    selected_choice_id: selectedChoiceIds[0] || null,
+    selected_choice_ids: selectedChoiceIds,
+    shown_choice_id: shownChoice?._weeklyChoiceId || null,
     context_choice_id: cur?.contextChoice?._weeklyChoiceId || null,
     rejected_choice_ids: cur ? [...(cur.rejectedChoiceIds || [])].slice(0, 50) : [],
     vote_comment_enabled: quizSource === 'weekly' ? weeklyCommentPromptEnabled : null,
@@ -206,6 +213,26 @@ function recordAppEvent(action) {
   catch (error) { console.warn('App replay event omitted:', error.message); }
 }
 
+function startWeeklyThinkingTrace() {
+  if (quizSource !== 'weekly' || !remoteSessionId
+      || typeof window.createWeeklyTraceStream !== 'function') return;
+  try {
+    void weeklyTraceStream?.dispose?.();
+    const backend = researchBackend();
+    weeklyTraceStream = window.createWeeklyTraceStream({
+      submitBatch: payload => backend.submitWeeklyTraceBatch(payload),
+      getAppState: currentReplayableAppState,
+    });
+    weeklyTraceStream.startSession({
+      sessionId: remoteSessionId,
+      roundId: WEEKLY_ROUND.round_id,
+    });
+  } catch (error) {
+    weeklyTraceStream = null;
+    console.warn('Continuous thinking trace disabled:', error.message);
+  }
+}
+
 function activatePane(paneId, reason = 'interaction') {
   if (!paneId || paneId === activePaneId) return;
   activePaneId = paneId;
@@ -243,6 +270,32 @@ async function loadStruct(url, format, targetPlugin = plugin) {
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
   const r = await fetch(structureRequestUrl(url));
   return r.ok ? await r.text() : '';
+}
+const prefetchedStructureUrls = new Set();
+async function prefetchQuestionAssets(questionIndex) {
+  const item = ITEMS[questionIndex];
+  if (!item) return;
+  const urls = [...new Set([
+    item.protein_file, item.pocket_file,
+    ...item.choices.flatMap(choice => [
+      choice.pose_file, choice.afprotein_file, choice.afpocket_file,
+    ]),
+  ].filter(Boolean).map(structureRequestUrl))]
+    .filter(url => !prefetchedStructureUrls.has(url));
+  urls.forEach(url => prefetchedStructureUrls.add(url));
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < urls.length) {
+      const url = urls[cursor++];
+      try {
+        const response = await fetch(url, { cache: 'force-cache' });
+        if (response.ok) await response.arrayBuffer();
+      } catch {
+        prefetchedStructureUrls.delete(url);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, urls.length) }, worker));
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
 const atomRecords = t => t.split('\n').filter(l => /^(ATOM|HETATM|TER)/.test(l)).join('\n');
@@ -1291,6 +1344,7 @@ async function loadQuestion(i) {
   await viewerRebuild.enqueue(
     async () => {
       viewerTraceRecorder?.stop();
+      void weeklyTraceStream?.endVisit?.('navigation');
       // A question owns its framing. Tear down the previous question's visible
       // camera publishers before rebuilding, and do not pin their snapshot
       // through the new canonical/Grid scene construction.
@@ -1351,10 +1405,12 @@ async function loadQuestion(i) {
         cameraChanged: plugin.canvas3d?.camera?.changed,
         requestReset: requestQuestionCameraReset,
       });
+      weeklyTraceStream?.startVisit?.({ itemId: item.id, questionIndex: i });
       viewerTraceRecorder?.start({ appState: currentReplayableAppState() });
       recordAppEvent('question_loaded');
       renderUI();
       requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
+      void prefetchQuestionAssets(i + 1);
     },
   );
 }
@@ -1501,6 +1557,8 @@ function showIntro() {
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true;
   $('#answer-details').hidden = true; $('#verdict').style.display = 'none';
   $('#progress').textContent = 'ready';
+  $('#start').textContent = 'Start →';
+  if ($('#name-status').textContent === 'Preparing quiz…') $('#name-status').textContent = '';
   if (quizSource === 'weekly') {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
@@ -1590,6 +1648,7 @@ function beginQuiz() {
   // Read-only Previews should still expose the dialog for visual/interaction
   // testing; only the database-backed Send action remains unavailable.
   $('#suggestion-open').disabled = !(remoteSessionId || isReadOnlyPreview());
+  startWeeklyThinkingTrace();
   loadQuestion(0);
 }
 
@@ -1866,7 +1925,7 @@ async function submitVoteComment(event) {
 }
 
 async function reveal() {
-  if (cur.selected == null || cur.revealed || revealRequested) return;
+  if (cur.selected == null || cur.revealed || revealRequested || viewerTransitionBusy) return;
   if (shouldPromptForVoteComment()) {
     openVoteCommentDialog();
     return;
@@ -1875,7 +1934,14 @@ async function reveal() {
   revealRequested = true;
   $('#lock').disabled = true;
   try {
-    await revealAfterIdle();
+    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
+      const verdict = $('#verdict');
+      verdict.style.display = '';
+      verdict.textContent = 'Recording…';
+      await finalizeReveal();
+    } else {
+      await revealAfterIdle();
+    }
   } finally {
     revealRequested = false;
     if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
@@ -1968,7 +2034,10 @@ async function finalizeWeeklyVote() {
     verdict.textContent = `Vote was not recorded. ${error.message}`;
     return;
   }
+  recordAppEvent('vote_recorded');
+  if (idx + 1 >= ITEMS.length) recordAppEvent('quiz_completed');
   viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
+  void weeklyTraceStream?.endVisit?.(idx + 1 < ITEMS.length ? 'vote' : 'completion');
   WEEKLY_VOTES.set(cur.item.id, {
     item_id: cur.item.id,
     choice_id: choiceId,
@@ -2272,7 +2341,10 @@ async function init() {
   });
   if (!DEV && typeof window.createViewerTraceRecorder === 'function') {
     try {
-      viewerTraceRecorder = window.createViewerTraceRecorder({ plugin });
+      viewerTraceRecorder = window.createViewerTraceRecorder({
+        plugin,
+        onEntry: entry => weeklyTraceStream?.recordEntry?.(entry),
+      });
     } catch (error) {
       console.warn('Viewer recording disabled:', error.message);
     }
@@ -2533,6 +2605,15 @@ async function init() {
   $('#participant-name').addEventListener('input', syncStartGate);
   $('#participant-name').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    recordAppEvent('page_hidden');
+    void weeklyTraceStream?.flush?.('visibility');
+  });
+  window.addEventListener('pagehide', () => {
+    recordAppEvent('page_hidden');
+    void weeklyTraceStream?.flush?.('visibility');
   });
   $('#suggestion-open').onclick = openSuggestionDialog;
   $('#suggestion-form').addEventListener('submit', submitSuggestion);

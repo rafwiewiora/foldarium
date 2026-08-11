@@ -109,3 +109,14 @@ Keep the service credential and generated benchmark assets uncommitted.
 4. Open `/replay.html`, enter the password, select a recent session, then select and play one traced answer.
 
 Replay access deliberately uses one shared password. It has no individual replay accounts, per-user authorization, audit trail, or built-in rate limiting; anyone with the shared password can read every replay exposed by the endpoint. Use it only for a small trusted audience and rotate the password if it is disclosed.
+
+### Continuous weekly thinking traces
+
+Apply `supabase/migrations/20260811192000_add_weekly_thinking_trace_batches.sql`
+after the named-research migration to retain weekly interactions independently of
+vote submission. The browser saves bounded append-only batches locally before
+uploading them every five seconds and at navigation, vote, visibility, and
+completion boundaries. Failed uploads remain in IndexedDB and reuse the same
+idempotency key and payload after reconnect or refresh. Server-side analysis must
+read `replay_weekly_trace_batches_safe`; the browser has RPC-only append access and
+cannot read or alter stored batches.
