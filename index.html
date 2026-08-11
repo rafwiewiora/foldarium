@@ -60,8 +60,9 @@
     border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
   .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
   .grid-card.inspecting{border-color:#6c7b8a;box-shadow:0 0 0 2px #6c7b8a2c}
-  .grid-card.rejected{opacity:.32;filter:grayscale(.8)}
-  .grid-card.rejected:hover,.grid-card.rejected:focus-within{opacity:.62}
+  .grid-card.rejected,#app.rejected{opacity:.32;filter:grayscale(.8)}
+  .grid-card.rejected:hover,.grid-card.rejected:focus-within,
+  #app.rejected:hover,#app.rejected:focus-within{opacity:.62}
   .grid-card.correct{border-color:var(--good)}
   .grid-card.wrong{border-color:var(--bad)}
   .grid-card.failed{border-color:var(--bad);background:#fff4f2}

@@ -78,6 +78,8 @@ test('One at a time exposes Select and Reject review controls without adding the
   assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly' && !cur\.revealed/);
   assert.match(app, /if \(!cur \|\| displayMode !== 'one'\) return null/);
   assert.match(app, /Select one pose; reject any you rule out/);
+  assert.match(html, /\.grid-card\.rejected,#app\.rejected\{opacity:\.32;filter:grayscale\(\.8\)\}/);
+  assert.match(app, /\$\('#app'\)\?\.classList\.toggle\('rejected', rejected\)/);
 });
 
 test('question context is arranged at the top of the viewer', async () => {

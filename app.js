@@ -347,6 +347,11 @@ function syncOneReviewState() {
   if (!actions) return;
   const choice = oneReviewChoice();
   const visible = !!choice && cur.item.source === 'weekly' && !cur.revealed;
+  const rejected = visible && choiceRejected(choice);
+  // Match Grid's whole-card rejection treatment in One-at-a-time. Applying
+  // the shared class to the viewer shell mutes every molecular layer together
+  // without changing Mol* state, camera, or the review controls above it.
+  $('#app')?.classList.toggle('rejected', rejected);
   actions.hidden = !visible;
   if (!visible) return;
   const selected = gridChoiceSelected(choice);
@@ -354,7 +359,6 @@ function syncOneReviewState() {
   select.classList.toggle('on', selected);
   select.textContent = selected ? 'Selected ✓' : 'Select';
   select.setAttribute('aria-pressed', String(selected));
-  const rejected = choiceRejected(choice);
   const reject = $('#one-reject');
   reject.classList.toggle('on', rejected);
   reject.textContent = rejected ? 'Undo reject' : 'Reject';

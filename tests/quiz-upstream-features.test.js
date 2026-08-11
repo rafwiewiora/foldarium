@@ -526,6 +526,55 @@ test('Weekly rejected poses stay visible but muted in Show all and One at a time
   assert.match(app, /const poseColor = layer\.rejected \? REJECTED_POSE/);
 });
 
+test('One-at-a-time rejection mutes and restores the whole molecular viewer', async () => {
+  const app = await readApp();
+  const choice = { pose_file: 'pose.pdb' };
+  const classes = new Set();
+  const viewer = {
+    classList: {
+      toggle(name, force) { if (force) classes.add(name); else classes.delete(name); },
+    },
+  };
+  const actions = { hidden: false };
+  const button = () => ({
+    classList: { toggle() {} },
+    textContent: '',
+    setAttribute() {},
+  });
+  const elements = {
+    '#app': viewer,
+    '#one-review-actions': actions,
+    '#one-select': button(),
+    '#one-reject': button(),
+  };
+  let displayedChoice = choice;
+  let rejected = true;
+  const syncOneReviewState = evaluateDeclaration(app, 'function syncOneReviewState()', {
+    $: selector => elements[selector],
+    cur: { item: { source: 'weekly' }, revealed: false },
+    oneReviewChoice: () => displayedChoice,
+    choiceRejected: () => rejected,
+    gridChoiceSelected: () => false,
+  });
+
+  syncOneReviewState();
+  assert.equal(classes.has('rejected'), true,
+    'rejecting must mute protein, pocket, ligand, surfaces, and H-bonds through the viewer shell');
+  assert.equal(elements['#one-reject'].textContent, 'Undo reject');
+
+  rejected = false;
+  syncOneReviewState();
+  assert.equal(classes.has('rejected'), false, 'Undo reject must restore the molecular scene');
+  assert.equal(elements['#one-reject'].textContent, 'Reject');
+
+  rejected = true;
+  displayedChoice = null;
+  syncOneReviewState();
+  assert.equal(classes.has('rejected'), false,
+    'leaving One-at-a-time must not leak rejection styling to another layout');
+  assert.equal(actions.hidden, true);
+});
+
 test('Weekly cluster acceptance applies to every raw member while labels stay unambiguous', async () => {
   const app = await readApp();
   const members = [
