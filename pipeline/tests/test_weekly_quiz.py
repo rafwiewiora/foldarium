@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import threading
+import time
 import unittest
 from concurrent.futures import Future
 from pathlib import Path
@@ -132,6 +134,49 @@ class FakeCoordinator:
     def open_weekly_quiz_round(self, **kwargs):
         self.opened = kwargs
         return {"status": "open", "round_id": kwargs["round_id"]}
+
+
+class TrackingPublicCoordinator(FakeCoordinator):
+    def __init__(self, bucket: str) -> None:
+        super().__init__(bucket)
+        self._lock = threading.Lock()
+        self.active_uploads = 0
+        self.maximum_active_uploads = 0
+
+    def store_bytes(self, content: bytes, media_type: str) -> dict:
+        with self._lock:
+            self.active_uploads += 1
+            self.maximum_active_uploads = max(
+                self.maximum_active_uploads, self.active_uploads
+            )
+        try:
+            digest = hashlib.sha256(content).hexdigest()
+            time.sleep(0.01 + (int(digest[0], 16) % 3) * 0.005)
+            return super().store_bytes(content, media_type)
+        finally:
+            with self._lock:
+                self.active_uploads -= 1
+
+
+class FailingPendingExecutor:
+    latest = None
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.futures: list[Future] = []
+        type(self).latest = self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        pass
+
+    def submit(self, function, *args, **kwargs):
+        future = Future()
+        self.futures.append(future)
+        if len(self.futures) == 1:
+            future.set_exception(RuntimeError("public upload failed"))
+        return future
 
 
 class WeeklyQuizPairSelectionTests(unittest.TestCase):
@@ -1235,6 +1280,146 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             [row["target_id"] for row in warning_index["warnings"]],
             [first["target_id"]],
         )
+
+    def test_public_uploads_are_bounded_and_preserve_manifest_order(self) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-parallel-publication",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+            )
+            sequential_private = FakeCoordinator("private")
+            sequential_public = FakeCoordinator("quiz-public")
+            sequential_summary = publish_staged_weekly_quiz(
+                temporary,
+                private_coordinator=sequential_private,
+                public_coordinator=sequential_public,
+                opens_at="2026-08-08T03:00:00Z",
+                closes_at="2026-08-12T00:00:00Z",
+                open_round=True,
+                round_environment="preview",
+                public_upload_workers=1,
+            )
+
+            parallel_private = FakeCoordinator("private")
+            parallel_public = TrackingPublicCoordinator("quiz-public")
+            parallel_summary = publish_staged_weekly_quiz(
+                temporary,
+                private_coordinator=parallel_private,
+                public_coordinator=parallel_public,
+                opens_at="2026-08-08T03:00:00Z",
+                closes_at="2026-08-12T00:00:00Z",
+                open_round=True,
+                round_environment="preview",
+                public_upload_workers=2,
+            )
+
+        self.assertGreater(parallel_public.maximum_active_uploads, 1)
+        self.assertLessEqual(parallel_public.maximum_active_uploads, 2)
+        self.assertEqual(
+            parallel_private.opened["blind_manifest"],
+            sequential_private.opened["blind_manifest"],
+        )
+        self.assertEqual(parallel_private.stored, sequential_private.stored)
+        self.assertEqual(
+            parallel_summary["blind_manifest_sha256"],
+            sequential_summary["blind_manifest_sha256"],
+        )
+
+    def test_public_upload_failure_cancels_pending_and_never_writes_private_state(
+        self,
+    ) -> None:
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-publication-failure",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+            )
+            private = FakeCoordinator("private")
+            public = FakeCoordinator("quiz-public")
+            with patch.object(
+                weekly_quiz_module,
+                "ThreadPoolExecutor",
+                FailingPendingExecutor,
+            ), self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "public Storage upload batch failed",
+            ):
+                publish_staged_weekly_quiz(
+                    temporary,
+                    private_coordinator=private,
+                    public_coordinator=public,
+                    opens_at="2026-08-08T03:00:00Z",
+                    closes_at="2026-08-12T00:00:00Z",
+                    open_round=True,
+                    public_upload_workers=2,
+                )
+
+            executor = FailingPendingExecutor.latest
+            self.assertIsNotNone(executor)
+            self.assertGreater(len(executor.futures), 1)
+            self.assertTrue(all(future.cancelled() for future in executor.futures[1:]))
+            self.assertEqual(private.stored, [])
+            self.assertIsNone(private.opened)
+            self.assertFalse(Path(temporary, "blind-manifest.json").exists())
+            self.assertFalse(Path(temporary, "private-index.json").exists())
+
+    def test_public_upload_result_must_match_exact_content_digest(self) -> None:
+        class InvalidResultCoordinator(FakeCoordinator):
+            def store_bytes(self, content: bytes, media_type: str) -> dict:
+                result = super().store_bytes(content, media_type)
+                result["sha256"] = "0" * 64
+                return result
+
+        openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
+        boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))
+        downloads = {
+            openfold_uri: pdb_fixture(0.0),
+            boltz_uri: pdb_fixture(20.0),
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage_weekly_quiz(
+                [boltz, openfold],
+                temporary,
+                round_id="weekly-publication-invalid-result",
+                campaign_id="weekly-2026-08-08",
+                downloader=lambda uri, **_: downloads[uri],
+            )
+            private = FakeCoordinator("private")
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "does not match its content digest",
+            ):
+                publish_staged_weekly_quiz(
+                    temporary,
+                    private_coordinator=private,
+                    public_coordinator=InvalidResultCoordinator("quiz-public"),
+                    opens_at="2026-08-08T03:00:00Z",
+                    closes_at="2026-08-12T00:00:00Z",
+                    open_round=True,
+                    public_upload_workers=1,
+                )
+            self.assertEqual(private.stored, [])
+            self.assertIsNone(private.opened)
 
     def test_publication_rejects_missing_display_qa_before_any_storage_access(self) -> None:
         openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))

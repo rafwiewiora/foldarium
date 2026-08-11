@@ -69,6 +69,8 @@ WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 DEFAULT_ARTIFACT_DOWNLOAD_WORKERS = 8
 DEFAULT_TARGET_ALIGNMENT_WORKERS = 1
 MAX_TARGET_ALIGNMENT_WORKERS = 8
+DEFAULT_PUBLIC_UPLOAD_WORKERS = 8
+MAX_PUBLIC_UPLOAD_WORKERS = 8
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -2060,6 +2062,80 @@ def clone_weekly_quiz_manifests(
     return blind, private
 
 
+def _validated_public_object(
+    result: Any,
+    *,
+    content: bytes,
+    media_type: str,
+    bucket: str,
+) -> dict[str, Any]:
+    """Bind a Storage result to the exact content-addressed upload request."""
+
+    digest = hashlib.sha256(content).hexdigest()
+    expected = {
+        "object_uri": f"supabase://{bucket}/sha256/{digest[:2]}/{digest}",
+        "sha256": digest,
+        "size_bytes": len(content),
+        "media_type": media_type,
+    }
+    if not isinstance(result, Mapping) or any(
+        result.get(key) != value for key, value in expected.items()
+    ):
+        raise WeeklyQuizAssemblyError(
+            "public Storage upload result does not match its content digest"
+        )
+    return expected
+
+
+def _store_public_objects_concurrently(
+    requests: list[dict[str, Any]],
+    *,
+    public_coordinator: Any,
+    workers: int,
+) -> dict[str, dict[str, Any]]:
+    """Store ordered, unique public objects with bounded concurrency."""
+
+    if not requests:
+        return {}
+
+    def store(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+        content = request["content"]
+        media_type = request["media_type"]
+        result = public_coordinator.store_bytes(content, media_type)
+        return request["key"], _validated_public_object(
+            result,
+            content=content,
+            media_type=media_type,
+            bucket=public_coordinator.storage_bucket,
+        )
+
+    ordered: list[tuple[str, dict[str, Any]] | None] = [None] * len(requests)
+    if workers == 1 or len(requests) == 1:
+        results = [store(request) for request in requests]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(requests)),
+            thread_name_prefix="foldarium-public-upload",
+        ) as executor:
+            futures = {
+                executor.submit(store, request): index
+                for index, request in enumerate(requests)
+            }
+            try:
+                for future in as_completed(futures):
+                    ordered[futures[future]] = future.result()
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        if any(result is None for result in ordered):
+            raise WeeklyQuizAssemblyError(
+                "public Storage upload batch returned incomplete results"
+            )
+        results = [result for result in ordered if result is not None]
+    return {key: stored for key, stored in results}
+
+
 def publish_staged_weekly_quiz(
     stage_directory: str | Path,
     *,
@@ -2070,6 +2146,7 @@ def publish_staged_weekly_quiz(
     open_round: bool = False,
     round_environment: str = "production",
     round_metadata: Mapping[str, Any] | None = None,
+    public_upload_workers: int = DEFAULT_PUBLIC_UPLOAD_WORKERS,
 ) -> dict[str, Any]:
     """Upload sanitized assets; optionally atomically open the blind voting round."""
 
@@ -2094,6 +2171,14 @@ def publish_staged_weekly_quiz(
     if round_environment not in WEEKLY_QUIZ_ENVIRONMENTS:
         raise WeeklyQuizAssemblyError(
             "round_environment must be production, preview, or development"
+        )
+    if (
+        isinstance(public_upload_workers, bool)
+        or not isinstance(public_upload_workers, int)
+        or not 1 <= public_upload_workers <= MAX_PUBLIC_UPLOAD_WORKERS
+    ):
+        raise WeeklyQuizAssemblyError(
+            f"public_upload_workers must be between 1 and {MAX_PUBLIC_UPLOAD_WORKERS}"
         )
 
     # Validate the full stage before the first bucket check or object upload.
@@ -2131,15 +2216,41 @@ def publish_staged_weekly_quiz(
     # endpoint. Verify visibility before the first upload.
     public_coordinator.require_public_bucket()
 
-    manifest_items: list[dict[str, Any]] = []
+    upload_requests: list[dict[str, Any]] = []
+    upload_request_keys: set[str] = set()
+    prepared_items: list[dict[str, Any]] = []
+
+    def prepare_asset(path: Path, field: str) -> str:
+        if not path.is_file():
+            raise WeeklyQuizAssemblyError(f"staged {field} asset is missing")
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise WeeklyQuizAssemblyError(f"staged {field} asset could not be read") from exc
+        if not content:
+            raise WeeklyQuizAssemblyError(f"staged {field} asset is empty")
+        media_type = "chemical/x-pdb"
+        digest = hashlib.sha256(content).hexdigest()
+        key = f"{media_type}:{digest}"
+        if key not in upload_request_keys:
+            upload_request_keys.add(key)
+            upload_requests.append(
+                {
+                    "key": key,
+                    "content": content,
+                    "media_type": media_type,
+                }
+            )
+        return key
+
+    # Resolve and read every declared public asset before the first upload.
+    # This prevents a late missing file from leaving a partially published batch.
     for item in stage_items:
         protein = _safe_path(root, item.get("protein_path"), "item.protein_path")
         pocket = _safe_path(root, item.get("pocket_path"), "item.pocket_path")
-        if not protein.is_file() or not pocket.is_file():
-            raise WeeklyQuizAssemblyError("staged protein/pocket asset is missing")
-        protein_object = public_coordinator.store_bytes(protein.read_bytes(), "chemical/x-pdb")
-        pocket_object = public_coordinator.store_bytes(pocket.read_bytes(), "chemical/x-pdb")
-        choices: list[dict[str, Any]] = []
+        protein_key = prepare_asset(protein, "protein")
+        pocket_key = prepare_asset(pocket, "pocket")
+        prepared_choices: list[dict[str, Any]] = []
         for choice in item.get("choices", []):
             if not isinstance(choice, Mapping):
                 raise WeeklyQuizAssemblyError("stage choices must be objects")
@@ -2150,15 +2261,47 @@ def publish_staged_weekly_quiz(
             choice_pocket = _safe_path(
                 root, choice.get("pocket_path"), "choice.pocket_path"
             )
-            if not pose.is_file() or not choice_protein.is_file() or not choice_pocket.is_file():
-                raise WeeklyQuizAssemblyError("staged choice pose/protein/pocket asset is missing")
-            pose_object = public_coordinator.store_bytes(pose.read_bytes(), "chemical/x-pdb")
-            choice_protein_object = public_coordinator.store_bytes(
-                choice_protein.read_bytes(), "chemical/x-pdb"
+            prepared_choices.append(
+                {
+                    "choice": choice,
+                    "pose_key": prepare_asset(pose, "choice pose"),
+                    "protein_key": prepare_asset(
+                        choice_protein, "choice protein"
+                    ),
+                    "pocket_key": prepare_asset(choice_pocket, "choice pocket"),
+                }
             )
-            choice_pocket_object = public_coordinator.store_bytes(
-                choice_pocket.read_bytes(), "chemical/x-pdb"
-            )
+        prepared_items.append(
+            {
+                "item": item,
+                "protein_key": protein_key,
+                "pocket_key": pocket_key,
+                "choices": prepared_choices,
+            }
+        )
+
+    try:
+        public_objects = _store_public_objects_concurrently(
+            upload_requests,
+            public_coordinator=public_coordinator,
+            workers=public_upload_workers,
+        )
+    except WeeklyQuizAssemblyError:
+        raise
+    except Exception as exc:
+        raise WeeklyQuizAssemblyError("public Storage upload batch failed") from exc
+
+    manifest_items: list[dict[str, Any]] = []
+    for prepared_item in prepared_items:
+        item = prepared_item["item"]
+        protein_object = public_objects[prepared_item["protein_key"]]
+        pocket_object = public_objects[prepared_item["pocket_key"]]
+        choices: list[dict[str, Any]] = []
+        for prepared_choice in prepared_item["choices"]:
+            choice = prepared_choice["choice"]
+            pose_object = public_objects[prepared_choice["pose_key"]]
+            choice_protein_object = public_objects[prepared_choice["protein_key"]]
+            choice_pocket_object = public_objects[prepared_choice["pocket_key"]]
             published_choice = {
                     "run_id": choice.get("run_id"),
                     "sample_id": choice.get("sample_id"),
