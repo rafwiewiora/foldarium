@@ -46,17 +46,17 @@ test('cluster rejection covers every raw choice while unclustered rejection is e
   assert.equal(rejectedState(new Set(['choice-a']), members[0], cluster, true), false);
 });
 
-test('dev2 shell separates inspection, preference, rejection, and optional vote notes', async () => {
+test('tester shell separates inspection, selection, rejection, and optional vote notes', async () => {
   const [app, html] = await Promise.all([read('app.js'), read('index.html')]);
   assert.match(app, /displayMode = WEEKLY_ONLY \? 'grid' : 'all'/);
   assert.match(app, /Math\.min\(3, n\)/);
   assert.match(app, /inspectCanonicalChoice\(choice\)/);
   assert.match(app, /inspectGridChoice\(cell\.entry, cell\.paneId, 'ligand-click'\)/);
-  assert.match(app, /choice_preferred/);
+  assert.match(app, /choice_selected/);
   assert.match(app, /choice_rejected/);
   assert.match(app, /vote_comment: typeof cur\?\.voteCommentText/);
   assert.match(app, /cur\.voteCommentText = text/);
-  assert.match(html, /data-review="prefer"|grid-review-actions/);
+  assert.match(html, /data-review="select"|grid-review-actions/);
   assert.match(html, /id="vote-comment-enabled"[^>]*checked/);
   assert.match(html, /id="vote-comment-dialog"/);
   assert.doesNotMatch(html, /html\[data-quiz-mode="weekly"\] \.vote-comment-option/);

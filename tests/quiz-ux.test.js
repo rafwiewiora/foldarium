@@ -69,6 +69,17 @@ test('viewer controls form an always-visible bottom toolbar', async () => {
   assert.match(html, /<span class="control-label">View<\/span>/);
 });
 
+test('One at a time exposes Select and Reject review controls without adding them to Show all', async () => {
+  const [html, app] = await Promise.all([readHtml(), readApp()]);
+
+  assert.match(html, /id="one-review-actions" hidden/);
+  assert.match(html, /id="one-select"[^>]*>Select<\/button>/);
+  assert.match(html, /id="one-reject"[^>]*>Reject<\/button>/);
+  assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly' && !cur\.revealed/);
+  assert.match(app, /if \(!cur \|\| displayMode !== 'one'\) return null/);
+  assert.match(app, /Select one pose; reject any you rule out/);
+});
+
 test('question context is arranged at the top of the viewer', async () => {
   const html = await readHtml();
   const stage = html.indexOf('<div id="stage">');

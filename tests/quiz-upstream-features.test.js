@@ -419,6 +419,7 @@ test('Weekly clustered layers keep one selectable representative and ghost every
     clustered: true,
     displayMode: 'one',
     clusterForChoice: () => cluster,
+    choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   })([representative]);
 
@@ -439,6 +440,7 @@ test('Weekly Show all renders cluster representatives without ghost members', as
     clustered: true,
     displayMode: 'all',
     clusterForChoice: () => cluster,
+    choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   })([representative]);
 
@@ -461,6 +463,7 @@ test('Weekly Show all fades every non-focused pose after a ligand click', async 
     },
     clustered: true,
     displayMode: 'all',
+    choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   })([first, focused, third]);
 
@@ -469,6 +472,30 @@ test('Weekly Show all fades every non-focused pose after a ligand click', async 
     { choice: focused, ghost: false },
     { choice: third, ghost: true },
   ]);
+});
+
+test('Weekly rejected poses stay visible but muted in Show all and One at a time', async () => {
+  const app = await readApp();
+  const rejected = { pose_file: 'rejected.pdb' };
+  const accepted = { pose_file: 'accepted.pdb' };
+  const sandbox = {
+    cur: { item: { source: 'weekly' }, contextChoice: null, revealed: false, showAnswer: false },
+    clustered: false,
+    displayMode: 'all',
+    choiceRejected: choice => choice === rejected,
+    sameChoice: (left, right) => left.pose_file === right.pose_file,
+  };
+  const weeklyPoseLayers = evaluateDeclaration(app, 'function weeklyPoseLayers(choices)', sandbox);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(weeklyPoseLayers([rejected, accepted]))), [
+    { choice: rejected, rejected: true, ghost: true },
+    { choice: accepted, ghost: false },
+  ]);
+  sandbox.displayMode = 'one';
+  assert.deepEqual(JSON.parse(JSON.stringify(weeklyPoseLayers([rejected]))), [
+    { choice: rejected, rejected: true, ghost: true },
+  ]);
+  assert.match(app, /const poseColor = layer\.rejected \? REJECTED_POSE/);
 });
 
 test('Weekly cluster acceptance applies to every raw member while labels stay unambiguous', async () => {

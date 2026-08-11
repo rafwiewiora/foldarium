@@ -99,6 +99,14 @@
     box-shadow:0 1px 4px #16202b16}
   .grid-review-actions button:hover,.grid-review-actions button.on{border-color:var(--accent);color:var(--accent)}
   .grid-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
+  #one-review-actions{position:absolute;z-index:31;top:96px;left:16px;display:flex;gap:6px;
+    padding:5px;border:1px solid #d5dde5;border-radius:9px;background:#fffffff2;
+    box-shadow:0 3px 12px #16202b1f;backdrop-filter:blur(7px)}
+  #one-review-actions[hidden]{display:none}
+  #one-review-actions button{min-height:34px;padding:7px 12px;border:1px solid #d5dde5;border-radius:7px;
+    background:#fff;color:#425161;font-size:12px;font-weight:650;cursor:pointer}
+  #one-review-actions button:hover,#one-review-actions button.on{border-color:var(--accent);color:var(--accent)}
+  #one-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
   .grid-card .msp-highlight-toast-wrapper{right:6px!important;bottom:48px!important;
     max-width:calc(100% - 12px)!important}
   .grid-card .msp-highlight-info{max-width:220px!important;max-height:27px!important;overflow:hidden!important;
@@ -349,6 +357,10 @@
       <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
     </div>
     <div class="badge" id="badge">crystal reference hidden · poses anonymised</div>
+    <div id="one-review-actions" hidden>
+      <button id="one-select" data-review="select" type="button">Select</button>
+      <button id="one-reject" class="reject" data-review="reject" type="button">Reject</button>
+    </div>
     <div id="gridview"><div id="gridcells"></div></div>
     <div id="view-options" hidden>
       <div class="details-body">
