@@ -802,9 +802,17 @@ function layoutGrid() {
   box.style.setProperty('--grid-card-h', `${Math.floor(best.tileHeight * 10) / 10}px`);
   for (const cell of gridViewers) cell.viewer?.handleResize?.();
 }
+function reserveGridControlClearance() {
+  const controls = $('#view-options'), stage = $('#stage');
+  if (!controls || !stage || controls.hidden) return;
+  const height = Math.ceil(controls.getBoundingClientRect().height);
+  stage.style.setProperty('--grid-controls-clearance', `${height + 28}px`);
+}
 function startGridLayout() {
-  const observer = new ResizeObserver(layoutGrid);
-  observer.observe($('#gridview')); layoutGrid();
+  const observer = new ResizeObserver(() => { reserveGridControlClearance(); layoutGrid(); });
+  observer.observe($('#gridview'));
+  observer.observe($('#view-options'));
+  reserveGridControlClearance(); layoutGrid();
   stopGridLayout = () => observer.disconnect();
 }
 function hideGrid() {

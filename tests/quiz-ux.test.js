@@ -47,9 +47,16 @@ test('view options are anchored to the bottom of the viewer', async () => {
   assert.match(html, /#view-options\{position:absolute;[\s\S]*?bottom:16px/);
 });
 
-test('Grid reserves clearance below its final row for the floating controls', async () => {
+test('Grid ends above the measured floating controls instead of scrolling behind them', async () => {
   const html = await readHtml();
-  assert.match(html, /#gridview\{[^}]*padding:10px 10px 150px/);
+  const app = await readApp();
+
+  assert.match(html, /#stage\{--grid-controls-clearance:96px/);
+  assert.match(html, /#gridview\{[^}]*padding:10px;/);
+  assert.match(html, /#gridview\.on\{[^}]*bottom:var\(--grid-controls-clearance\)/);
+  assert.match(app, /function reserveGridControlClearance\(\)/);
+  assert.match(app, /height \+ 28/);
+  assert.match(app, /observer\.observe\(\$\('#view-options'\)\)/);
 });
 
 test('viewer controls form an always-visible bottom toolbar', async () => {
@@ -72,7 +79,7 @@ test('question context is arranged at the top of the viewer', async () => {
   assert.ok(stage < context && context < ligand && ligand < instruction);
   assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
   assert.match(html, /\.badge\{[\s\S]*?right:64px/);
-  assert.match(html, /#gridview\.on\{display:block;top:84px\}/);
+  assert.match(html, /#gridview\.on\{display:block;top:84px;bottom:var\(--grid-controls-clearance\)\}/);
 });
 
 test('active-pose badge is legible and clears the Molstar reset control', async () => {
