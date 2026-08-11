@@ -38,6 +38,7 @@ APP_NAME = "foldarium-predictions"
 WEEKLY_SCORING_APP_NAME = "foldarium-weekly-scoring"
 WEEKLY_SCORING_FUNCTION_NAME = "score_pose"
 WEEKLY_SCORING_MAX_WORKERS = 8
+WEEKLY_ASSEMBLY_TARGET_WORKERS = 8
 WEEKLY_ASSEMBLY_TIMEOUT_SECONDS = 45 * 60
 PUBLIC_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
@@ -907,6 +908,9 @@ if modal is not None:
                 campaign_id=campaign_id,
                 downloader=private.download_content_object,
                 choice_batch_scorer=choice_batch_scorer,
+                target_workers=WEEKLY_ASSEMBLY_TARGET_WORKERS,
+                artifact_download_workers=WEEKLY_ASSEMBLY_TARGET_WORKERS,
+                artifact_cache_directory="/tmp/foldarium-weekly-input-cache",
             )
             published = publish_staged_weekly_quiz(
                 temporary,

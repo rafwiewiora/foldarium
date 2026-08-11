@@ -4,6 +4,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -573,6 +574,152 @@ class PairwisePoseDistanceTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class WeeklyQuizAssemblyTests(unittest.TestCase):
+    class InlineProcessPool:
+        """Exercise process orchestration deterministically in the unit sandbox."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            try:
+                future.set_result(function(*args, **kwargs))
+            except BaseException as exc:
+                future.set_exception(exc)
+            return future
+
+    @staticmethod
+    def two_target_rows_and_downloads():
+        rows = []
+        downloads = {}
+        for target_id in ("2026-08-08_00000001", "2026-08-08_00000002"):
+            target_payload = target(target_id)
+            for method, shift in (("openfold3", 0.0), ("boltz2", 20.0)):
+                row, uri = run_row(
+                    method,
+                    pdb_fixture(shift),
+                    target_payload=target_payload,
+                )
+                rows.append(row)
+                downloads[uri] = pdb_fixture(shift)
+        return rows, downloads
+
+    def test_parallel_medoid_precomputation_is_digest_identical_and_cache_reusable(
+        self,
+    ) -> None:
+        rows, downloads = self.two_target_rows_and_downloads()
+        download_calls: list[str] = []
+
+        def download(uri, *, expected_sha256):
+            download_calls.append(uri)
+            content = downloads[uri]
+            self.assertEqual(hashlib.sha256(content).hexdigest(), expected_sha256)
+            return content
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary, "cache")
+            sequential = Path(temporary, "sequential")
+            parallel = Path(temporary, "parallel")
+            stage_sequential = stage_weekly_quiz(
+                rows,
+                sequential,
+                round_id="weekly-parallel-determinism",
+                campaign_id="weekly-2026-08-08",
+                downloader=download,
+                artifact_cache_directory=cache,
+                artifact_download_workers=2,
+            )
+            # Both targets share the two exact coordinate payloads.
+            self.assertEqual(len(download_calls), 2)
+            download_calls.clear()
+            with patch.object(
+                weekly_quiz_module,
+                "ProcessPoolExecutor",
+                self.InlineProcessPool,
+            ):
+                stage_parallel = stage_weekly_quiz(
+                    rows,
+                    parallel,
+                    round_id="weekly-parallel-determinism",
+                    campaign_id="weekly-2026-08-08",
+                    downloader=download,
+                    target_workers=2,
+                    artifact_download_workers=2,
+                    artifact_cache_directory=cache,
+                )
+            self.assertEqual(download_calls, [])
+            self.assertEqual(stage_parallel, stage_sequential)
+            self.assertEqual(
+                Path(parallel, "stage.json").read_bytes(),
+                Path(sequential, "stage.json").read_bytes(),
+            )
+
+    def test_tampered_artifact_cache_fails_closed(self) -> None:
+        rows, downloads = self.two_target_rows_and_downloads()
+
+        def download(uri, *, expected_sha256):
+            return downloads[uri]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary, "cache")
+            stage_weekly_quiz(
+                rows,
+                Path(temporary, "first"),
+                round_id="weekly-cache-tamper",
+                campaign_id="weekly-2026-08-08",
+                downloader=download,
+                artifact_cache_directory=cache,
+            )
+            cached_path = next(cache.glob("*/*"))
+            cached_path.write_bytes(b"tampered")
+            second = Path(temporary, "second")
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "failed SHA-256 verification",
+            ):
+                stage_weekly_quiz(
+                    rows,
+                    second,
+                    round_id="weekly-cache-tamper",
+                    campaign_id="weekly-2026-08-08",
+                    downloader=download,
+                    artifact_cache_directory=cache,
+                )
+            self.assertFalse(Path(second, "stage.json").exists())
+
+    def test_parallel_worker_failure_writes_no_publishable_stage(self) -> None:
+        rows, downloads = self.two_target_rows_and_downloads()
+        destination = None
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary, "failed")
+            with patch.object(
+                weekly_quiz_module,
+                "ProcessPoolExecutor",
+                self.InlineProcessPool,
+            ), patch.object(
+                weekly_quiz_module,
+                "_receptor_medoid_job",
+                side_effect=RuntimeError("worker failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "worker failed"):
+                    stage_weekly_quiz(
+                        rows,
+                        destination,
+                        round_id="weekly-worker-failure",
+                        campaign_id="weekly-2026-08-08",
+                        downloader=lambda uri, **_: downloads[uri],
+                        target_workers=2,
+                    )
+            self.assertFalse(Path(destination, "stage.json").exists())
+            self.assertFalse(Path(destination, "raw").exists())
+            self.assertFalse(Path(destination, "assets").exists())
+
     def test_aligns_cross_method_poses_and_publishes_only_sanitized_assets(self) -> None:
         openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
         boltz, boltz_uri = run_row("boltz2", pdb_fixture(20.0))

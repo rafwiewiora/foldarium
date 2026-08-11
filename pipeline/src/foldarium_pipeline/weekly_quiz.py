@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import uuid
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -50,6 +53,9 @@ LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
 PROLIF_COUNT_METRIC = "prolif_hbond_residue_count"
 WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
+DEFAULT_ARTIFACT_DOWNLOAD_WORKERS = 8
+DEFAULT_TARGET_ALIGNMENT_WORKERS = 1
+MAX_TARGET_ALIGNMENT_WORKERS = 8
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -784,6 +790,309 @@ def _normalized_runs(
     return grouped
 
 
+def _artifact_suffix(artifact: Mapping[str, Any]) -> str:
+    media_type = str(artifact.get("media_type") or "chemical/x-mmcif")
+    return ".pdb" if "pdb" in media_type.lower() else ".cif"
+
+
+def _prediction_artifact_records(
+    grouped: Mapping[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Return one deterministic download record per content-addressed artifact."""
+
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for target_id in sorted(grouped):
+        for row in sorted(
+            grouped[target_id],
+            key=lambda value: (
+                0 if value["method"] == "openfold3" else 1,
+                value["run_id"],
+            ),
+        ):
+            for sample in sorted(
+                row["samples"],
+                key=lambda value: (value.get("sample_index", 0), value["sample_id"]),
+            ):
+                artifact = sample.get("predicted_complex")
+                if not isinstance(artifact, Mapping):
+                    raise WeeklyQuizAssemblyError(
+                        "prediction sample lacks predicted_complex metadata"
+                    )
+                digest = artifact.get("sha256")
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise WeeklyQuizAssemblyError(
+                        "prediction artifact has no valid SHA-256"
+                    )
+                suffix = _artifact_suffix(artifact)
+                records.setdefault(
+                    (digest, suffix),
+                    {
+                        "digest": digest,
+                        "suffix": suffix,
+                        "object_uri": artifact.get("object_uri"),
+                    },
+                )
+    return [records[key] for key in sorted(records)]
+
+
+def _materialize_artifact_cache(
+    records: list[dict[str, Any]],
+    cache_directory: Path,
+    *,
+    downloader: Callable[..., bytes],
+    workers: int,
+) -> dict[str, Path]:
+    """Verify or atomically populate a local SHA-256 artifact cache."""
+
+    cache_directory.mkdir(parents=True, exist_ok=True)
+
+    def materialize(record: Mapping[str, Any]) -> tuple[str, Path]:
+        digest = str(record["digest"])
+        path = cache_directory / digest[:2] / f"{digest}{record['suffix']}"
+        if path.is_file():
+            try:
+                cached = path.read_bytes()
+            except OSError as exc:
+                raise WeeklyQuizAssemblyError(
+                    f"could not read cached prediction artifact {digest}"
+                ) from exc
+            if hashlib.sha256(cached).hexdigest() != digest:
+                raise WeeklyQuizAssemblyError(
+                    f"cached prediction artifact {digest} failed SHA-256 verification"
+                )
+            return digest, path
+        content = downloader(record.get("object_uri"), expected_sha256=digest)
+        if not isinstance(content, bytes) or not content:
+            raise WeeklyQuizAssemblyError(
+                "prediction artifact download returned no bytes"
+            )
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise WeeklyQuizAssemblyError(
+                "prediction artifact content does not match SHA-256"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(content)
+            os.replace(temporary, path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return digest, path
+
+    paths: dict[str, Path] = {}
+    if workers == 1 or len(records) <= 1:
+        results = [materialize(record) for record in records]
+    else:
+        ordered: list[tuple[str, Path] | None] = [None] * len(records)
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(records)),
+            thread_name_prefix="foldarium-artifact-download",
+        ) as executor:
+            futures = {
+                executor.submit(materialize, record): index
+                for index, record in enumerate(records)
+            }
+            try:
+                for future in as_completed(futures):
+                    ordered[futures[future]] = future.result()
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        if any(result is None for result in ordered):
+            raise WeeklyQuizAssemblyError("artifact cache population was incomplete")
+        results = [result for result in ordered if result is not None]
+    for digest, path in results:
+        existing = paths.get(digest)
+        if existing is not None and existing.read_bytes() != path.read_bytes():
+            raise WeeklyQuizAssemblyError(
+                f"content-addressed artifact {digest} resolved inconsistently"
+            )
+        paths[digest] = path
+    return paths
+
+
+def _receptor_medoid_job(
+    payload: tuple[
+        str,
+        str,
+        tuple[dict[str, Any], ...],
+        dict[str, str],
+    ],
+) -> tuple[str, dict[str, Any]]:
+    """Process-safe robust receptor-medoid calculation for one target."""
+
+    round_id, target_id, serialized_choices, expected_chain_sequences = payload
+    try:
+        import gemmi
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise WeeklyQuizAssemblyError(
+            "weekly quiz receptor precomputation requires Gemmi"
+        ) from exc
+    choices: list[dict[str, Any]] = []
+    for serialized in serialized_choices:
+        path = Path(serialized["artifact_path"])
+        structure, model = _load_model(path, gemmi)
+        choices.append({**serialized, "structure": structure, "model": model})
+
+    def align_receptors(reference: Any, predicted: Any) -> Mapping[str, Any]:
+        return _weekly_receptor_superposition(
+            reference,
+            predicted,
+            expected_chain_sequences=expected_chain_sequences,
+        )
+
+    _choice, anchor = _select_receptor_medoid(
+        choices,
+        round_id=round_id,
+        target_id=target_id,
+        aligner=align_receptors,
+    )
+    return target_id, anchor
+
+
+def _precompute_receptor_medoids(
+    grouped: Mapping[str, list[dict[str, Any]]],
+    artifact_paths: Mapping[str, Path],
+    *,
+    round_id: str,
+    workers: int,
+) -> dict[str, dict[str, Any]]:
+    """Calculate independent target medoids concurrently and retain input order."""
+
+    jobs: list[
+        tuple[str, str, tuple[dict[str, Any], ...], dict[str, str]]
+    ] = []
+    for target_id, target_runs in sorted(grouped.items()):
+        ordered_runs = sorted(
+            target_runs,
+            key=lambda row: (0 if row["method"] == "openfold3" else 1, row["run_id"]),
+        )
+        target = ordered_runs[0]["task_payload"]["target"]
+        _task_receptor_complex, expected_chain_sequences = _receptor_complex(target)
+        choices: list[dict[str, Any]] = []
+        for row in ordered_runs:
+            for sample in sorted(
+                row["samples"],
+                key=lambda value: (value.get("sample_index", 0), value["sample_id"]),
+            ):
+                artifact = sample["predicted_complex"]
+                digest = artifact["sha256"]
+                path = artifact_paths.get(digest)
+                if path is None:
+                    raise WeeklyQuizAssemblyError(
+                        f"prediction artifact {digest} is absent from the verified cache"
+                    )
+                choices.append(
+                    {
+                        "run_id": row["run_id"],
+                        "sample_id": sample["sample_id"],
+                        "sample_index": sample.get("sample_index"),
+                        "artifact_sha256": digest,
+                        "method": row["method"],
+                        "method_version": row["method_version"],
+                        "artifact_path": str(path),
+                    }
+                )
+        choices.sort(
+            key=lambda choice: choice_order_digest(
+                round_id,
+                target_id,
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            )
+        )
+        jobs.append(
+            (
+                round_id,
+                target_id,
+                tuple(choices),
+                expected_chain_sequences,
+            )
+        )
+    if workers == 1 or len(jobs) <= 1:
+        results = [_receptor_medoid_job(job) for job in jobs]
+    else:
+        ordered: list[tuple[str, dict[str, Any]] | None] = [None] * len(jobs)
+        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as executor:
+            futures = {
+                executor.submit(_receptor_medoid_job, job): index
+                for index, job in enumerate(jobs)
+            }
+            try:
+                for future in as_completed(futures):
+                    ordered[futures[future]] = future.result()
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        if any(result is None for result in ordered):
+            raise WeeklyQuizAssemblyError(
+                "target receptor-medoid precomputation was incomplete"
+            )
+        results = [result for result in ordered if result is not None]
+    return {target_id: anchor for target_id, anchor in results}
+
+
+def _select_precomputed_receptor_medoid(
+    choices: list[dict[str, Any]],
+    *,
+    round_id: str,
+    target_id: str,
+    anchor: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind a process-computed medoid back to the exact in-process choices."""
+
+    digests = [
+        choice_order_digest(
+            round_id,
+            target_id,
+            {
+                "run_id": choice["run_id"],
+                "sample_id": choice["sample_id"],
+                "artifact_sha256": choice["artifact_sha256"],
+            },
+        )
+        for choice in choices
+    ]
+    totals = anchor.get("total_pairwise_receptor_rmsds")
+    if (
+        anchor.get("policy") != RECEPTOR_ANCHOR_POLICY
+        or anchor.get("choice_order") != digests
+        or not isinstance(totals, list)
+        or len(totals) != len(digests)
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            for value in totals
+        )
+    ):
+        raise WeeklyQuizAssemblyError(
+            f"precomputed receptor medoid for {target_id} is not input-bound"
+        )
+    selected_index = min(
+        range(len(choices)), key=lambda index: (float(totals[index]), digests[index])
+    )
+    if (
+        anchor.get("choice_digest") != digests[selected_index]
+        or anchor.get("total_pairwise_receptor_rmsd") != totals[selected_index]
+        or not isinstance(anchor.get("distance_matrix_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", anchor["distance_matrix_sha256"])
+    ):
+        raise WeeklyQuizAssemblyError(
+            f"precomputed receptor medoid for {target_id} changed identity"
+        )
+    return choices[selected_index], deepcopy(dict(anchor))
+
+
 def select_complete_method_pairs(
     runs: Iterable[Mapping[str, Any]],
     required_methods: frozenset[str] = REQUIRED_METHODS,
@@ -845,6 +1154,9 @@ def stage_weekly_quiz(
     choice_batch_scorer: (
         Callable[[tuple[Mapping[str, Any], ...]], Iterable[Mapping[str, Any]]] | None
     ) = None,
+    target_workers: int = DEFAULT_TARGET_ALIGNMENT_WORKERS,
+    artifact_download_workers: int = DEFAULT_ARTIFACT_DOWNLOAD_WORKERS,
+    artifact_cache_directory: str | Path | None = None,
 ) -> dict[str, Any]:
     """Download private complexes and write a common-frame weekly local stage.
 
@@ -861,12 +1173,64 @@ def stage_weekly_quiz(
         raise WeeklyQuizAssemblyError(
             "choice_scorer and choice_batch_scorer are mutually exclusive"
         )
+    if (
+        isinstance(target_workers, bool)
+        or not isinstance(target_workers, int)
+        or not 1 <= target_workers <= MAX_TARGET_ALIGNMENT_WORKERS
+    ):
+        raise WeeklyQuizAssemblyError(
+            f"target_workers must be between 1 and {MAX_TARGET_ALIGNMENT_WORKERS}"
+        )
+    if (
+        isinstance(artifact_download_workers, bool)
+        or not isinstance(artifact_download_workers, int)
+        or artifact_download_workers < 1
+    ):
+        raise WeeklyQuizAssemblyError(
+            "artifact_download_workers must be a positive integer"
+        )
     root = Path(destination).resolve()
     if (root / "stage.json").exists():
         raise WeeklyQuizAssemblyError("stage destination already contains stage.json")
     root.mkdir(parents=True, exist_ok=True)
     gemmi, numpy, Chem = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
+    artifact_paths: dict[str, Path] = {}
+    precomputed_medoids: dict[str, dict[str, Any]] = {}
+    if target_workers > 1 or artifact_cache_directory is not None:
+        cache_directory = (
+            Path(artifact_cache_directory).resolve()
+            if artifact_cache_directory is not None
+            else root.with_name(f".{root.name}.input-cache")
+        )
+        artifact_paths = _materialize_artifact_cache(
+            _prediction_artifact_records(grouped),
+            cache_directory,
+            downloader=downloader,
+            workers=artifact_download_workers,
+        )
+
+        def cached_downloader(_uri: Any, *, expected_sha256: str) -> bytes:
+            path = artifact_paths.get(expected_sha256)
+            if path is None:
+                raise WeeklyQuizAssemblyError(
+                    f"prediction artifact {expected_sha256} is absent from the verified cache"
+                )
+            try:
+                return path.read_bytes()
+            except OSError as exc:
+                raise WeeklyQuizAssemblyError(
+                    f"could not read cached prediction artifact {expected_sha256}"
+                ) from exc
+
+        downloader = cached_downloader
+    if target_workers > 1:
+        precomputed_medoids = _precompute_receptor_medoids(
+            grouped,
+            artifact_paths,
+            round_id=round_id,
+            workers=target_workers,
+        )
     staged_items: list[dict[str, Any]] = []
     alignment_rejections: list[dict[str, Any]] = []
     pending_choice_scores: list[
@@ -906,8 +1270,7 @@ def stage_weekly_quiz(
                     raise WeeklyQuizAssemblyError("prediction artifact download returned no bytes")
                 if hashlib.sha256(content).hexdigest() != digest:
                     raise WeeklyQuizAssemblyError("prediction artifact content does not match SHA-256")
-                media_type = str(artifact.get("media_type") or "chemical/x-mmcif")
-                suffix = ".pdb" if "pdb" in media_type.lower() else ".cif"
+                suffix = _artifact_suffix(artifact)
                 raw_name = hashlib.sha256(
                     f"{row['run_id']}:{sample['sample_id']}".encode("utf-8")
                 ).hexdigest()[:20] + suffix
@@ -950,12 +1313,20 @@ def stage_weekly_quiz(
                 expected_chain_sequences=expected_chain_sequences,
             )
 
-        reference_choice, receptor_anchor = _select_receptor_medoid(
-            raw_choices,
-            round_id=round_id,
-            target_id=target_id,
-            aligner=align_receptors,
-        )
+        if target_id in precomputed_medoids:
+            reference_choice, receptor_anchor = _select_precomputed_receptor_medoid(
+                raw_choices,
+                round_id=round_id,
+                target_id=target_id,
+                anchor=precomputed_medoids[target_id],
+            )
+        else:
+            reference_choice, receptor_anchor = _select_receptor_medoid(
+                raw_choices,
+                round_id=round_id,
+                target_id=target_id,
+                aligner=align_receptors,
+            )
         reference_model = reference_choice["model"]
         receptor_anchor["task_receptor_complex"] = task_receptor_complex
         prepared_choices: list[tuple[dict[str, Any], dict[str, Any], Any]] = []

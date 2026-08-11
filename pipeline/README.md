@@ -138,6 +138,13 @@ capped by chain length). Ligand coordinates identify contact chains but never en
 If any pose fails, the whole target is omitted before CPU scoring; the publisher revalidates every
 passing decision before storage access and stores excluded-target provenance in a private object.
 
+Weekly staging keeps assembly and publication as separate operator steps. The staging command now
+populates a SHA-256-verified local prediction-input cache and precomputes each target's receptor medoid
+in up to eight bounded processes (`--target-workers`, with `--artifact-cache-dir` for reuse). Results
+are rebound to the exact ordered run/sample digests before final single-process asset generation and
+QA. A download or worker failure leaves no publishable `stage.json`; only a fully verified stage can
+be passed to `weekly-quiz-publish`.
+
 ## Weekly timing and safety switches
 
 wwPDB prerelease and CAMEO target selection begin Saturday at 03:00 UTC. CAMEO accepts participant

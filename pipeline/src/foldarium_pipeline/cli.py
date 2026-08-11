@@ -134,6 +134,22 @@ def build_parser() -> argparse.ArgumentParser:
     quiz_stage.add_argument("--campaign", required=True)
     quiz_stage.add_argument("--round-id", required=True)
     quiz_stage.add_argument("--output-dir", required=True)
+    quiz_stage.add_argument(
+        "--target-workers",
+        type=int,
+        default=min(os.cpu_count() or 1, 8),
+        help="bounded processes for independent target receptor-medoid calculations",
+    )
+    quiz_stage.add_argument(
+        "--artifact-download-workers",
+        type=int,
+        default=8,
+        help="bounded threads used to populate the verified local input cache",
+    )
+    quiz_stage.add_argument(
+        "--artifact-cache-dir",
+        help="optional persistent SHA-256 prediction-input cache",
+    )
 
     quiz_publish = commands.add_parser(
         "weekly-quiz-publish",
@@ -265,6 +281,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             round_id=args.round_id,
             campaign_id=args.campaign,
             downloader=coordinator.download_content_object,
+            target_workers=args.target_workers,
+            artifact_download_workers=args.artifact_download_workers,
+            artifact_cache_directory=args.artifact_cache_dir,
         )
         _print(
             {
