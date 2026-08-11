@@ -765,8 +765,8 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 8)
-            self.assertEqual(stage["alignment_rejections"], [])
+            self.assertEqual(stage["schema_version"], 9)
+            self.assertEqual(stage["alignment_warnings"], [])
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
             self.assertEqual(len(scoring_calls), 2)
@@ -843,8 +843,8 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             )
             self.assertIn("stage_sha256", private.opened["metadata"])
             self.assertEqual(summary["choice_count"], 2)
-            self.assertEqual(summary["display_alignment_rejected_target_count"], 0)
-            self.assertEqual(summary["display_alignment_rejected_target_ids"], [])
+            self.assertEqual(summary["display_alignment_warned_target_count"], 0)
+            self.assertEqual(summary["display_alignment_warned_target_ids"], [])
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
             self.assertNotIn("run_id", json.dumps(blind))
@@ -876,12 +876,12 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 )
             )
             private_index = json.loads(private.stored[0][0])
-            rejection_index = json.loads(private.stored[1][0])
+            warning_index = json.loads(private.stored[1][0])
             self.assertEqual(
-                rejection_index,
+                warning_index,
                 {
                     "policy": weekly_quiz_module.DISPLAY_ALIGNMENT_QA_POLICY,
-                    "rejections": [],
+                    "warnings": [],
                     "round_id": "weekly-2026-08-08",
                     "schema_version": 1,
                 },
@@ -968,7 +968,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     round_metadata={"stage_sha256": "operator-value"},
                 )
 
-    def test_rejects_a_whole_target_before_batch_scoring_when_any_pose_fails_display_qa(
+    def test_preserves_a_target_with_a_warning_when_any_pose_has_weak_display_support(
         self,
     ) -> None:
         first = target("2026-08-08_00000001")
@@ -1002,7 +1002,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
         scored_pose_ids: list[str] = []
 
         def score_batch(requests):
-            self.assertEqual(len(requests), 2)
+            self.assertEqual(len(requests), 4)
             scored_pose_ids.extend(request["pose_id"] for request in requests)
             return [
                 {
@@ -1026,7 +1026,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.object(
             weekly_quiz_module,
             "_weekly_display_alignment_qa",
-            side_effect=[failing, failing, passing, passing],
+            side_effect=[failing, failing, passing, passing] * 2,
         ):
             stage = stage_weekly_quiz(
                 rows,
@@ -1036,14 +1036,61 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=lambda uri, **_: downloads[uri],
                 choice_batch_scorer=score_batch,
             )
+            private = FakeCoordinator("private")
+            public = FakeCoordinator("quiz-public")
+            summary = publish_staged_weekly_quiz(
+                temporary,
+                private_coordinator=private,
+                public_coordinator=public,
+                opens_at="2026-08-08T03:00:00Z",
+                closes_at="2026-08-12T00:00:00Z",
+                open_round=True,
+                round_environment="preview",
+            )
+            blind = private.opened["blind_manifest"]
+            warning_index = json.loads(private.stored[1][0])
 
-        self.assertEqual([item["target_id"] for item in stage["items"]], [second["target_id"]])
-        self.assertEqual(len(scored_pose_ids), 2)
         self.assertEqual(
-            [row["target_id"] for row in stage["alignment_rejections"]],
+            [item["target_id"] for item in stage["items"]],
+            [first["target_id"], second["target_id"]],
+        )
+        self.assertEqual(len(scored_pose_ids), 4)
+        self.assertEqual(
+            stage["items"][0]["alignment_warning"],
+            {
+                "code": weekly_quiz_module.DISPLAY_ALIGNMENT_WARNING_CODE,
+                "message": weekly_quiz_module.DISPLAY_ALIGNMENT_WARNING_MESSAGE,
+                "policy": weekly_quiz_module.DISPLAY_ALIGNMENT_QA_POLICY,
+                "failed_choice_count": 2,
+            },
+        )
+        self.assertNotIn("alignment_warning", stage["items"][1])
+        self.assertEqual(
+            [row["target_id"] for row in stage["alignment_warnings"]],
             [first["target_id"]],
         )
-        self.assertEqual(len(stage["alignment_rejections"][0]["failed_choices"]), 2)
+        self.assertEqual(len(stage["alignment_warnings"][0]["failed_choices"]), 2)
+        self.assertEqual(summary["item_count"], 2)
+        self.assertEqual(summary["display_alignment_warned_target_count"], 1)
+        self.assertEqual(
+            summary["display_alignment_warned_target_ids"], [first["target_id"]]
+        )
+        warning_by_item = {
+            item["id"]: item.get("metadata", {}).get("display_alignment")
+            for item in blind["items"]
+        }
+        self.assertEqual(
+            warning_by_item[first["target_id"]],
+            {
+                "code": weekly_quiz_module.DISPLAY_ALIGNMENT_WARNING_CODE,
+                "message": weekly_quiz_module.DISPLAY_ALIGNMENT_WARNING_MESSAGE,
+            },
+        )
+        self.assertIsNone(warning_by_item[second["target_id"]])
+        self.assertEqual(
+            [row["target_id"] for row in warning_index["warnings"]],
+            [first["target_id"]],
+        )
 
     def test_publication_rejects_missing_display_qa_before_any_storage_access(self) -> None:
         openfold, openfold_uri = run_row("openfold3", pdb_fixture(0.0))
@@ -1076,7 +1123,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 weekly_quiz_module.WeeklyQuizAssemblyError,
-                "lacks a passing display alignment QA",
+                "lacks a valid display alignment QA",
             ):
                 publish_staged_weekly_quiz(
                     temporary,

@@ -1353,6 +1353,14 @@ function renderUI() {
       : `${rawPoseCount} predicted poses`)
     : `${cur.clusters.length} distinct pose clusters`;
   $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${poseSummary}</small>`;
+  const alignmentWarning = cur.item.source === 'weekly'
+    ? cur.item.alignment_warning?.message
+    : null;
+  $('#instruction').textContent = alignmentWarning
+    || (cur.item.source === 'weekly'
+      ? 'Inspect freely. Select one pose; reject any you rule out.'
+      : 'Pick the pose that best fits the binding pocket.');
+  $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = displayMode === 'grid'
     ? gridEntries()
@@ -2331,6 +2339,7 @@ async function init() {
         bucket: 'weekly',
         has_correct: choices.some(choice => choice.correct === true),
         easyPlayable: true,
+        alignment_warning: item.metadata?.display_alignment || null,
       };
     }).filter(item => item.choices.length && item.protein_file);
   };

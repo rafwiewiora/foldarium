@@ -57,4 +57,6 @@ test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid 
   assert.match(app, /if \(cur\.item\.source === 'weekly'\) \{[\s\S]*?displayMode !== 'one'[\s\S]*?shown\?\.afprotein_file/);
   assert.match(app, /cluster: choice\.cluster_id \|\| `choice-\$\{index\}`/);
   assert.match(app, /clustering_available: clusteringAvailable/);
+  assert.match(app, /alignment_warning: item\.metadata\?\.display_alignment \|\| null/);
+  assert.match(app, /cur\.item\.alignment_warning\?\.message/);
 });
