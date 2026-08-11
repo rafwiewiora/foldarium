@@ -1,47 +1,7 @@
-begin;
-
-create table public.weekly_quiz_trace_batches (
-  trace_batch_id uuid primary key,
-  session_id uuid not null,
-  round_id text not null,
-  user_id uuid not null,
-  item_id text not null check (char_length(item_id) between 1 and 200),
-  question_index integer not null check (question_index >= 0),
-  visit_id uuid not null,
-  first_sequence integer not null check (first_sequence >= 0),
-  last_sequence integer not null check (last_sequence >= first_sequence),
-  flush_reason text not null check (
-    flush_reason in ('interval', 'byte_budget', 'navigation', 'vote', 'visibility', 'completion')
-  ),
-  trace jsonb not null,
-  app_state jsonb,
-  submitted_at timestamptz not null default clock_timestamp(),
-  created_at timestamptz not null default clock_timestamp(),
-  foreign key (session_id, round_id, user_id)
-    references public.weekly_quiz_sessions(session_id, round_id, user_id)
-    on delete cascade,
-  unique (session_id, visit_id, first_sequence, last_sequence),
-  check ((
-    jsonb_typeof(trace) = 'object'
-    and (trace -> 'version' = '1'::jsonb) is true
-    and (trace ->> 'visit_id' = visit_id::text) is true
-    and jsonb_typeof(trace -> 'entries') = 'array'
-    and jsonb_array_length(trace -> 'entries') between 1 and 500
-    and octet_length(trace::text) <= 491520
-  ) is true),
-  check (
-    app_state is null
-    or (
-      jsonb_typeof(app_state) = 'object'
-      and octet_length(app_state::text) <= 65536
-    ) is true
-  )
-);
-
-create index weekly_quiz_trace_batches_session_time_idx
-  on public.weekly_quiz_trace_batches (session_id, submitted_at, trace_batch_id);
-create index weekly_quiz_trace_batches_user_rate_idx
-  on public.weekly_quiz_trace_batches (user_id, submitted_at desc);
+-- Supabase's browser-authenticated PostgREST path exposes the caller through
+-- auth.uid(). Recreate the just-added RPC with the same contract and privileges,
+-- changing only caller identity resolution for deployed projects that already
+-- recorded migration 20260811192000.
 
 create or replace function public.append_weekly_quiz_trace_batch(
   p_trace_batch_id uuid,
@@ -198,66 +158,6 @@ begin
 end;
 $$;
 
-create view public.replay_weekly_trace_batches_safe
-with (security_invoker = true, security_barrier = true)
-as
-select
-  batch.trace_batch_id,
-  batch.session_id,
-  batch.round_id,
-  session.participant_hash,
-  session.display_name_hash,
-  batch.item_id,
-  batch.question_index,
-  batch.visit_id,
-  batch.first_sequence,
-  batch.last_sequence,
-  batch.flush_reason,
-  batch.trace,
-  batch.app_state,
-  batch.submitted_at
-from public.weekly_quiz_trace_batches as batch
-join public.weekly_quiz_sessions as session
-  on session.session_id = batch.session_id
- and session.round_id = batch.round_id
- and session.user_id = batch.user_id;
-
-alter table public.weekly_quiz_trace_batches enable row level security;
-
-revoke all on table public.weekly_quiz_trace_batches from public;
-revoke all on table public.replay_weekly_trace_batches_safe from public;
-revoke all on function public.append_weekly_quiz_trace_batch(
+comment on function public.append_weekly_quiz_trace_batch(
   uuid, uuid, text, text, integer, uuid, integer, integer, text, jsonb, jsonb
-) from public;
-
-do $$
-begin
-  if exists (select 1 from pg_roles where rolname = 'anon') then
-    revoke all on table public.weekly_quiz_trace_batches from anon;
-    revoke all on table public.replay_weekly_trace_batches_safe from anon;
-    revoke all on function public.append_weekly_quiz_trace_batch(
-      uuid, uuid, text, text, integer, uuid, integer, integer, text, jsonb, jsonb
-    ) from anon;
-  end if;
-  if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    revoke all on table public.weekly_quiz_trace_batches from authenticated;
-    revoke all on table public.replay_weekly_trace_batches_safe from authenticated;
-    grant execute on function public.append_weekly_quiz_trace_batch(
-      uuid, uuid, text, text, integer, uuid, integer, integer, text, jsonb, jsonb
-    ) to authenticated;
-  end if;
-  if exists (select 1 from pg_roles where rolname = 'service_role') then
-    revoke insert, update, delete, truncate on table public.weekly_quiz_trace_batches
-      from service_role;
-    grant select on table public.weekly_quiz_trace_batches to service_role;
-    grant select on table public.replay_weekly_trace_batches_safe to service_role;
-  end if;
-end;
-$$;
-
-comment on table public.weekly_quiz_trace_batches is
-  'Append-only, idempotent interaction batches for complete weekly quiz thinking traces.';
-comment on view public.replay_weekly_trace_batches_safe is
-  'Server-only weekly thinking traces without auth user IDs or plaintext display names.';
-
-commit;
+) is 'Appends one owner-authenticated, idempotent weekly thinking-trace batch.';

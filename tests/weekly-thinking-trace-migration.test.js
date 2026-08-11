@@ -17,7 +17,8 @@ test('weekly thinking-trace migration is append-only, bounded, and owner-authent
   assert.match(sql, /jsonb_array_length\(trace -> 'entries'\) between 1 and 500/);
   assert.match(sql, /trace ->> 'visit_id' = visit_id::text/);
   assert.match(sql, /create or replace function public\.append_weekly_quiz_trace_batch/);
-  assert.match(sql, /current_setting\('request\.jwt\.claim\.sub', true\)/);
+  assert.match(sql, /v_user_id := auth\.uid\(\)/);
+  assert.doesNotMatch(sql, /request\.jwt\.claim\.sub/);
   assert.match(sql, /v_session\.user_id <> v_user_id/);
   assert.match(sql, /item\.ordinal_position - 1 = p_question_index/);
   assert.match(sql, /trace batch identity is already bound to different content/);
