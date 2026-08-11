@@ -382,7 +382,10 @@ def exact_complex_receptor_superposition(
         import gemmi
     except (ImportError, ModuleNotFoundError) as exc:
         raise EvaluationError("receptor alignment requires Gemmi") from exc
-    if not isinstance(expected_chain_sequences, Mapping) or not expected_chain_sequences:
+    if (
+        not isinstance(expected_chain_sequences, Mapping)
+        or not expected_chain_sequences
+    ):
         raise EvaluationError("expected receptor chain sequences must be non-empty")
     normalized: dict[str, str] = {}
     for chain_id, sequence in expected_chain_sequences.items():
@@ -401,17 +404,21 @@ def exact_complex_receptor_superposition(
         for chain_id, polymer in _polymer_chains(model, minimum_residues=1):
             if chain_id in normalized:
                 if chain_id in chains:
-                    raise EvaluationError(f"{role} receptor chain {chain_id} is duplicated")
+                    raise EvaluationError(
+                        f"{role} receptor chain {chain_id} is duplicated"
+                    )
                 chains[chain_id] = polymer
         missing = sorted(set(normalized) - set(chains))
         if missing:
             raise EvaluationError(
-                f"{role} receptor lacks submitted protein chain(s): {', '.join(missing)}"
+                f"{role} receptor lacks submitted protein chain(s): "
+                f"{', '.join(missing)}"
             )
         for chain_id, expected_sequence in normalized.items():
             if _sequence(chains[chain_id], gemmi) != expected_sequence:
                 raise EvaluationError(
-                    f"{role} receptor chain {chain_id} does not match its submitted sequence"
+                    f"{role} receptor chain {chain_id} does not match its "
+                    "submitted sequence"
                 )
         return chains
 
@@ -483,6 +490,253 @@ def exact_complex_receptor_superposition(
                 for chain_id in sorted(post_transform_by_chain)
             ],
         },
+    }
+
+
+def exact_complex_tm_superposition(
+    reference_model: Any,
+    predicted_model: Any,
+    *,
+    expected_chain_sequences: Mapping[str, str],
+) -> dict[str, Any]:
+    """Fit one full-complex frame by a deterministic, normalized TM objective.
+
+    Correspondence is fixed exclusively by submitted chain ID and exact sequence.
+    Geometry never selects or permutes chains.  The returned transform is suitable
+    for the complete predicted object, including protein and ligand coordinates.
+    """
+
+    try:
+        import gemmi
+        import numpy
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise EvaluationError(
+            "TM receptor alignment requires Gemmi and NumPy"
+        ) from exc
+    if (
+        not isinstance(expected_chain_sequences, Mapping)
+        or not expected_chain_sequences
+    ):
+        raise EvaluationError("expected receptor chain sequences must be non-empty")
+    normalized: dict[str, str] = {}
+    for chain_id, sequence in expected_chain_sequences.items():
+        if (
+            not isinstance(chain_id, str)
+            or not chain_id
+            or not isinstance(sequence, str)
+            or not sequence
+            or not sequence.isalpha()
+        ):
+            raise EvaluationError("expected receptor chain sequences are invalid")
+        normalized[chain_id] = sequence.upper()
+
+    def bound_chains(model: Any, role: str) -> dict[str, Any]:
+        chains: dict[str, Any] = {}
+        for chain_id, polymer in _polymer_chains(model, minimum_residues=1):
+            if chain_id in normalized:
+                if chain_id in chains:
+                    raise EvaluationError(
+                        f"{role} receptor chain {chain_id} is duplicated"
+                    )
+                chains[chain_id] = polymer
+        missing = sorted(set(normalized) - set(chains))
+        if missing:
+            raise EvaluationError(
+                f"{role} receptor lacks submitted protein chain(s): "
+                f"{', '.join(missing)}"
+            )
+        for chain_id, expected_sequence in normalized.items():
+            if _sequence(chains[chain_id], gemmi) != expected_sequence:
+                raise EvaluationError(
+                    f"{role} receptor chain {chain_id} does not match its "
+                    "submitted sequence"
+                )
+        return chains
+
+    reference_chains = bound_chains(reference_model, "reference")
+    predicted_chains = bound_chains(predicted_model, "predicted")
+    reference_rows: list[list[float]] = []
+    predicted_rows: list[list[float]] = []
+    labels: list[str] = []
+    for chain_id in sorted(normalized):
+        reference_positions, predicted_positions = _sequence_aligned_positions(
+            reference_chains[chain_id],
+            predicted_chains[chain_id],
+            gemmi,
+            minimum_count=1,
+        )
+        for reference_position, predicted_position in zip(
+            reference_positions, predicted_positions
+        ):
+            reference_rows.append(
+                [reference_position.x, reference_position.y, reference_position.z]
+            )
+            predicted_rows.append(
+                [predicted_position.x, predicted_position.y, predicted_position.z]
+            )
+            labels.append(chain_id)
+    if len(reference_rows) < 5:
+        raise EvaluationError("fewer than five exact-complex receptor C-alpha atoms")
+    reference = numpy.asarray(reference_rows, dtype=float)
+    predicted = numpy.asarray(predicted_rows, dtype=float)
+    label_array = numpy.asarray(labels)
+    length = len(reference)
+    d0 = 0.5 if length <= 15 else max(0.5, 1.24 * (length - 15) ** (1 / 3) - 1.8)
+
+    def kabsch(
+        indices: Any | None = None, weights: Any | None = None
+    ) -> tuple[Any, Any]:
+        source = predicted if indices is None else predicted[indices]
+        target = reference if indices is None else reference[indices]
+        local_weights = (
+            numpy.ones(len(source), dtype=float) if weights is None else weights
+        )
+        local_weights = numpy.asarray(local_weights, dtype=float)
+        local_weights = local_weights / local_weights.sum()
+        source_center = numpy.sum(source * local_weights[:, None], axis=0)
+        target_center = numpy.sum(target * local_weights[:, None], axis=0)
+        covariance = (source - source_center).T @ (
+            (target - target_center) * local_weights[:, None]
+        )
+        left, _singular, right = numpy.linalg.svd(covariance)
+        rotation = right.T @ left.T
+        if numpy.linalg.det(rotation) < 0:
+            right[-1] *= -1
+            rotation = right.T @ left.T
+        return rotation, target_center - rotation @ source_center
+
+    starts: list[tuple[str, Any, Any]] = [
+        ("identity", numpy.eye(3), numpy.zeros(3)),
+        ("all-ca-kabsch", *kabsch()),
+    ]
+    window_size = 24
+    for chain_id in sorted(normalized):
+        indices = numpy.flatnonzero(label_array == chain_id)
+        starts.append((f"chain:{chain_id}", *kabsch(indices)))
+        count = min(window_size, len(indices))
+        step = max(1, count // 2)
+        offsets = list(range(0, len(indices) - count + 1, step))
+        final_offset = len(indices) - count
+        if offsets[-1] != final_offset:
+            offsets.append(final_offset)
+        for offset in offsets:
+            starts.append(
+                (
+                    f"chain-window:{chain_id}:{offset}:{count}",
+                    *kabsch(indices[offset : offset + count]),
+                )
+            )
+
+    best: tuple[tuple[Any, ...], int, str, Any, Any, Any, int] | None = None
+    for seed_index, (seed, rotation, translation) in enumerate(starts):
+        iterations = 0
+        for iteration in range(30):
+            distances = numpy.linalg.norm(
+                (rotation @ predicted.T).T + translation - reference, axis=1
+            )
+            weights = 1.0 / (1.0 + (distances / d0) ** 2) ** 2
+            updated_rotation, updated_translation = kabsch(weights=weights)
+            iterations = iteration + 1
+            converged = bool(
+                numpy.max(numpy.abs(updated_rotation - rotation)) < 1e-10
+                and numpy.max(numpy.abs(updated_translation - translation)) < 1e-9
+            )
+            rotation, translation = updated_rotation, updated_translation
+            if converged:
+                break
+        distances = numpy.linalg.norm(
+            (rotation @ predicted.T).T + translation - reference, axis=1
+        )
+        tm_score = float(numpy.mean(1.0 / (1.0 + (distances / d0) ** 2)))
+        rmsd = float(numpy.sqrt(numpy.mean(distances**2)))
+        key = (
+            tm_score,
+            float(numpy.mean(distances <= 10.0)),
+            -float(numpy.median(distances)),
+            -rmsd,
+            -seed_index,
+        )
+        if best is None or key > best[0]:
+            best = (key, seed_index, seed, rotation, translation, distances, iterations)
+    assert best is not None
+    key, seed_index, seed, rotation, translation, distances, iterations = best
+    transform = gemmi.Transform()
+    transform.mat.fromlist(rotation.tolist())
+    transform.vec.fromlist(translation.tolist())
+
+    def coverage(values: Any, cutoff: float) -> tuple[int, float]:
+        count = int(numpy.sum(values <= cutoff))
+        return count, count / len(values)
+
+    per_chain = []
+    for chain_id in sorted(normalized):
+        chain_distances = distances[label_array == chain_id]
+        within5, fraction5 = coverage(chain_distances, 5.0)
+        within10, fraction10 = coverage(chain_distances, 10.0)
+        within20, fraction20 = coverage(chain_distances, 20.0)
+        per_chain.append(
+            {
+                "chain_id": chain_id,
+                "aligned_residue_count": len(chain_distances),
+                "retained_residue_count": within5,
+                "retained_fraction": fraction5,
+                "within_5_angstrom_count": within5,
+                "within_5_angstrom_fraction": fraction5,
+                "within_10_angstrom_count": within10,
+                "within_10_angstrom_fraction": fraction10,
+                "within_20_angstrom_count": within20,
+                "within_20_angstrom_fraction": fraction20,
+                **_displacement_summary(chain_distances.tolist()),
+            }
+        )
+    within5, fraction5 = coverage(distances, 5.0)
+    within10, fraction10 = coverage(distances, 10.0)
+    within20, fraction20 = coverage(distances, 20.0)
+    tm_score = float(key[0])
+    post_transform = {
+        "policy": (
+            "all-exact-task-sequence-matched-ca-displacement-without-refit/v2"
+        ),
+        **_displacement_summary(distances.tolist()),
+        "within_5_angstrom_count": within5,
+        "within_5_angstrom_fraction": fraction5,
+        "within_10_angstrom_count": within10,
+        "within_10_angstrom_fraction": fraction10,
+        "within_20_angstrom_count": within20,
+        "within_20_angstrom_fraction": fraction20,
+        "per_chain": per_chain,
+    }
+    return {
+        "reference_chains": sorted(normalized),
+        "predicted_chains": sorted(normalized),
+        "sequence_similarity": 1.0,
+        "receptor_tm_score": tm_score,
+        "receptor_distance": 1.0 - tm_score,
+        "receptor_rmsd": post_transform["rmsd"],
+        "transform": transform,
+        "chain_selection_policy": "exact-task-complex-global-tm/v1",
+        "sequence_binding_policy": "exact-task-chain-id-and-sequence/v1",
+        "global_coverage": {
+            "policy": "fixed-correspondence-normalized-tm-irls/v1",
+            "objective": "mean(1/(1+(ca_displacement/d0)^2))",
+            "normalization_policy": "length-normalized-tm-d0-floor-0.5/v1",
+            "normalization_length": length,
+            "normalization_d0_angstrom": d0,
+            "seed_policy": (
+                "identity-all-ca-each-chain-and-24-ca-overlapping-windows/v1"
+            ),
+            "seed_count": len(starts),
+            "selected_seed_index": seed_index,
+            "selected_seed": seed,
+            "maximum_iterations": 30,
+            "iterations_completed": iterations,
+            "aligned_residue_count": length,
+            "retained_residue_count": within5,
+            "retained_fraction": fraction5,
+            "tm_score": tm_score,
+            "per_chain": per_chain,
+        },
+        "post_transform_ca": post_transform,
     }
 
 

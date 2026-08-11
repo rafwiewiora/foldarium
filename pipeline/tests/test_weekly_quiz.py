@@ -343,21 +343,22 @@ class WeeklyQuizPairSelectionTests(unittest.TestCase):
 
 
 class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
-    def test_weekly_alignment_uses_the_complete_task_complex_and_robust_core(self) -> None:
+    def test_weekly_alignment_uses_the_complete_task_complex_and_global_tm(self) -> None:
         expected = {
             "receptor_rmsd": 1.0,
+            "receptor_tm_score": 0.9,
             "sequence_similarity": 1.0,
             "reference_chains": ["A", "B"],
             "predicted_chains": ["A", "B"],
             "sequence_binding_policy": "exact-task-chain-id-and-sequence/v1",
-            "robust_core": {
-                "policy": "sequence-ca-iterative-outlier-rejection/v1",
+            "global_coverage": {
+                "policy": "fixed-correspondence-normalized-tm-irls/v1",
                 "retained_residue_count": 100,
             },
         }
         with patch.object(
             weekly_quiz_module,
-            "exact_complex_receptor_superposition",
+            "exact_complex_tm_superposition",
             return_value=expected,
         ) as aligner:
             result = weekly_quiz_module._weekly_receptor_superposition(
@@ -372,8 +373,8 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
             weekly_quiz_module.RECEPTOR_ALIGNMENT_POLICY,
         )
         self.assertEqual(
-            result["robust_core"]["policy"],
-            "sequence-ca-iterative-outlier-rejection/v1",
+            result["global_coverage"]["policy"],
+            "fixed-correspondence-normalized-tm-irls/v1",
         )
         self.assertEqual(
             result["sequence_binding_policy"],
@@ -424,7 +425,7 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         self.assertEqual(provenance["chain_count"], 4)
         self.assertEqual(provenance["total_sequence_length"], 22)
 
-    def test_selects_minimum_total_pairwise_rmsd_without_method_labels(self) -> None:
+    def test_selects_minimum_total_symmetric_tm_distance_without_method_labels(self) -> None:
         choices = [
             {
                 "run_id": f"run-{label}",
@@ -440,9 +441,8 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
 
         def align(reference: str, predicted: str) -> dict[str, float]:
             comparisons.append((reference, predicted))
-            return {
-                "receptor_rmsd": abs(positions[reference] - positions[predicted])
-            }
+            distance = abs(positions[reference] - positions[predicted]) / 10.0
+            return {"receptor_tm_score": 1.0 - distance}
 
         medoid, audit = weekly_quiz_module._select_receptor_medoid(
             choices,
@@ -455,15 +455,45 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         self.assertEqual(
             audit["policy"], weekly_quiz_module.RECEPTOR_ANCHOR_POLICY
         )
-        self.assertEqual(audit["total_pairwise_receptor_rmsd"], 10.0)
-        self.assertEqual(comparisons, [("a", "b"), ("a", "c"), ("b", "c")])
+        self.assertAlmostEqual(audit["total_pairwise_receptor_distance"], 1.0)
+        digest_by_model = {
+            choice["model"]: weekly_quiz_module.choice_order_digest(
+                "weekly-test-v3",
+                "target-1",
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            )
+            for choice in choices
+        }
+        self.assertEqual(
+            comparisons,
+            [
+                (left, right)
+                for index, left in enumerate(
+                    sorted(digest_by_model, key=digest_by_model.get)
+                )
+                for right in sorted(digest_by_model, key=digest_by_model.get)[
+                    index + 1 :
+                ]
+            ],
+        )
         self.assertRegex(audit["choice_digest"], r"^[0-9a-f]{64}$")
         self.assertRegex(audit["distance_matrix_sha256"], r"^[0-9a-f]{64}$")
+        _reverse_medoid, reverse_audit = weekly_quiz_module._select_receptor_medoid(
+            list(reversed(choices)),
+            round_id="weekly-test-v3",
+            target_id="target-1",
+            aligner=align,
+        )
+        self.assertEqual(reverse_audit, audit)
 
     @staticmethod
     def alignment_qa_fixture(*, aligned, retained, per_chain):
         return {
-            "robust_core": {
+            "global_coverage": {
                 "aligned_residue_count": aligned,
                 "retained_residue_count": retained,
                 "per_chain": per_chain,
@@ -471,6 +501,7 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
             "post_transform_ca": {
                 "policy": "all-sequence-matched-ca-displacement-without-refit/v1",
                 "count": aligned,
+                "within_5_angstrom_count": retained,
                 "rmsd": 12.0,
                 "p50": 1.0,
                 "p90": 20.0,
@@ -512,7 +543,7 @@ class WeeklyQuizReceptorMedoidTests(unittest.TestCase):
         self.assertEqual(
             [failure["code"] for failure in result["failures"]],
             [
-                "insufficient_complex_core_support",
+                "insufficient_complex_global_coverage",
                 "unsupported_ligand_contact_chain",
                 "unsupported_ligand_contact_chain",
             ],
@@ -919,7 +950,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 10)
+            self.assertEqual(stage["schema_version"], 11)
             self.assertEqual(
                 stage["ligand_eligibility_policy"], "cameo-drug-like/v4"
             )
@@ -1114,24 +1145,23 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     "exact-task-chain-id-and-sequence/v1",
                 )
                 self.assertEqual(
-                    choice["alignment"]["robust_core"]["policy"],
-                    "sequence-ca-iterative-outlier-rejection/v1",
+                    choice["alignment"]["global_coverage"]["policy"],
+                    "fixed-correspondence-normalized-tm-irls/v1",
                 )
                 self.assertEqual(
-                    choice["alignment"]["robust_core"]["coarse_policy"],
-                    "deterministic-pooled-75-percent-least-trimmed-plus-per-chain-windows/v3",
+                    choice["alignment"]["global_coverage"]["seed_policy"],
+                    "identity-all-ca-each-chain-and-24-ca-overlapping-windows/v1",
                 )
                 self.assertTrue(choice["alignment"]["display_qa"]["passed"])
                 self.assertEqual(
-                    choice["alignment"]["robust_core"]["per_chain"],
-                    [
-                        {
-                            "chain_id": "A",
-                            "aligned_residue_count": 6,
-                            "retained_residue_count": 6,
-                            "retained_fraction": 1.0,
-                        }
+                    choice["alignment"]["global_coverage"]["per_chain"][0]["chain_id"],
+                    "A",
+                )
+                self.assertEqual(
+                    choice["alignment"]["global_coverage"]["per_chain"][0][
+                        "retained_fraction"
                     ],
+                    1.0,
                 )
             mapping = clustering["ligand_atom_mapping"]
             self.assertEqual(
@@ -1467,9 +1497,9 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(private.stored, [])
 
             alignment["display_qa"] = display_qa
-            alignment["robust_core"]["retained_residue_count"] = 0
-            alignment["robust_core"]["per_chain"][0]["retained_residue_count"] = 0
-            alignment["robust_core"]["per_chain"][0]["retained_fraction"] = 0.0
+            alignment["global_coverage"]["retained_residue_count"] = 0
+            alignment["global_coverage"]["per_chain"][0]["retained_residue_count"] = 0
+            alignment["global_coverage"]["per_chain"][0]["retained_fraction"] = 0.0
             unhashed = {key: value for key, value in stage.items() if key != "stage_sha256"}
             stage["stage_sha256"] = hashlib.sha256(
                 weekly_quiz_module.canonical_json(unhashed).encode("utf-8")

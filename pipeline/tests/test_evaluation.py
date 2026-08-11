@@ -7,6 +7,7 @@ from foldarium_pipeline.evaluation import (
     EvaluationError,
     best_receptor_superposition,
     exact_complex_receptor_superposition,
+    exact_complex_tm_superposition,
     _receptor_candidate_key,
     _robust_sequence_superposition,
     _sequence_superposition,
@@ -239,6 +240,65 @@ class RobustCoreSuperpositionTests(unittest.TestCase):
                 predicted_model,
                 expected_chain_sequences={"A": "AAAAAA", "B": "AAAAAA"},
             )
+
+    def test_global_tm_frame_cannot_anchor_on_an_unrelated_small_chain_only(self) -> None:
+        """Regression for the A1CIK/PyMOL-style tiny-core frame failure."""
+
+        chain_b_reference = self.translated_polymer(342, (0.0, 50.0, 0.0))
+        chain_b_predicted = self.translated_polymer(342, (40.0, 50.0, 0.0))
+        for index, residue in enumerate(chain_b_predicted):
+            # A broad domain can be consistently close without satisfying the
+            # 2 A iterative core used by the historical/PyMOL-like diagnostic.
+            residue[0].pos.y += 4.5 * math.sin(index)
+            residue[0].pos.z += 4.5 * math.cos(index)
+        chain_c_predicted = self.translated_polymer(190, (80.0, 100.0, 0.0))
+        for index, residue in enumerate(chain_c_predicted):
+            residue[0].pos.y += 4.5 * math.sin(index)
+            residue[0].pos.z += 4.5 * math.cos(index)
+        reference_model = [
+            FakeChain("A", self.translated_polymer(120)),
+            FakeChain("B", chain_b_reference),
+            FakeChain("C", self.translated_polymer(190, (0.0, 100.0, 0.0))),
+        ]
+        predicted_model = [
+            # A is exact but is not representative of the dominant complex.
+            FakeChain("A", self.translated_polymer(120)),
+            FakeChain("B", chain_b_predicted),
+            FakeChain("C", chain_c_predicted),
+        ]
+        expected_sequences = {"A": "A" * 120, "B": "A" * 342, "C": "A" * 190}
+        historical = exact_complex_receptor_superposition(
+            reference_model,
+            predicted_model,
+            expected_chain_sequences=expected_sequences,
+        )
+        result = exact_complex_tm_superposition(
+            reference_model,
+            predicted_model,
+            expected_chain_sequences=expected_sequences,
+        )
+
+        historical_support = {
+            row["chain_id"]: row for row in historical["robust_core"]["per_chain"]
+        }
+        support = {
+            row["chain_id"]: row for row in result["global_coverage"]["per_chain"]
+        }
+        self.assertEqual(historical_support["A"]["retained_residue_count"], 120)
+        self.assertEqual(historical_support["B"]["retained_residue_count"], 0)
+        self.assertGreater(result["receptor_tm_score"], 0.40)
+        self.assertEqual(support["A"]["retained_residue_count"], 0)
+        self.assertGreater(support["B"]["retained_residue_count"], 300)
+        self.assertEqual(support["C"]["retained_residue_count"], 0)
+        self.assertGreater(result["global_coverage"]["retained_residue_count"], 300)
+        transformed = result["transform"].apply(predicted_model[1].get_polymer()[10][0].pos)
+        expected = reference_model[1].get_polymer()[10][0].pos
+        displacement = math.sqrt(
+            (transformed.x - expected.x) ** 2
+            + (transformed.y - expected.y) ** 2
+            + (transformed.z - expected.z) ** 2
+        )
+        self.assertLess(displacement, 5.0)
 
     def test_rejects_flexible_ca_outliers_and_recovers_the_shared_core_frame(self) -> None:
         translation = (7.0, -4.0, 3.0)

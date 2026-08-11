@@ -25,7 +25,7 @@ from .evaluation import (
     EvaluationError,
     _mapped_rmsd,
     best_receptor_superposition,
-    exact_complex_receptor_superposition,
+    exact_complex_tm_superposition,
 )
 from .quiz import build_blind_manifest, manifest_sha256
 from .selection import (
@@ -35,13 +35,13 @@ from .selection import (
     select_ligand,
 )
 
-WEEKLY_QUIZ_STAGE_VERSION = 10
+WEEKLY_QUIZ_STAGE_VERSION = 11
 POCKET_RADIUS_ANGSTROM = 5.0
 DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION = 0.20
 DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION = 0.20
 DISPLAY_ALIGNMENT_MIN_ABSOLUTE_SUPPORT = 5
 DISPLAY_ALIGNMENT_MIN_SIGNIFICANT_CONTACT_RESIDUES = 3
-DISPLAY_ALIGNMENT_QA_POLICY = "shared-frame-complex-and-contact-chain-support/v1"
+DISPLAY_ALIGNMENT_QA_POLICY = "shared-frame-global-coverage-and-contact-chain-support/v2"
 DISPLAY_ALIGNMENT_WARNING_CODE = "substantial_predicted_protein_conformational_difference"
 DISPLAY_ALIGNMENT_WARNING_MESSAGE = (
     "Predicted protein conformations differ substantially; poses use the best common alignment."
@@ -57,10 +57,14 @@ SUPPORTED_LEGACY_LIGAND_ORDER = {
 }
 LIGAND_AUTOMORPHISM_CAP = 100_000
 RECEPTOR_ANCHOR_POLICY = (
-    "minimum-total-pairwise-exact-task-complex-robust-core-rmsd-medoid/v4"
+    "minimum-total-symmetric-exact-task-complex-normalized-tm-distance-medoid/v5"
 )
-RECEPTOR_ALIGNMENT_POLICY = "exact-task-complex-sequence-robust-core/v2"
+RECEPTOR_ALIGNMENT_POLICY = "exact-task-complex-sequence-global-tm/v3"
 RECEPTOR_ENTITY_POLICY = "all-input-protein-chain-sequences/v2"
+RECEPTOR_PAIR_ORIENTATION_POLICY = "ascending-choice-digest/v1"
+RECEPTOR_DISTANCE_POLICY = (
+    "one-minus-fixed-correspondence-normalized-tm-score/v1"
+)
 LIGAND_CONFIDENCE_METRIC = "ligand_plddt"
 LIGAND_CONFIDENCE_AGGREGATION = "arithmetic-mean-selected-ligand-heavy-atoms"
 SMINA_SCORE_METRIC = "smina_affinity"
@@ -84,7 +88,7 @@ def _weekly_receptor_superposition(
     expected_chain_sequences: Mapping[str, str],
 ) -> Mapping[str, Any]:
     alignment = dict(
-        exact_complex_receptor_superposition(
+        exact_complex_tm_superposition(
             reference_model,
             predicted_model,
             expected_chain_sequences=expected_chain_sequences,
@@ -494,7 +498,7 @@ def _weekly_display_alignment_qa(
 ) -> dict[str, Any]:
     """Classify when the best shared frame weakly supports the complex or binding chain."""
 
-    robust = alignment.get("robust_core")
+    robust = alignment.get("global_coverage")
     post_transform = alignment.get("post_transform_ca")
     if not isinstance(robust, Mapping) or not isinstance(post_transform, Mapping):
         raise WeeklyQuizAssemblyError("display alignment lacks post-transform QA provenance")
@@ -511,7 +515,7 @@ def _weekly_display_alignment_qa(
         or retained > aligned
         or not isinstance(per_chain, list)
     ):
-        raise WeeklyQuizAssemblyError("display alignment robust-core provenance is invalid")
+        raise WeeklyQuizAssemblyError("display alignment global-coverage provenance is invalid")
     chain_support: dict[str, dict[str, int]] = {}
     for row in per_chain:
         if not isinstance(row, Mapping):
@@ -542,6 +546,13 @@ def _weekly_display_alignment_qa(
         raise WeeklyQuizAssemblyError(
             "display alignment per-chain provenance does not match complex totals"
         )
+    if (
+        post_transform.get("count") != aligned
+        or post_transform.get("within_5_angstrom_count") != retained
+    ):
+        raise WeeklyQuizAssemblyError(
+            "display alignment global coverage does not match its provenance"
+        )
 
     failures: list[dict[str, Any]] = []
     minimum_complex_support = _minimum_display_support(
@@ -550,7 +561,7 @@ def _weekly_display_alignment_qa(
     if retained < minimum_complex_support:
         failures.append(
             {
-                "code": "insufficient_complex_core_support",
+                "code": "insufficient_complex_global_coverage",
                 "aligned_residue_count": aligned,
                 "retained_residue_count": retained,
                 "minimum_retained_residue_count": minimum_complex_support,
@@ -568,7 +579,7 @@ def _weekly_display_alignment_qa(
         support = chain_support.get(chain_id)
         if support is None:
             raise WeeklyQuizAssemblyError(
-                f"display alignment contact chain {chain_id} lacks robust-core provenance"
+                f"display alignment contact chain {chain_id} lacks global-coverage provenance"
             )
         minimum_chain_support = _minimum_display_support(
             support["aligned_residue_count"],
@@ -595,6 +606,7 @@ def _weekly_display_alignment_qa(
         "policy": DISPLAY_ALIGNMENT_QA_POLICY,
         "passed": not failures,
         "thresholds": {
+            "support_definition": "exact-task-sequence-matched-ca-within-5-angstrom/v1",
             "complex_support_fraction": DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION,
             "contact_chain_support_fraction": (
                 DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION
@@ -805,47 +817,56 @@ def _select_receptor_medoid(
 
     if not choices:
         raise WeeklyQuizAssemblyError("cannot select a receptor medoid without choices")
-    digests = [
-        choice_order_digest(
-            round_id,
-            target_id,
-            {
-                "run_id": choice["run_id"],
-                "sample_id": choice["sample_id"],
-                "artifact_sha256": choice["artifact_sha256"],
-            },
+    ordered = [
+        (
+            choice_order_digest(
+                round_id,
+                target_id,
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            ),
+            choice,
         )
         for choice in choices
     ]
+    ordered.sort(key=lambda row: row[0])
+    digests = [digest for digest, _choice in ordered]
+    choices = [choice for _digest, choice in ordered]
     matrix = [[0.0 for _ in choices] for _ in choices]
-    # Exact-task-complex receptor RMSD is a metric over two coordinate sets:
-    # swapping reference/predicted reverses the rigid transform but preserves
-    # the retained robust core and its RMSD.  Compute each unordered pair once
-    # and mirror it.  Besides halving the expensive robust fits, this keeps the
-    # matrix explicitly symmetric as required by minimum-total-distance medoid
-    # selection.
+    # Canonical digest orientation makes every unordered pair deterministic even
+    # when callers provide choices in a different order.  The normalized TM
+    # distance is then mirrored explicitly for a symmetric medoid objective.
     for reference_index, reference in enumerate(choices):
         for predicted_index in range(reference_index + 1, len(choices)):
             predicted = choices[predicted_index]
+            if digests[reference_index] <= digests[predicted_index]:
+                canonical_reference, canonical_predicted = reference, predicted
+            else:
+                canonical_reference, canonical_predicted = predicted, reference
             try:
-                alignment = aligner(reference["model"], predicted["model"])
-                rmsd = float(alignment["receptor_rmsd"])
+                alignment = aligner(
+                    canonical_reference["model"], canonical_predicted["model"]
+                )
+                distance = 1.0 - float(alignment["receptor_tm_score"])
             except (EvaluationError, KeyError, TypeError, ValueError) as exc:
                 raise WeeklyQuizAssemblyError(
                     "could not compare receptors while selecting the shared medoid for "
                     f"{target_id}"
                 ) from exc
-            if not math.isfinite(rmsd) or rmsd < 0:
+            if not math.isfinite(distance) or not 0 <= distance <= 1:
                 raise WeeklyQuizAssemblyError(
-                    "receptor-medoid RMSD must be finite and non-negative"
+                    "receptor-medoid normalized TM distance must be between zero and one"
                 )
-            matrix[reference_index][predicted_index] = rmsd
-            matrix[predicted_index][reference_index] = rmsd
+            matrix[reference_index][predicted_index] = distance
+            matrix[predicted_index][reference_index] = distance
     totals = [sum(row) for row in matrix]
     medoid_index = min(range(len(choices)), key=lambda index: (totals[index], digests[index]))
     distance_payload = {
         "choice_order": digests,
-        "distances_angstrom": [
+        "normalized_tm_distances": [
             [f"{value:.6f}" for value in row]
             for row in matrix
         ],
@@ -853,9 +874,11 @@ def _select_receptor_medoid(
     return choices[medoid_index], {
         "policy": RECEPTOR_ANCHOR_POLICY,
         "choice_digest": digests[medoid_index],
-        "total_pairwise_receptor_rmsd": totals[medoid_index],
+        "total_pairwise_receptor_distance": totals[medoid_index],
         "choice_order": digests,
-        "total_pairwise_receptor_rmsds": totals,
+        "total_pairwise_receptor_distances": totals,
+        "pair_orientation_policy": RECEPTOR_PAIR_ORIENTATION_POLICY,
+        "distance_policy": RECEPTOR_DISTANCE_POLICY,
         "distance_matrix_sha256": hashlib.sha256(
             canonical_json(distance_payload).encode("utf-8")
         ).hexdigest(),
@@ -1155,21 +1178,29 @@ def _select_precomputed_receptor_medoid(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Bind a process-computed medoid back to the exact in-process choices."""
 
-    digests = [
-        choice_order_digest(
-            round_id,
-            target_id,
-            {
-                "run_id": choice["run_id"],
-                "sample_id": choice["sample_id"],
-                "artifact_sha256": choice["artifact_sha256"],
-            },
+    ordered = [
+        (
+            choice_order_digest(
+                round_id,
+                target_id,
+                {
+                    "run_id": choice["run_id"],
+                    "sample_id": choice["sample_id"],
+                    "artifact_sha256": choice["artifact_sha256"],
+                },
+            ),
+            choice,
         )
         for choice in choices
     ]
-    totals = anchor.get("total_pairwise_receptor_rmsds")
+    ordered.sort(key=lambda row: row[0])
+    digests = [digest for digest, _choice in ordered]
+    choices = [choice for _digest, choice in ordered]
+    totals = anchor.get("total_pairwise_receptor_distances")
     if (
         anchor.get("policy") != RECEPTOR_ANCHOR_POLICY
+        or anchor.get("pair_orientation_policy") != RECEPTOR_PAIR_ORIENTATION_POLICY
+        or anchor.get("distance_policy") != RECEPTOR_DISTANCE_POLICY
         or anchor.get("choice_order") != digests
         or not isinstance(totals, list)
         or len(totals) != len(digests)
@@ -1189,7 +1220,7 @@ def _select_precomputed_receptor_medoid(
     )
     if (
         anchor.get("choice_digest") != digests[selected_index]
-        or anchor.get("total_pairwise_receptor_rmsd") != totals[selected_index]
+        or anchor.get("total_pairwise_receptor_distance") != totals[selected_index]
         or not isinstance(anchor.get("distance_matrix_sha256"), str)
         or not re.fullmatch(r"[0-9a-f]{64}", anchor["distance_matrix_sha256"])
     ):
@@ -1467,6 +1498,8 @@ def stage_weekly_quiz(
                         f"target {target_id} lacks its exact submitted protein complex in the reference pose"
                     ) from exc
                 alignment["receptor_rmsd"] = 0.0
+                alignment["receptor_tm_score"] = 1.0
+                alignment["receptor_distance"] = 0.0
             else:
                 try:
                     alignment = dict(
