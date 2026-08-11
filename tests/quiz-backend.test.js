@@ -431,6 +431,33 @@ test('rejects malformed named research events before any RPC', async () => {
   assert.deepEqual(rpcs, []);
 });
 
+test('weekly vote-attempt callers can reuse one id across a network retry', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('should-not-be-used'),
+  });
+  const attempt = {
+    voteAttemptId: '00000000-0000-4000-8000-000000000777',
+    sessionId: '00000000-0000-4000-8000-000000000201',
+    roundId: 'weekly-2026-08-08',
+    itemId: 'item-1',
+    questionIndex: 0,
+    choiceId: 'choice-1',
+    pickedNone: false,
+    viewerTrace: null,
+    appState: { schema_version: 1, item_id: 'item-1' },
+  };
+
+  await backend.submitWeeklyVoteAttempt(attempt);
+  await backend.submitWeeklyVoteAttempt(attempt);
+
+  assert.equal(rpcs.length, 2);
+  assert.equal(rpcs[0].args.p_vote_attempt_id, attempt.voteAttemptId);
+  assert.deepEqual(rpcs[1].args, rpcs[0].args);
+});
+
 test('weekly votes survive an invalid optional viewer trace', async () => {
   const { client, rpcs } = fakeSupabase();
   const backend = createQuizBackend({

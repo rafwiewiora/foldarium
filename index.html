@@ -177,9 +177,18 @@
   .score b{font-variant-numeric:tabular-nums}
   .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
   .weekly-results .hint{margin-top:6px}
-  .vote-comment-option{display:none;align-items:center;gap:8px;margin:-5px 0 0;color:var(--muted);
-    font-size:12px;cursor:pointer}
+  .vote-submit-row{display:flex;align-items:stretch;gap:8px}
+  .vote-submit-row #lock{flex:1;min-width:0}
+  .vote-comment-option{display:none;align-items:center;justify-content:center;gap:6px;margin:0;
+    padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);
+    font-size:11.5px;font-weight:600;line-height:1.2;cursor:pointer;white-space:nowrap}
   .vote-comment-option input{accent-color:var(--accent)}
+  .question-progress{display:flex;align-items:center;gap:8px;min-width:0}
+  .question-nav{display:none;align-items:center;gap:3px}
+  .question-nav button{width:27px;height:27px;padding:0;border:1px solid var(--line);border-radius:7px;
+    background:#fff;color:var(--muted);font-size:14px;font-weight:700;line-height:1;cursor:pointer}
+  .question-nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .question-nav button:disabled{opacity:.3;cursor:default}
   dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
     border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
   dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
@@ -312,16 +321,24 @@
     </div>
 
     <div id="question-head">
-      <div class="q" id="progress">question — / —</div>
+      <div class="question-progress">
+        <div class="q" id="progress">question — / —</div>
+        <div class="question-nav" id="question-nav" aria-label="Question navigation">
+          <button id="question-prev" type="button" aria-label="Previous question" title="Previous question">←</button>
+          <button id="question-next" type="button" aria-label="Next question" title="Next question">→</button>
+        </div>
+      </div>
       <div class="q" id="score-summary">score 0 / 0</div>
     </div>
 
     <div class="choices" id="choices"></div>
 
-    <label class="vote-comment-option" id="vote-comment-option">
-      <input id="vote-comment-enabled" type="checkbox" checked/> Add a comment with this vote
-    </label>
-    <button class="primary" id="lock" disabled>Submit answer</button>
+    <div class="vote-submit-row" id="vote-submit-row">
+      <button class="primary" id="lock" disabled>Submit answer</button>
+      <label class="vote-comment-option" id="vote-comment-option" title="Ask for a comment after recording this vote">
+        <input id="vote-comment-enabled" type="checkbox" checked/> Add comment
+      </label>
+    </div>
     <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
     <button class="primary" id="start" style="display:none">Start →</button>
     <div style="display:flex;gap:6px">
@@ -486,7 +503,7 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
         console.warn('Viewer recording disabled:', error.message);
       }
       void initPersistence();
-          await loadScript('app.js?v=202608103');
+          await loadScript('app.js?v=202608104');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

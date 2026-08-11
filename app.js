@@ -89,6 +89,8 @@ let POOLS = { cameo: [], rnp: [], weekly: [] };
 let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'hard' : 'easy';
 let WEEKLY_ROUND = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
+let WEEKLY_ITEM_STATES = new Map();
+let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
 let participantDisplayName = '';
 let viewerTraceRecorder = null;
@@ -151,6 +153,7 @@ function currentReplayableAppState() {
     selection_kind: selectionKind,
     context_choice_id: cur?.contextChoice?._weeklyChoiceId || null,
     rejected_choice_ids: cur ? [...(cur.rejectedChoiceIds || [])].slice(0, 50) : [],
+    vote_comment_enabled: quizSource === 'weekly' ? weeklyCommentPromptEnabled : null,
     vote_comment: typeof cur?.voteCommentText === 'string' ? cur.voteCommentText : null,
     viewer_busy: viewerTransitionBusy || revealRequested,
     viewport: {
@@ -159,6 +162,42 @@ function currentReplayableAppState() {
       dpr: window.devicePixelRatio || 1,
     },
   };
+}
+
+function newVoteAttemptId() {
+  return crypto.randomUUID();
+}
+
+function invalidatePendingWeeklyVote() {
+  if (!cur || cur.item?.source !== 'weekly') return;
+  cur.pendingWeeklyVote = null;
+  cur.voteCommentHandled = false;
+  cur.voteCommentText = null;
+}
+
+function rememberWeeklyItemState() {
+  if (!cur || cur.item?.source !== 'weekly') return;
+  cur.savedShownOne = shownOne;
+  cur.savedGridPage = gridMethodIndex;
+  WEEKLY_ITEM_STATES.set(cur.item.id, cur);
+}
+
+function syncQuestionNavigation() {
+  const nav = $('#question-nav');
+  if (!nav) return;
+  const visible = !!cur && quizSource === 'weekly' && ITEMS.length > 0;
+  nav.style.display = visible ? 'flex' : 'none';
+  if (!visible) return;
+  $('#question-prev').disabled = viewerTransitionBusy || revealRequested || idx <= 0;
+  $('#question-next').disabled = viewerTransitionBusy || revealRequested || idx >= ITEMS.length - 1;
+}
+
+async function navigateWeeklyQuestion(nextIndex, action = 'question_navigated') {
+  if (quizSource !== 'weekly' || viewerTransitionBusy || revealRequested
+      || nextIndex < 0 || nextIndex >= ITEMS.length || nextIndex === idx) return;
+  recordAppEvent(action);
+  rememberWeeklyItemState();
+  await loadQuestion(nextIndex);
 }
 
 function recordAppEvent(action) {
@@ -177,11 +216,13 @@ function setViewerControlsBusy(busy) {
   viewerTransitionBusy = busy;
   document.querySelectorAll(
     '#choices button, #mode button, #protmode button, #uncluster, #hbonds, #surface, #protein-ensemble, #lock, '
-    + '#next, #prev, #myview, #showXtal, #start, #gridpages button, .grid-review-actions button, #one-review-actions button',
+    + '#next, #prev, #question-prev, #question-next, #myview, #showXtal, #start, #gridpages button, '
+    + '.grid-review-actions button, #one-review-actions button',
   ).forEach(control => { control.disabled = busy; });
   if (!busy && cur && !cur.revealed) {
     $('#lock').disabled = revealRequested || cur.selected == null;
   }
+  syncQuestionNavigation();
 }
 
 function structureRequestUrl(url) {
@@ -322,6 +363,7 @@ function syncOneReviewState() {
 async function toggleChoiceRejected(choice) {
   if (!cur || cur.revealed) return;
   const update = () => {
+    invalidatePendingWeeklyVote();
     const ids = reviewChoiceIds(choice);
     const rejecting = !choiceRejected(choice);
     ids.forEach(id => rejecting ? cur.rejectedChoiceIds.add(id) : cur.rejectedChoiceIds.delete(id));
@@ -1223,10 +1265,11 @@ function requestQuestionCameraReset() {
 async function loadQuestion(i) {
   const item = ITEMS[i];
   $('#stage').classList.add('loading-system');
-  // build cluster objects in shuffled order, colour per cluster
+  const savedWeeklyState = item.source === 'weekly' ? WEEKLY_ITEM_STATES.get(item.id) : null;
+  // Keep a Weekly question's randomised labels and all local review state stable when navigating away/back.
   const byCluster = {};
   item.choices.forEach(c => (byCluster[c.cluster] ??= []).push({ ...c }));
-  const clusters = shuffle(Object.values(byCluster)).map((members, k) => {
+  const clusters = savedWeeklyState?.clusters || shuffle(Object.values(byCluster)).map((members, k) => {
     const color = PALETTE[k % PALETTE.length], label = LABELS[k % LABELS.length];
     decorateClusterMembers(members, label, item.source);
     members.forEach(m => {
@@ -1238,12 +1281,16 @@ async function loadQuestion(i) {
     async () => {
       viewerTraceRecorder?.stop();
       idx = i;
-      const gridMethods = item.source === 'rnp'
-        ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : [];
-      cur = { item, clusters, gridMethods, selected: null, selectionExact: false,
+      const gridMethods = savedWeeklyState?.gridMethods || (item.source === 'rnp'
+        ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : []);
+      cur = savedWeeklyState || { item, clusters, gridMethods, selected: null, selectionExact: false,
         selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false,
-        rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null };
-      if (item.source === 'weekly') {
+        rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null,
+        pendingWeeklyVote: null };
+      cur.item = item;
+      cur.revealed = false;
+      cur.showAnswer = false;
+      if (item.source === 'weekly' && !savedWeeklyState) {
         const prior = WEEKLY_VOTES.get(item.id);
         if (prior?.picked_none) {
           const choices = clusters.flatMap(cluster => cluster.members);
@@ -1265,12 +1312,12 @@ async function loadQuestion(i) {
           }
         }
       }
-      gridMethodIndex = 0;
+      gridMethodIndex = savedWeeklyState?.savedGridPage || 0;
       activePaneId = null;
       selectedPaneId = null;
       // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
       applyUserView();
-      shownOne = 0;
+      shownOne = savedWeeklyState?.savedShownOne || 0;
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
       $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
       $('#instruction').style.display = ''; $('#choices').style.display = '';
@@ -1351,11 +1398,16 @@ function renderUI() {
     if (tag) tag.textContent = 'Selected ✓';
   }
   box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
-  $('#vote-comment-option').style.display = quizSource === 'weekly' && !cur.revealed ? '' : 'none';
+  $('#vote-comment-enabled').checked = weeklyCommentPromptEnabled;
+  $('#vote-comment-option').style.display = quizSource === 'weekly' && !DEV && !cur.revealed ? 'flex' : 'none';
+  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
+    $('#lock').textContent = WEEKLY_VOTES.has(cur.item.id) ? 'Update vote' : 'Record vote';
+  }
+  syncQuestionNavigation();
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
-  $('#next').style.display = cur.revealed ? '' : 'none';
+  $('#next').style.display = quizSource !== 'weekly' && cur.revealed ? '' : 'none';
   updateScore();
 }
 
@@ -1364,8 +1416,11 @@ function renderUI() {
 function renderDevNav() {
   $('#lock').style.display = 'none';
   $('#verdict').style.display = 'none';
-  $('#prev').style.display = ''; $('#next').style.display = '';
+  const useQuestionNav = quizSource === 'weekly';
+  $('#prev').style.display = useQuestionNav ? 'none' : '';
+  $('#next').style.display = useQuestionNav ? 'none' : '';
   $('#next').textContent = 'Next →';
+  syncQuestionNavigation();
   $('#myview').style.display = '';
   $('#myview').textContent = cur.showAnswer ? '← Hide answer (my view)' : 'Reveal answer →';
   $('#xtalrow').style.display = (cur.showAnswer && cur.item.xtal_lig_file) ? '' : 'none';
@@ -1489,6 +1544,9 @@ function drawSession() {
 }
 function beginQuiz() {
   ITEMS = drawSession();
+  WEEKLY_ITEM_STATES = new Map();
+  weeklyCommentPromptEnabled = true;
+  $('#vote-comment-enabled').checked = true;
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#wrap').classList.remove('intro');
@@ -1658,6 +1716,7 @@ async function onPick(k, exactChoice = null, {
   preserveScene = false,
 } = {}) {
   if (interactionBlocked()) return;
+  invalidatePendingWeeklyVote();
   const answerChoices = displayMode === 'grid' ? allGridEntries().map(entry => entry.choice) : visibleChoices();
   if (k !== 'none' && displayMode === 'one') {
     const selected = cur.revealed ? null : visibleChoices()[k];
@@ -1745,7 +1804,7 @@ async function onPick(k, exactChoice = null, {
 function shouldPromptForVoteComment() {
   return quizSource === 'weekly'
     && WEEKLY_ROUND?.public_status !== 'revealed'
-    && $('#vote-comment-enabled')?.checked
+    && weeklyCommentPromptEnabled
     && !cur?.voteCommentHandled;
 }
 
@@ -1759,7 +1818,10 @@ function openVoteCommentDialog() {
 
 function skipVoteComment() {
   if (!cur) return;
+  cur.voteCommentText = null;
   cur.voteCommentHandled = true;
+  weeklyCommentPromptEnabled = false;
+  $('#vote-comment-enabled').checked = false;
   $('#vote-comment-dialog').close();
   recordAppEvent('vote_comment_skipped');
   void reveal();
@@ -1771,6 +1833,8 @@ async function submitVoteComment(event) {
   if (!text) { skipVoteComment(); return; }
   cur.voteCommentText = text;
   cur.voteCommentHandled = true;
+  weeklyCommentPromptEnabled = true;
+  $('#vote-comment-enabled').checked = true;
   $('#vote-comment-dialog').close();
   recordAppEvent('vote_comment_attached');
   void reveal();
@@ -1845,29 +1909,36 @@ async function finalizeWeeklyVote() {
   const verdict = $('#verdict'); verdict.style.display = '';
   if (isReadOnlyPreview()) {
     viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
-    cur.revealed = true;
-    cur.showAnswer = false;
-    renderUI();
-    verdict.innerHTML = '<b>Read-only Preview:</b> this vote was not saved. Results remain blind until Wednesday.';
-    $('#next').style.display = '';
-    $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
+    cur.voteCommentHandled = false;
+    cur.voteCommentText = null;
+    rememberWeeklyItemState();
+    if (idx + 1 < ITEMS.length) await loadQuestion(idx + 1);
+    else {
+      renderUI();
+      verdict.style.display = '';
+      verdict.innerHTML = '<b>Read-only Preview:</b> this vote was not saved. You can review questions with the arrows.';
+    }
     return;
   }
   verdict.textContent = 'Recording…';
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
-    const viewerTrace = viewerTraceRecorder?.snapshot?.(currentReplayableAppState()) ?? null;
-    await backend.submitWeeklyVoteAttempt({
-      sessionId: remoteSessionId,
-      roundId: WEEKLY_ROUND.round_id,
-      itemId: cur.item.id,
-      questionIndex: idx,
-      choiceId,
-      pickedNone: !!picked.none,
-      viewerTrace,
-      appState: currentReplayableAppState(),
-    });
+    if (!cur.pendingWeeklyVote) {
+      const appState = currentReplayableAppState();
+      cur.pendingWeeklyVote = {
+        voteAttemptId: newVoteAttemptId(),
+        sessionId: remoteSessionId,
+        roundId: WEEKLY_ROUND.round_id,
+        itemId: cur.item.id,
+        questionIndex: idx,
+        choiceId,
+        pickedNone: !!picked.none,
+        viewerTrace: viewerTraceRecorder?.snapshot?.(appState) ?? null,
+        appState,
+      };
+    }
+    await backend.submitWeeklyVoteAttempt(cur.pendingWeeklyVote);
   } catch (error) {
     verdict.textContent = `Vote was not recorded. ${error.message}`;
     return;
@@ -1878,12 +1949,16 @@ async function finalizeWeeklyVote() {
     choice_id: choiceId,
     picked_none: !!picked.none,
   });
-  cur.revealed = true;
-  cur.showAnswer = false;
-  renderUI();
-  verdict.innerHTML = '<b style="color:var(--good)">Vote recorded.</b> Results Wednesday.';
-  $('#next').style.display = '';
-  $('#next').textContent = idx + 1 < ITEMS.length ? 'Next →' : 'Finish →';
+  cur.pendingWeeklyVote = null;
+  cur.voteCommentHandled = false;
+  cur.voteCommentText = null;
+  rememberWeeklyItemState();
+  if (idx + 1 < ITEMS.length) await loadQuestion(idx + 1);
+  else {
+    renderUI();
+    verdict.style.display = '';
+    verdict.innerHTML = '<b style="color:var(--good)">All votes recorded.</b> Review or revise them with the arrows.';
+  }
 }
 
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
@@ -2417,6 +2492,17 @@ async function init() {
   $('#lock').onclick = reveal;
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
+  $('#question-prev').onclick = () => {
+    void navigateWeeklyQuestion(idx - 1, 'question_previous');
+  };
+  $('#question-next').onclick = () => {
+    void navigateWeeklyQuestion(idx + 1, 'question_next');
+  };
+  $('#vote-comment-enabled').onchange = event => {
+    weeklyCommentPromptEnabled = event.target.checked;
+    invalidatePendingWeeklyVote();
+    recordAppEvent(weeklyCommentPromptEnabled ? 'vote_comment_enabled' : 'vote_comment_disabled');
+  };
   $('#start').onclick = startQuiz;
   $('#participant-name').addEventListener('input', syncStartGate);
   $('#participant-name').addEventListener('keydown', event => {

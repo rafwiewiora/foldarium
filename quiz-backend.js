@@ -488,10 +488,10 @@ export function createQuizBackend({
       return result.data;
     },
     async submitWeeklyVoteAttempt({
-      sessionId, roundId, itemId, questionIndex, choiceId, pickedNone,
+      voteAttemptId = uuid(), sessionId, roundId, itemId, questionIndex, choiceId, pickedNone,
       viewerTrace = null, appState = null,
     }) {
-      if (!sessionId || !roundId || !itemId || !Number.isInteger(questionIndex)
+      if (!voteAttemptId || !sessionId || !roundId || !itemId || !Number.isInteger(questionIndex)
         || questionIndex < 0 || typeof pickedNone !== 'boolean') {
         throw new Error('Weekly vote-attempt identity is invalid.');
       }
@@ -508,7 +508,7 @@ export function createQuizBackend({
       const submittedState = normalizedState || (stateFromTrace && typeof stateFromTrace === 'object'
         ? normalizeJsonObject(stateFromTrace, 'Weekly app state') : null);
       return leaderboardRpc('submit_weekly_quiz_vote_attempt', {
-        p_vote_attempt_id: uuid(),
+        p_vote_attempt_id: voteAttemptId,
         p_session_id: sessionId,
         p_round_id: roundId,
         p_item_id: itemId,

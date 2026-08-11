@@ -66,6 +66,29 @@ test('tester shell separates inspection, selection, rejection, and optional vote
   assert.match(html, />✦ Feedback</);
 });
 
+test('weekly voting keeps comment prompting optional and supports free question review', async () => {
+  const [app, html, backend, migration] = await Promise.all([
+    read('app.js'),
+    read('index.html'),
+    read('quiz-backend.js'),
+    read('supabase/migrations/20260808010500_add_named_quiz_research_events.sql'),
+  ]);
+
+  assert.match(html, /class="vote-submit-row"[\s\S]*?id="lock"[\s\S]*?id="vote-comment-enabled"[^>]*checked/);
+  assert.match(html, /id="question-prev"[\s\S]*?id="question-next"/);
+  assert.match(app, /weeklyCommentPromptEnabled = false;[\s\S]*?vote-comment-enabled'\)\.checked = false/);
+  assert.match(app, /if \(idx \+ 1 < ITEMS\.length\) await loadQuestion\(idx \+ 1\)/);
+  assert.match(app, /WEEKLY_ITEM_STATES\.set\(cur\.item\.id, cur\)/);
+  assert.match(app, /savedWeeklyState\?\.clusters/);
+  assert.match(app, /WEEKLY_VOTES\.has\(cur\.item\.id\) \? 'Update vote' : 'Record vote'/);
+  assert.match(app, /voteAttemptId: newVoteAttemptId\(\)/);
+  assert.match(backend, /voteAttemptId = uuid\(\)/);
+  assert.match(backend, /p_vote_attempt_id: voteAttemptId/);
+  assert.match(migration, /insert into public\.weekly_quiz_vote_attempts/);
+  assert.match(migration, /on conflict \(round_id, user_id, item_id\) do update/);
+  assert.doesNotMatch(app, /\$\('#next'\)\.style\.display = '';[\s\S]{0,120}\$\('#next'\)\.textContent = idx \+ 1 < ITEMS\.length \? 'Next →' : 'Finish →'/);
+});
+
 test('Grid compacts the actual Molstar residue highlight overlay', async () => {
   const html = await read('index.html');
   assert.match(html, /\.grid-card \.msp-highlight-toast-wrapper/);
