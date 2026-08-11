@@ -106,6 +106,7 @@ let stopGridCameraSync = null, stopGridLayout = null;
 let poseChoiceByRepresentation = new WeakMap();
 let canonicalPoseClickSubscription = null;
 let nextCanonicalCameraSnapshot = null, canonicalPoseActivationRevision = 0;
+let resetCameraOnNextBuild = false;
 let weeklyCountdownTimer = null;
 // The user's chosen "my view" display preferences, persisted ACROSS questions. reveal()/toggleAnswer()
 // temporarily override the live globals to render the correctness list (always all/unclustered), so we
@@ -1174,10 +1175,10 @@ async function buildHbonds(poseUrls) {
   const { pocket } = protUrls();
   await buildInteractions(pocket, poseUrls, plugin, data => hbondData.push(data));
 }
-async function buildCanonicalLayer(shown) {
-  let preservedCamera = nextCanonicalCameraSnapshot;
+async function buildCanonicalLayer(shown, preserveCamera = true) {
+  let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
   nextCanonicalCameraSnapshot = null;
-  if (!preservedCamera) {
+  if (preserveCamera && !preservedCamera) {
     try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
   }
   const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
@@ -1223,13 +1224,15 @@ async function buildCanonicalLayer(shown) {
     releaseCamera();
   }
 }
-async function buildSingleLayer() {
+async function buildSingleLayer(preserveCamera = true) {
   const answer = cur.revealed && cur.showAnswer;
   const vis = visibleChoices();
   const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
-  return buildCanonicalLayer(shown);
+  return buildCanonicalLayer(shown, preserveCamera);
 }
 async function buildLayer() {
+  const resetCamera = resetCameraOnNextBuild;
+  resetCameraOnNextBuild = false;
   if (displayMode === 'grid') {
     // On the first question the canonical viewer has no framed scene yet. Its
     // default camera points at empty space, so it must not override the camera
@@ -1239,11 +1242,15 @@ async function buildLayer() {
     // otherwise One-at-a-time briefly flashes as Show all during the transition.
     $('#stage').classList.add('grid-active');
     $('#gridview').classList.add('on', 'loading-grid');
-    await buildGrid(true, hadCanonicalScene);
+    await buildGrid(!resetCamera, !resetCamera && hadCanonicalScene);
+    const freshGridCamera = resetCamera
+      ? plugin?.canvas3d?.camera?.getSnapshot?.() || null
+      : null;
     try {
       // Visible panes load first. The hidden canonical scene still completes
       // before the rebuild coordinator enables interaction and starts tracing.
-      await buildCanonicalLayer(gridEntries().map(entry => entry.choice));
+      await buildCanonicalLayer(gridEntries().map(entry => entry.choice), !resetCamera);
+      if (resetCamera) await pinCameraSnapshot(plugin, freshGridCamera);
     } catch (error) {
       console.warn('Canonical Grid scene could not be built:', error.message);
     }
@@ -1251,11 +1258,11 @@ async function buildLayer() {
   }
   if ($('#gridview').classList.contains('on')) {
     gridBuildRevision++;
-    try { return await buildSingleLayer(); }
+    try { return await buildSingleLayer(!resetCamera); }
     finally { hideGrid(); }
   }
   hideGrid();
-  return buildSingleLayer();
+  return buildSingleLayer(!resetCamera);
 }
 
 function requestQuestionCameraReset() {
@@ -1280,6 +1287,12 @@ async function loadQuestion(i) {
   await viewerRebuild.enqueue(
     async () => {
       viewerTraceRecorder?.stop();
+      // A question owns its framing. Tear down the previous question's visible
+      // camera publishers before rebuilding, and do not pin their snapshot
+      // through the new canonical/Grid scene construction.
+      resetCameraOnNextBuild = true;
+      gridBuildRevision++;
+      disposeGridViewers();
       idx = i;
       const gridMethods = savedWeeklyState?.gridMethods || (item.source === 'rnp'
         ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : []);
