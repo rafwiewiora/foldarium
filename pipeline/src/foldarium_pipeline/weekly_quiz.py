@@ -28,8 +28,14 @@ from .evaluation import (
     exact_complex_receptor_superposition,
 )
 from .quiz import build_blind_manifest, manifest_sha256
+from .selection import (
+    HEAVY_ATOM_MINIMUM,
+    SELECTION_POLICY_VERSION,
+    ligand_rejection_reason,
+    select_ligand,
+)
 
-WEEKLY_QUIZ_STAGE_VERSION = 9
+WEEKLY_QUIZ_STAGE_VERSION = 10
 POCKET_RADIUS_ANGSTROM = 5.0
 DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION = 0.20
 DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION = 0.20
@@ -40,6 +46,9 @@ DISPLAY_ALIGNMENT_WARNING_CODE = "substantial_predicted_protein_conformational_d
 DISPLAY_ALIGNMENT_WARNING_MESSAGE = (
     "Predicted protein conformations differ substantially; poses use the best common alignment."
 )
+WEEKLY_PRESENTATION_MULTI_CLUSTER = "multi_cluster"
+WEEKLY_PRESENTATION_SINGLE_CLUSTER = "single_cluster"
+WEEKLY_PRESENTATION_POLICY = "multi-cluster-first-single-cluster-last/v1"
 REQUIRED_METHODS = frozenset({"openfold3", "boltz2"})
 LEGACY_LIGAND_ORDER_POLICY = "adapter-preserved-task-smiles-heavy-atom-order/legacy-v1"
 SUPPORTED_LEGACY_LIGAND_ORDER = {
@@ -145,6 +154,97 @@ def _selected_ligand(target: Mapping[str, Any]) -> tuple[str, int, set[str], str
         if isinstance(chain_id, str)
     }
     return component, heavy_atoms, chain_ids, smiles.strip()
+
+
+def _weekly_ligand_eligibility(
+    component_id: str,
+    heavy_atoms: int,
+    smiles: str,
+) -> dict[str, Any]:
+    """Revalidate historical prediction tasks against the current shared policy."""
+
+    if not isinstance(component_id, str) or not component_id.strip():
+        raise WeeklyQuizAssemblyError("weekly ligand component ID is invalid")
+    if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
+        raise WeeklyQuizAssemblyError("weekly ligand heavy-atom count is invalid")
+    if not isinstance(smiles, str) or not smiles.strip():
+        raise WeeklyQuizAssemblyError("weekly ligand SMILES is invalid")
+    component_id = component_id.strip().upper()
+    smiles = smiles.strip()
+
+    selected = select_ligand(
+        [{"component_id": component_id, "smiles": smiles}],
+        heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+    )
+    passed = selected is not None
+    rejection_reason = ligand_rejection_reason(
+        {"component_id": component_id, "smiles": smiles},
+        heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+    )
+    if passed and selected["heavy_atoms"] != heavy_atoms:
+        raise WeeklyQuizAssemblyError(
+            "selected ligand heavy-atom metadata disagrees with the current policy"
+        )
+    return {
+        "policy": SELECTION_POLICY_VERSION,
+        "passed": passed,
+        "component_id": component_id,
+        "heavy_atoms": heavy_atoms,
+        "smiles": smiles,
+        "smiles_sha256": hashlib.sha256(smiles.encode("utf-8")).hexdigest(),
+        "reason": rejection_reason,
+    }
+
+
+def _weekly_presentation_group(cluster_count: int) -> str:
+    if isinstance(cluster_count, bool) or not isinstance(cluster_count, int) or cluster_count < 1:
+        raise WeeklyQuizAssemblyError("weekly presentation requires a positive cluster count")
+    return (
+        WEEKLY_PRESENTATION_MULTI_CLUSTER
+        if cluster_count > 1
+        else WEEKLY_PRESENTATION_SINGLE_CLUSTER
+    )
+
+
+def _weekly_presentation_key(item: Mapping[str, Any]) -> tuple[int, str]:
+    group = item.get("presentation_group")
+    target_id = item.get("target_id")
+    if group not in {
+        WEEKLY_PRESENTATION_MULTI_CLUSTER,
+        WEEKLY_PRESENTATION_SINGLE_CLUSTER,
+    } or not isinstance(target_id, str) or not target_id:
+        raise WeeklyQuizAssemblyError("weekly item presentation provenance is invalid")
+    return (group == WEEKLY_PRESENTATION_SINGLE_CLUSTER, target_id)
+
+
+def _order_weekly_manifests(
+    blind: dict[str, Any],
+    private_index: dict[str, Any],
+    ordered_item_ids: Iterable[str],
+) -> None:
+    """Bind the tested multi-cluster-first order into both manifest halves."""
+
+    ordered_ids = list(ordered_item_ids)
+    if (
+        not ordered_ids
+        or len(ordered_ids) != len(set(ordered_ids))
+        or any(not isinstance(item_id, str) or not item_id for item_id in ordered_ids)
+    ):
+        raise WeeklyQuizAssemblyError("weekly manifest presentation order is invalid")
+    order = {item_id: index for index, item_id in enumerate(ordered_ids)}
+    for name, manifest in (("blind", blind), ("private", private_index)):
+        items = manifest.get("items")
+        if not isinstance(items, list):
+            raise WeeklyQuizAssemblyError(f"{name} weekly manifest has no items")
+        item_ids = [
+            item.get("id") if isinstance(item, Mapping) else None for item in items
+        ]
+        if set(item_ids) != set(ordered_ids) or len(item_ids) != len(ordered_ids):
+            raise WeeklyQuizAssemblyError(
+                f"{name} weekly manifest item IDs differ from the staged order"
+            )
+        items.sort(key=lambda item: order[item["id"]])
+    private_index["blind_manifest_sha256"] = manifest_sha256(blind)
 
 
 def _receptor_complex(
@@ -1236,6 +1336,7 @@ def stage_weekly_quiz(
             workers=target_workers,
         )
     staged_items: list[dict[str, Any]] = []
+    ligand_eligibility_rejections: list[dict[str, Any]] = []
     alignment_warnings: list[dict[str, Any]] = []
     pending_choice_scores: list[
         tuple[dict[str, Any], dict[str, Any]]
@@ -1251,6 +1352,19 @@ def stage_weekly_quiz(
             raise WeeklyQuizAssemblyError(f"target {target_id} differs across method tasks")
         task_receptor_complex, expected_chain_sequences = _receptor_complex(target)
         component_id, heavy_atom_count, ligand_chains, ligand_smiles = _selected_ligand(target)
+        ligand_eligibility = _weekly_ligand_eligibility(
+            component_id,
+            heavy_atom_count,
+            ligand_smiles,
+        )
+        if not ligand_eligibility["passed"]:
+            ligand_eligibility_rejections.append(
+                {
+                    "target_id": target_id,
+                    **ligand_eligibility,
+                }
+            )
+            continue
         for row in ordered_runs:
             expected_version = SUPPORTED_LEGACY_LIGAND_ORDER.get(row["method"])
             if row.get("method_version") != expected_version:
@@ -1579,14 +1693,25 @@ def stage_weekly_quiz(
                 "component_id": component_id,
                 "heavy_atoms": heavy_atom_count,
             },
+            "ligand_eligibility": ligand_eligibility,
             "protein_path": protein_relative,
             "pocket_path": pocket_relative,
             "clustering": clustering,
             "choices": choice_rows,
         }
+        staged_item["presentation_group"] = _weekly_presentation_group(
+            int(clustering["cluster_count"])
+        )
         if alignment_warning is not None:
             staged_item["alignment_warning"] = alignment_warning
         staged_items.append(staged_item)
+
+    if not staged_items:
+        raise WeeklyQuizAssemblyError(
+            "the current ligand eligibility policy rejected every complete target"
+        )
+
+    staged_items.sort(key=_weekly_presentation_key)
 
     if choice_batch_scorer is not None:
         requests = tuple(request for _, request in pending_choice_scores)
@@ -1617,6 +1742,9 @@ def stage_weekly_quiz(
         "round_id": round_id,
         "campaign_id": campaign_id,
         "required_methods": sorted(required_methods),
+        "ligand_eligibility_policy": SELECTION_POLICY_VERSION,
+        "ligand_eligibility_rejections": ligand_eligibility_rejections,
+        "presentation_policy": WEEKLY_PRESENTATION_POLICY,
         "items": staged_items,
         "alignment_warnings": alignment_warnings,
     }
@@ -1635,6 +1763,82 @@ def _aware_timestamp(value: str, field: str) -> str:
     if parsed.tzinfo is None:
         raise WeeklyQuizAssemblyError(f"{field} must include a timezone")
     return value
+
+
+def _validate_staged_ligand_eligibility(
+    stage: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Recompute current ligand eligibility before publication touches storage."""
+
+    if stage.get("ligand_eligibility_policy") != SELECTION_POLICY_VERSION:
+        raise WeeklyQuizAssemblyError("stage ligand eligibility policy is not current")
+    if stage.get("presentation_policy") != WEEKLY_PRESENTATION_POLICY:
+        raise WeeklyQuizAssemblyError("stage weekly presentation policy is not current")
+    items = stage.get("items")
+    if not isinstance(items, list) or not items:
+        raise WeeklyQuizAssemblyError("stage items must be a non-empty list")
+    staged_ids: set[str] = set()
+    normalized_items: list[Mapping[str, Any]] = []
+    for item in items:
+        target_id = item.get("target_id") if isinstance(item, Mapping) else None
+        eligibility = item.get("ligand_eligibility") if isinstance(item, Mapping) else None
+        clustering = item.get("clustering") if isinstance(item, Mapping) else None
+        cluster_count = clustering.get("cluster_count") if isinstance(clustering, Mapping) else None
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_id in staged_ids
+            or not isinstance(eligibility, Mapping)
+        ):
+            raise WeeklyQuizAssemblyError("staged ligand eligibility provenance is invalid")
+        recomputed = _weekly_ligand_eligibility(
+            eligibility.get("component_id"),
+            eligibility.get("heavy_atoms"),
+            eligibility.get("smiles"),
+        )
+        if dict(eligibility) != recomputed or recomputed["passed"] is not True:
+            raise WeeklyQuizAssemblyError(
+                "staged item does not pass the current ligand eligibility policy"
+            )
+        expected_group = _weekly_presentation_group(cluster_count)
+        if item.get("presentation_group") != expected_group:
+            raise WeeklyQuizAssemblyError(
+                "staged item presentation group does not match its cluster count"
+            )
+        staged_ids.add(target_id)
+        normalized_items.append(item)
+    if normalized_items != sorted(normalized_items, key=_weekly_presentation_key):
+        raise WeeklyQuizAssemblyError(
+            "staged items must place multi-cluster systems before single-cluster systems"
+        )
+
+    rejections = stage.get("ligand_eligibility_rejections")
+    if not isinstance(rejections, list):
+        raise WeeklyQuizAssemblyError("stage ligand_eligibility_rejections must be a list")
+    rejected_ids: set[str] = set()
+    normalized_rejections: list[Mapping[str, Any]] = []
+    for rejection in rejections:
+        target_id = rejection.get("target_id") if isinstance(rejection, Mapping) else None
+        if (
+            not isinstance(target_id, str)
+            or not target_id
+            or target_id in staged_ids
+            or target_id in rejected_ids
+        ):
+            raise WeeklyQuizAssemblyError("stage ligand eligibility rejection is invalid")
+        recomputed = _weekly_ligand_eligibility(
+            rejection.get("component_id"),
+            rejection.get("heavy_atoms"),
+            rejection.get("smiles"),
+        )
+        expected = {"target_id": target_id, **recomputed}
+        if dict(rejection) != expected or recomputed["passed"] is not False:
+            raise WeeklyQuizAssemblyError(
+                "stage ligand eligibility rejection does not match the current policy"
+            )
+        rejected_ids.add(target_id)
+        normalized_rejections.append(rejection)
+    return normalized_items, normalized_rejections
 
 
 def _validate_staged_display_alignment_qa(
@@ -1894,7 +2098,14 @@ def publish_staged_weekly_quiz(
 
     # Validate the full stage before the first bucket check or object upload.
     # This keeps a tampered or legacy stage strictly fail-closed.
+    eligible_items, ligand_eligibility_rejections = (
+        _validate_staged_ligand_eligibility(stage)
+    )
     stage_items, alignment_warnings = _validate_staged_display_alignment_qa(stage)
+    if stage_items != eligible_items:
+        raise WeeklyQuizAssemblyError(
+            "stage ligand eligibility and display alignment items differ"
+        )
     supplied_metadata = dict(round_metadata or {})
     reserved_metadata = {
         "stage_sha256",
@@ -1903,6 +2114,10 @@ def publish_staged_weekly_quiz(
         "display_alignment_qa_policy",
         "display_alignment_warnings",
         "display_alignment_warned_target_ids",
+        "ligand_eligibility_policy",
+        "ligand_eligibility_rejections",
+        "ligand_eligibility_rejected_target_ids",
+        "weekly_presentation_policy",
     }
     overlap = reserved_metadata.intersection(supplied_metadata)
     if overlap:
@@ -1974,17 +2189,28 @@ def publish_staged_weekly_quiz(
             "clustering": item.get("clustering"),
             "choices": choices,
         }
+        item_metadata = {
+            "presentation": {
+                "policy": WEEKLY_PRESENTATION_POLICY,
+                "group": item["presentation_group"],
+                "cluster_count": item["clustering"]["cluster_count"],
+            }
+        }
         warning = item.get("alignment_warning")
         if isinstance(warning, Mapping):
-            manifest_item["metadata"] = {
-                "display_alignment": {
-                    "code": warning["code"],
-                    "message": warning["message"],
-                }
+            item_metadata["display_alignment"] = {
+                "code": warning["code"],
+                "message": warning["message"],
             }
+        manifest_item["metadata"] = item_metadata
         manifest_items.append(manifest_item)
 
     blind, private_index = build_blind_manifest(stage["round_id"], manifest_items)
+    _order_weekly_manifests(
+        blind,
+        private_index,
+        (item["id"] for item in manifest_items),
+    )
     private_object = private_coordinator.store_bytes(
         canonical_json(private_index).encode("utf-8"), "application/json"
     )
@@ -1999,6 +2225,20 @@ def publish_staged_weekly_quiz(
         ).encode("utf-8"),
         "application/json",
     )
+    eligibility_rejection_object = private_coordinator.store_bytes(
+        canonical_json(
+            {
+                "schema_version": 1,
+                "round_id": stage["round_id"],
+                "policy": SELECTION_POLICY_VERSION,
+                "rejections": ligand_eligibility_rejections,
+            }
+        ).encode("utf-8"),
+        "application/json",
+    )
+    ligand_eligibility_rejected_target_ids = sorted(
+        row["target_id"] for row in ligand_eligibility_rejections
+    )
     metadata = {
         **supplied_metadata,
         "stage_sha256": declared_digest,
@@ -2011,6 +2251,12 @@ def publish_staged_weekly_quiz(
             for row in alignment_warnings
             if isinstance(row, Mapping) and isinstance(row.get("target_id"), str)
         ),
+        "ligand_eligibility_policy": SELECTION_POLICY_VERSION,
+        "ligand_eligibility_rejections": eligibility_rejection_object,
+        "ligand_eligibility_rejected_target_ids": (
+            ligand_eligibility_rejected_target_ids
+        ),
+        "weekly_presentation_policy": WEEKLY_PRESENTATION_POLICY,
     }
     response: Any = {"status": "uploaded-not-opened"}
     if open_round:
@@ -2039,6 +2285,20 @@ def publish_staged_weekly_quiz(
         "display_alignment_warned_target_ids": metadata[
             "display_alignment_warned_target_ids"
         ],
+        "ligand_eligibility_rejected_target_count": len(
+            ligand_eligibility_rejections
+        ),
+        "ligand_eligibility_rejected_target_ids": (
+            ligand_eligibility_rejected_target_ids
+        ),
+        "multi_cluster_item_count": sum(
+            item["presentation_group"] == WEEKLY_PRESENTATION_MULTI_CLUSTER
+            for item in stage_items
+        ),
+        "single_cluster_item_count": sum(
+            item["presentation_group"] == WEEKLY_PRESENTATION_SINGLE_CLUSTER
+            for item in stage_items
+        ),
         "blind_manifest_sha256": manifest_sha256(blind),
         "private_index": private_object,
         "open_response": response,

@@ -88,9 +88,14 @@ foldarium-pipeline weekly-plan \
 
 The example sequence and ligand are synthetic packaging fixtures, not a scientific quality test. The
 weekly planner fails if even one advertised CAMEO page is unavailable, applies the checked-in
-`cameo-drug-like/v3` filter (including the quiz's ≥15-heavy-atom rule and rejection of disconnected or metal-containing ligands), selects at most one ligand target
+`cameo-drug-like/v4` filter (including the quiz's ≥15-heavy-atom rule and rejection of disconnected, metal-containing, PEG, or triglyceride ligands), selects at most one ligand target
 per distinct polymer set, records unknown prerelease stoichiometry explicitly, and reports the exact GPU
 classes and maximum GPU-seconds before submission.
+
+Weekly assembly revalidates the exact stored task ligand against that same policy before
+downloading or scoring prediction artifacts, records every rejected target privately, and
+rechecks the policy immediately before publication. Published rounds present systems with
+multiple pose clusters first and retain single-cluster systems at the end.
 
 ## Method runtimes
 

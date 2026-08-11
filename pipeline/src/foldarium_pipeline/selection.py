@@ -14,7 +14,7 @@ from typing import Any, Iterable, Mapping
 
 from .sizing import count_smiles_heavy_atoms
 
-SELECTION_POLICY_VERSION = "cameo-drug-like/v3"
+SELECTION_POLICY_VERSION = "cameo-drug-like/v4"
 HEAVY_ATOM_MINIMUM = 15
 
 # Pose quizzes need one drug-like organic molecule, not a disconnected salt,
@@ -49,7 +49,7 @@ ARTIFACT_COMPONENTS = frozenset(
         "COA ACO SAM SAH SFG HEM HEC HEA HEB DHE HAS PLP PMP TPP TDP BTI BTN B12 "
         "COB H4B BH4 MGD PAP UD1 UPG 5GP PNS PLM CLR POV PTY CDL OLA OLB OLC STE "
         "MYR PEE PCW PC1 PEF LHG PGV PGW D10 DD9 HP6 Y01 HC3 PX4 3PE PEK PSC 17F "
-        "PC7 PEV UND DAO LMG MC3 9PE PLC SPH CHS CHD EIC ARA HTG PX2"
+        "PC7 PEV UND DAO LMG MC3 9PE PLC SPH CHS CHD EIC ARA HTG PX2 P4K TGL"
     ).split()
 )
 
@@ -89,6 +89,35 @@ def ligand_heavy_atoms(ligand: Mapping[str, Any]) -> int:
     return count_smiles_heavy_atoms(smiles)
 
 
+def ligand_rejection_reason(
+    ligand: Mapping[str, Any],
+    *,
+    heavy_atom_minimum: int = HEAVY_ATOM_MINIMUM,
+) -> str | None:
+    """Return the current versioned rejection code for one ligand, if any."""
+
+    if isinstance(heavy_atom_minimum, bool) or not isinstance(heavy_atom_minimum, int):
+        raise SelectionError("heavy_atom_minimum must be a positive integer")
+    if heavy_atom_minimum < 1:
+        raise SelectionError("heavy_atom_minimum must be a positive integer")
+    component = ligand.get("component_id")
+    smiles = ligand.get("smiles")
+    if not isinstance(component, str) or not component.strip():
+        return "invalid-component-id"
+    if component.strip().upper() in ARTIFACT_COMPONENTS:
+        return "artifact-component"
+    if not isinstance(smiles, str) or not smiles.strip():
+        return "missing-smiles"
+    smiles = smiles.strip()
+    if "." in smiles:
+        return "disconnected-smiles"
+    if _smiles_contains_metal(smiles):
+        return "metal-containing-smiles"
+    if ligand_heavy_atoms({"smiles": smiles}) < heavy_atom_minimum:
+        return "below-heavy-atom-minimum"
+    return None
+
+
 def select_ligand(
     ligands: Iterable[Mapping[str, Any]],
     *,
@@ -96,27 +125,18 @@ def select_ligand(
 ) -> dict[str, Any] | None:
     """Select the largest eligible ligand, preserving the historical TEP rule."""
 
-    if isinstance(heavy_atom_minimum, bool) or not isinstance(heavy_atom_minimum, int):
-        raise SelectionError("heavy_atom_minimum must be a positive integer")
-    if heavy_atom_minimum < 1:
-        raise SelectionError("heavy_atom_minimum must be a positive integer")
-
     candidates: list[dict[str, Any]] = []
     for raw in ligands:
         ligand = dict(raw)
         component = ligand.get("component_id")
         smiles = ligand.get("smiles")
-        if not isinstance(component, str) or not component.strip():
+        if ligand_rejection_reason(
+            ligand, heavy_atom_minimum=heavy_atom_minimum
+        ) is not None:
             continue
         component = component.strip().upper()
-        if component in ARTIFACT_COMPONENTS or not isinstance(smiles, str) or not smiles.strip():
-            continue
         smiles = smiles.strip()
-        if "." in smiles or _smiles_contains_metal(smiles):
-            continue
         heavy_atoms = ligand_heavy_atoms(ligand)
-        if heavy_atoms < heavy_atom_minimum:
-            continue
         ligand.update(component_id=component, smiles=smiles, heavy_atoms=heavy_atoms)
         candidates.append(ligand)
 
@@ -137,5 +157,6 @@ __all__ = [
     "SELECTION_POLICY_VERSION",
     "SelectionError",
     "ligand_heavy_atoms",
+    "ligand_rejection_reason",
     "select_ligand",
 ]

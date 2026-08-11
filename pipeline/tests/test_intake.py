@@ -12,7 +12,7 @@ from foldarium_pipeline.intake import (
     target_from_cameo,
     target_from_wwpdb,
 )
-from foldarium_pipeline.selection import select_ligand
+from foldarium_pipeline.selection import ligand_rejection_reason, select_ligand
 
 
 SEQUENCE_TSV = (
@@ -88,6 +88,38 @@ class SelectionTests(unittest.TestCase):
             "DRG",
         )
         self.assertIsNone(select_ligand([disconnected, organometallic]))
+
+    def test_rejects_reviewed_polyethylene_glycol_and_triglyceride_components(self) -> None:
+        polyethylene_glycol = {
+            "component_id": "P4K",
+            "smiles": "OCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCO",
+        }
+        triglyceride = {
+            "component_id": "TGL",
+            "smiles": "C" * 57,
+        }
+
+        self.assertIsNone(select_ligand([polyethylene_glycol, triglyceride]))
+        self.assertEqual(
+            ligand_rejection_reason(polyethylene_glycol), "artifact-component"
+        )
+        self.assertEqual(
+            ligand_rejection_reason(triglyceride), "artifact-component"
+        )
+
+    def test_records_disconnected_and_metal_rejection_reasons(self) -> None:
+        self.assertEqual(
+            ligand_rejection_reason(
+                {"component_id": "402", "smiles": "NCCS.[Fe+2].C#O"}
+            ),
+            "disconnected-smiles",
+        )
+        self.assertEqual(
+            ligand_rejection_reason(
+                {"component_id": "MTL", "smiles": "CCCCCCCCCCCCCCC[Fe+2]"}
+            ),
+            "metal-containing-smiles",
+        )
 
 
 class WwPdbTests(unittest.TestCase):

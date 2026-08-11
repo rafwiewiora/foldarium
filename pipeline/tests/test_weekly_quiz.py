@@ -135,6 +135,51 @@ class FakeCoordinator:
 
 
 class WeeklyQuizPairSelectionTests(unittest.TestCase):
+    def test_revalidates_historical_ligands_and_records_exact_reason(self) -> None:
+        eligible = weekly_quiz_module._weekly_ligand_eligibility(
+            "DRG", 15, "C" * 15
+        )
+        disconnected = weekly_quiz_module._weekly_ligand_eligibility(
+            "402", 18, "NCCS.[Fe+2].C#O.C#N.CCCCCCCCCCCCCCC"
+        )
+        peg = weekly_quiz_module._weekly_ligand_eligibility(
+            "P4K", 46, "O" + "CCO" * 15
+        )
+
+        self.assertTrue(eligible["passed"])
+        self.assertIsNone(eligible["reason"])
+        self.assertFalse(disconnected["passed"])
+        self.assertEqual(disconnected["reason"], "disconnected-smiles")
+        self.assertFalse(peg["passed"])
+        self.assertEqual(peg["reason"], "artifact-component")
+
+    def test_binds_multi_cluster_first_order_into_both_manifests(self) -> None:
+        blind = {
+            "round_id": "preview",
+            "items": [{"id": "single"}, {"id": "multi-b"}, {"id": "multi-a"}],
+        }
+        private = {
+            "round_id": "preview",
+            "items": [{"id": "multi-a"}, {"id": "single"}, {"id": "multi-b"}],
+        }
+
+        weekly_quiz_module._order_weekly_manifests(
+            blind, private, ["multi-a", "multi-b", "single"]
+        )
+
+        self.assertEqual(
+            [item["id"] for item in blind["items"]],
+            ["multi-a", "multi-b", "single"],
+        )
+        self.assertEqual(
+            [item["id"] for item in private["items"]],
+            ["multi-a", "multi-b", "single"],
+        )
+        self.assertEqual(
+            private["blind_manifest_sha256"],
+            weekly_quiz_module.manifest_sha256(blind),
+        )
+
     def test_keeps_newest_complete_pair_and_reports_replacement_runs(self) -> None:
         rows = [
             {"target_id": "complete", "method": "boltz2", "run_id": "boltz-new"},
@@ -574,6 +619,70 @@ class PairwisePoseDistanceTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class WeeklyQuizAssemblyTests(unittest.TestCase):
+    def test_filters_ineligible_historical_ligand_before_download_or_scoring(self) -> None:
+        valid_target = target("2026-08-08_valid")
+        invalid_target = target("2026-08-08_disconnected")
+        invalid_smiles = "NCCS.[Fe+2].C#O.C#N.CCCCCCCCCCCCCCC"
+        invalid_target["entities"][1]["smiles"] = invalid_smiles
+        invalid_target["metadata"]["selected_ligand"] = {
+            "component_id": "402",
+            "heavy_atoms": 18,
+        }
+        valid_openfold, valid_openfold_uri = run_row(
+            "openfold3", pdb_fixture(0.0), target_payload=valid_target
+        )
+        valid_boltz, valid_boltz_uri = run_row(
+            "boltz2", pdb_fixture(20.0), target_payload=valid_target
+        )
+        invalid_openfold, invalid_openfold_uri = run_row(
+            "openfold3", pdb_fixture(40.0), target_payload=invalid_target
+        )
+        invalid_boltz, invalid_boltz_uri = run_row(
+            "boltz2", pdb_fixture(60.0), target_payload=invalid_target
+        )
+        downloads = {
+            valid_openfold_uri: pdb_fixture(0.0),
+            valid_boltz_uri: pdb_fixture(20.0),
+            invalid_openfold_uri: pdb_fixture(40.0),
+            invalid_boltz_uri: pdb_fixture(60.0),
+        }
+        downloaded: list[str] = []
+
+        def download(uri, **_):
+            downloaded.append(uri)
+            return downloads[uri]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = stage_weekly_quiz(
+                [valid_openfold, valid_boltz, invalid_openfold, invalid_boltz],
+                temporary,
+                round_id="weekly-filtered",
+                campaign_id="weekly-2026-08-08",
+                downloader=download,
+            )
+
+        self.assertEqual(
+            [item["target_id"] for item in stage["items"]], ["2026-08-08_valid"]
+        )
+        self.assertEqual(
+            stage["ligand_eligibility_rejections"],
+            [
+                {
+                    "target_id": "2026-08-08_disconnected",
+                    "policy": "cameo-drug-like/v4",
+                    "passed": False,
+                    "component_id": "402",
+                    "heavy_atoms": 18,
+                    "smiles": invalid_smiles,
+                    "smiles_sha256": hashlib.sha256(
+                        invalid_smiles.encode("utf-8")
+                    ).hexdigest(),
+                    "reason": "disconnected-smiles",
+                }
+            ],
+        )
+        self.assertEqual(set(downloaded), {valid_openfold_uri, valid_boltz_uri})
+
     class InlineProcessPool:
         """Exercise process orchestration deterministically in the unit sandbox."""
 
@@ -765,7 +874,15 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=download,
                 choice_scorer=score_choice,
             )
-            self.assertEqual(stage["schema_version"], 9)
+            self.assertEqual(stage["schema_version"], 10)
+            self.assertEqual(
+                stage["ligand_eligibility_policy"], "cameo-drug-like/v4"
+            )
+            self.assertEqual(stage["ligand_eligibility_rejections"], [])
+            self.assertEqual(
+                stage["presentation_policy"],
+                weekly_quiz_module.WEEKLY_PRESENTATION_POLICY,
+            )
             self.assertEqual(stage["alignment_warnings"], [])
             self.assertEqual(len(stage["items"]), 1)
             self.assertEqual(len(stage["items"][0]["choices"]), 2)
@@ -797,6 +914,11 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     "prolif_hbond_residue_count",
                 )
             self.assertEqual(stage["items"][0]["clustering"]["cluster_count"], 1)
+            self.assertTrue(stage["items"][0]["ligand_eligibility"]["passed"])
+            self.assertEqual(
+                stage["items"][0]["presentation_group"],
+                weekly_quiz_module.WEEKLY_PRESENTATION_SINGLE_CLUSTER,
+            )
             self.assertEqual(
                 sum(choice["is_rep"] for choice in stage["items"][0]["choices"]),
                 1,
@@ -845,10 +967,22 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(summary["choice_count"], 2)
             self.assertEqual(summary["display_alignment_warned_target_count"], 0)
             self.assertEqual(summary["display_alignment_warned_target_ids"], [])
+            self.assertEqual(summary["ligand_eligibility_rejected_target_count"], 0)
+            self.assertEqual(summary["ligand_eligibility_rejected_target_ids"], [])
+            self.assertEqual(summary["multi_cluster_item_count"], 0)
+            self.assertEqual(summary["single_cluster_item_count"], 1)
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
             self.assertNotIn("run_id", json.dumps(blind))
             self.assertNotIn("clustering", blind["items"][0])
+            self.assertEqual(
+                blind["items"][0]["metadata"]["presentation"],
+                {
+                    "policy": weekly_quiz_module.WEEKLY_PRESENTATION_POLICY,
+                    "group": weekly_quiz_module.WEEKLY_PRESENTATION_SINGLE_CLUSTER,
+                    "cluster_count": 1,
+                },
+            )
             self.assertEqual(len(blind["items"][0]["choices"]), 2)
             self.assertTrue(all("cluster_id" in choice for choice in blind["items"][0]["choices"]))
             self.assertTrue(all("is_rep" in choice for choice in blind["items"][0]["choices"]))
@@ -877,11 +1011,21 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             )
             private_index = json.loads(private.stored[0][0])
             warning_index = json.loads(private.stored[1][0])
+            eligibility_index = json.loads(private.stored[2][0])
             self.assertEqual(
                 warning_index,
                 {
                     "policy": weekly_quiz_module.DISPLAY_ALIGNMENT_QA_POLICY,
                     "warnings": [],
+                    "round_id": "weekly-2026-08-08",
+                    "schema_version": 1,
+                },
+            )
+            self.assertEqual(
+                eligibility_index,
+                {
+                    "policy": "cameo-drug-like/v4",
+                    "rejections": [],
                     "round_id": "weekly-2026-08-08",
                     "schema_version": 1,
                 },
