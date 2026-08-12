@@ -221,6 +221,32 @@ print(json.dumps(report, sort_keys=True))
     expected_digest = profile_digest(profile)
     if not isinstance(report, dict) or report.get("config_sha256") != expected_digest:
         raise RuntimeError("deployed Modal configuration digest does not match reviewed profile")
+    reviewed = profile["environment"]
+    assert isinstance(reviewed, dict)
+    expected_report = {
+        "app_name": profile["app_name"],
+        "config_sha256": expected_digest,
+        "weekly": {
+            "enabled": reviewed["FOLDARIUM_ENABLE_WEEKLY_CRON"] == "1",
+            "cron": reviewed["FOLDARIUM_WEEKLY_CRON"],
+            "hook": reviewed["FOLDARIUM_WEEKLY_HOOK"],
+            "register": reviewed["FOLDARIUM_WEEKLY_REGISTER"] == "1",
+            "submit": reviewed["FOLDARIUM_WEEKLY_SUBMIT"] == "1",
+            "max_targets": reviewed["FOLDARIUM_WEEKLY_MAX_TARGETS"],
+            "gpu_class": reviewed["FOLDARIUM_WEEKLY_GPU_CLASS"],
+            "public_quiz_bucket": reviewed["FOLDARIUM_PUBLIC_QUIZ_BUCKET"],
+            "prediction_max_containers": int(
+                reviewed["FOLDARIUM_PREDICTION_MAX_CONTAINERS"]
+            ),
+        },
+        "wednesday_reveal": {
+            "enabled": reviewed["FOLDARIUM_ENABLE_WEDNESDAY_REVEAL"] == "1",
+            "cron": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_CRON"],
+            "publish": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"] == "1",
+        },
+    }
+    if report != expected_report:
+        raise RuntimeError("deployed Modal configuration does not match reviewed profile")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
