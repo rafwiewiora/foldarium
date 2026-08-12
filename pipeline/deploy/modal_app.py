@@ -448,6 +448,7 @@ if modal is not None:
     # Foldarium-owned OCI image and pin the resulting Artifact Registry digest.
     boltz2_image = _add_core(
         modal.Image.debian_slim(python_version="3.12")
+        .apt_install("git")
         .uv_pip_install(BOLTZ2_PACKAGE)
         .env({"BOLTZ_CACHE": BOLTZ_CACHE_ROOT})
     )
