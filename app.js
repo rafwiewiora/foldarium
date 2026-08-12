@@ -777,6 +777,21 @@ function choiceEntriesForSidebar() {
   return visibleChoices().map((choice, choiceIndex) => ({ choice, choiceIndex,
     cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }));
 }
+function weeklyGridPageIndexForChoice(choice) {
+  if (cur?.item?.source !== 'weekly' || !choice) return gridMethodIndex;
+  const index = allGridEntries().findIndex(entry => sameChoice(entry.choice, choice));
+  return index < 0 ? gridMethodIndex : Math.floor(index / GRID_PAGE_SIZE);
+}
+async function pickSidebarEntry(entry) {
+  await onPick(entry.choiceIndex, displayMode === 'grid' ? entry.choice : null);
+  if (displayMode !== 'grid' || cur?.item?.source !== 'weekly') return;
+  const pageIndex = weeklyGridPageIndexForChoice(entry.choice);
+  if (pageIndex === gridMethodIndex || interactionBlocked()) return;
+  await viewerRebuild.enqueue(
+    () => { gridMethodIndex = pageIndex; },
+    () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
+  );
+}
 function gridChoiceSelected(choice) {
   if (!cur?.selected || cur.selected.none) return false;
   return cur.selectionExact ? sameChoice(choice, cur.selected) : choice.cluster === cur.selected.cluster;
@@ -1488,7 +1503,7 @@ function renderUI() {
     } else nm = `Pose ${c.label}`;
     b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
     attachPoseInfo(b, weeklyEntryEvidence(entry));
-    b.onclick = () => onPick(k, displayMode === 'grid' ? c : null);
+    b.onclick = () => pickSidebarEntry(entry);
     box.appendChild(b);
   });
   if (difficulty === 'hard') {                          // the detect-game option

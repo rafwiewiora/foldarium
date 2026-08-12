@@ -1402,6 +1402,47 @@ test('Weekly Grid pagination keeps the complete ballot in the sidebar', async ()
     'classic method pages retain their existing method-specific sidebar');
 });
 
+test('selecting an off-page Weekly sidebar pose opens its Grid page', async () => {
+  const app = await readApp();
+  const choices = Array.from({ length: 10 }, (_, choiceIndex) => ({ id: choiceIndex }));
+  const entries = choices.map((choice, choiceIndex) => ({ choice, choiceIndex }));
+  const calls = [];
+  const sandbox = {
+    displayMode: 'grid',
+    cur: { item: { source: 'weekly' } },
+    gridMethodIndex: 0,
+    GRID_PAGE_SIZE: 9,
+    allGridEntries: () => entries,
+    sameChoice: (left, right) => left === right,
+    interactionBlocked: () => false,
+    onPick: async (choiceIndex, choice) => { calls.push(['pick', choiceIndex, choice.id]); },
+    renderGridPages: () => { calls.push(['pages', sandbox.gridMethodIndex]); },
+    renderUI: () => { calls.push(['ui', sandbox.gridMethodIndex]); },
+    recordAppEvent: event => { calls.push(['trace', event]); },
+    viewerRebuild: {
+      enqueue: async (mutate, finalize) => {
+        await mutate();
+        calls.push(['rebuild', sandbox.gridMethodIndex]);
+        await finalize();
+      },
+    },
+  };
+  sandbox.weeklyGridPageIndexForChoice = evaluateDeclaration(
+    app, 'function weeklyGridPageIndexForChoice(choice)', sandbox);
+  const pickSidebarEntry = evaluateDeclaration(app, 'async function pickSidebarEntry(entry)', sandbox);
+
+  await pickSidebarEntry(entries[9]);
+
+  assert.equal(sandbox.gridMethodIndex, 1);
+  assert.deepEqual(calls, [
+    ['pick', 9, 9],
+    ['rebuild', 1],
+    ['pages', 1],
+    ['ui', 1],
+    ['trace', 'grid_page_changed'],
+  ]);
+});
+
 test('documents the standalone leaderboard page and the benchmark upload prerequisite', async () => {
   const readme = await readReadme();
 
