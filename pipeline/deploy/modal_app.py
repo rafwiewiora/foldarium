@@ -4,9 +4,9 @@ This module intentionally contains no campaign logic, database schema, or model
 input translation.  Those live in ``foldarium_pipeline`` so the same task can be
 executed locally, on Modal, or in a GCP job.
 
-Install Modal only in the deployment environment, then run::
+Install Modal only in the deployment environment, then use the reviewed wrapper::
 
-    modal deploy pipeline/deploy/modal_app.py
+    python3 pipeline/deploy/deploy_profile.py
 
 The module is importable without Modal installed so local tests do not need the
 deployment SDK.
@@ -20,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +42,23 @@ WEEKLY_SCORING_MAX_WORKERS = 8
 WEEKLY_ASSEMBLY_TARGET_WORKERS = 8
 WEEKLY_ASSEMBLY_TIMEOUT_SECONDS = 45 * 60
 PUBLIC_BUCKET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+DEPLOYMENT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+DEPLOYMENT_CONFIG_SHA256_ENV = "FOLDARIUM_DEPLOYMENT_CONFIG_SHA256"
+
+
+def _require_reviewed_deployment() -> None:
+    """Refuse a direct deploy that would silently discard reviewed gates."""
+
+    if "deploy" not in sys.argv[1:]:
+        return
+    digest = os.environ.get(DEPLOYMENT_CONFIG_SHA256_ENV, "")
+    if not DEPLOYMENT_DIGEST.fullmatch(digest):
+        raise RuntimeError(
+            "direct deployment is disabled; use pipeline/deploy/deploy_profile.py"
+        )
+
+
+_require_reviewed_deployment()
 
 
 def _weekly_public_bucket(explicit: str | None = None) -> str:
@@ -187,6 +205,7 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_WEEKLY_GPU_CLASS",
         PUBLIC_QUIZ_BUCKET_ENV,
         WEDNESDAY_REVEAL_PUBLISH_ENV,
+        DEPLOYMENT_CONFIG_SHA256_ENV,
     )
     if key in os.environ
 }
@@ -441,6 +460,37 @@ if modal is not None:
             *QUIZ_EVALUATION_PACKAGES
         )
     ).env(WEEKLY_RUNTIME_ENV)
+
+    @app.function(
+        image=control_image,
+        cpu=0.25,
+        memory=256,
+        timeout=60,
+        max_containers=1,
+    )
+    def deployment_config() -> dict[str, Any]:
+        """Return only non-secret deployment gates for post-deploy verification."""
+
+        return {
+            "app_name": APP_NAME,
+            "config_sha256": os.environ.get(DEPLOYMENT_CONFIG_SHA256_ENV),
+            "weekly": {
+                "enabled": WEEKLY_CRON_ENABLED,
+                "cron": WEEKLY_CRON_UTC,
+                "hook": os.environ.get(WEEKLY_HOOK_ENV),
+                "register": os.environ.get("FOLDARIUM_WEEKLY_REGISTER") == "1",
+                "submit": os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") == "1",
+                "max_targets": os.environ.get("FOLDARIUM_WEEKLY_MAX_TARGETS"),
+                "gpu_class": os.environ.get("FOLDARIUM_WEEKLY_GPU_CLASS"),
+                "public_quiz_bucket": os.environ.get(PUBLIC_QUIZ_BUCKET_ENV),
+                "prediction_max_containers": PREDICTION_MAX_CONTAINERS,
+            },
+            "wednesday_reveal": {
+                "enabled": WEDNESDAY_REVEAL_ENABLED,
+                "cron": WEDNESDAY_REVEAL_CRON_UTC,
+                "publish": _wednesday_publish_enabled(None),
+            },
+        }
 
     @app.function(
         image=openfold3_image,

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "profile_name": "molspace-main-reviewed",
+  "modal_profile": "molspace-production",
+  "modal_environment": "main",
+  "app_name": "foldarium-predictions",
+  "entrypoint": "pipeline/deploy/modal_app.py",
+  "environment": {
+    "FOLDARIUM_ENABLE_WEEKLY_CRON": "1",
+    "FOLDARIUM_WEEKLY_CRON": "*/15 3-6 * * 6",
+    "FOLDARIUM_WEEKLY_HOOK": "foldarium_pipeline.weekly:modal_weekly_hook",
+    "FOLDARIUM_WEEKLY_REGISTER": "1",
+    "FOLDARIUM_WEEKLY_SUBMIT": "1",
+    "FOLDARIUM_WEEKLY_MAX_TARGETS": "2",
+    "FOLDARIUM_WEEKLY_GPU_CLASS": "l4",
+    "FOLDARIUM_PUBLIC_QUIZ_BUCKET": "foldarium-weekly-quiz",
+    "FOLDARIUM_PREDICTION_MAX_CONTAINERS": "5",
+    "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL": "1",
+    "FOLDARIUM_WEDNESDAY_REVEAL_CRON": "5 0-5 * * 3",
+    "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH": "0"
+  },
+  "review_notes": {
+    "weekly_max_targets": "Two is the last explicitly reviewed production safety cap, not the desired permanent weekly volume. Raising it requires a separate product and spend review.",
+    "wednesday_publish": "Standing scheduled calls evaluate only. Publication requires a separately reviewed explicit manual action."
+  }
+}

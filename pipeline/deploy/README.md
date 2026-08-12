@@ -18,8 +18,26 @@ not deploy or download models merely by existing in the repository.
    Add any other storage credentials required by the core worker to this secret;
    never put values in this repo.
 4. Validate with a dry-run task in the core CLI before spending GPU time.
-5. Deploy with `modal deploy pipeline/deploy/modal_app.py` from the repository
-   root.
+5. Validate the reviewed non-secret production profile from the repository root:
+
+   ```bash
+   python3 pipeline/deploy/deploy_profile.py
+   ```
+
+   The default is validation-only. Never deploy this app with a bare
+   `modal deploy`: its schedules and mutation gates are import-time settings and
+   a bare redeploy silently removes them. After reviewing the printed config and
+   commit, the explicit production form is:
+
+   ```bash
+   python3 pipeline/deploy/deploy_profile.py --apply \
+     --confirm molspace-production/main/foldarium-predictions
+   ```
+
+   The wrapper requires a clean worktree, scrubs ambient `FOLDARIUM_*` values,
+   supplies every gate from `profiles/molspace-main.json`, and verifies the
+   deployed configuration digest through the read-only `deployment_config`
+   function. Modal-managed secrets are not part of the profile.
 6. Bootstrap the OpenFold3 checkpoint cache once with
    `modal run pipeline/deploy/modal_app.py::bootstrap_openfold3_cache`. The
    function writes an explicit `setup_openfold --config` at runtime so both
@@ -142,6 +160,17 @@ uses the stored classic four-character PDB target IDs for RCSB coordinates. A
 missing round/index/artifact, digest mismatch, unavailable coordinate, or one
 incomplete evaluation aborts the whole call before publication. Repeated calls
 after a successful reveal return `already-revealed` without rescoring.
+
+The standing `molspace-main` profile explicitly pins publication to `0` so its
+scheduled Wednesday attempts are dry runs. Do not change that standing profile
+to publish; use a separately reviewed explicit manual call when publication is
+authorized.
+
+The same profile retains `FOLDARIUM_WEEKLY_MAX_TARGETS=2`, the last explicitly
+reviewed production spend cap, plus L4 and five containers per prediction
+method. Two targets is a safety setting, not the intended permanent weekly
+volume. Increasing it requires a separate product/spend decision and reviewed
+profile commit before deployment.
 
 Keep the laptop's default Modal profile on `foldariumtest`. The separately
 configured `molspace-production` profile is for Brian's final deployment only;

@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,6 +102,30 @@ class TransientMsaRetrySubmissionTests(unittest.TestCase):
                 ValueError, "safe Storage bucket"
             ):
                 module._weekly_public_bucket(invalid)
+
+    def test_bare_modal_deploy_fails_before_app_construction(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "deploy" / "modal_app.py"
+        script = f"""
+import importlib.util
+import sys
+sys.argv = ["modal", "deploy", {str(path)!r}]
+spec = importlib.util.spec_from_file_location("bare_deploy_test", {str(path)!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+"""
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key != "FOLDARIUM_DEPLOYMENT_CONFIG_SHA256"
+        }
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("direct deployment is disabled", completed.stderr)
 
 
 class WeeklyMetricReuseTests(unittest.TestCase):
