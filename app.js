@@ -1981,6 +1981,7 @@ async function reveal() {
   recordAppEvent('lock_requested');
   revealRequested = true;
   $('#lock').disabled = true;
+  syncQuestionNavigation();
   try {
     if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
       const verdict = $('#verdict');
@@ -1993,6 +1994,7 @@ async function reveal() {
   } finally {
     revealRequested = false;
     if (cur && !cur.revealed) $('#lock').disabled = cur.selected == null;
+    syncQuestionNavigation();
   }
 }
 
