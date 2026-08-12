@@ -120,3 +120,9 @@ completion boundaries. Failed uploads remain in IndexedDB and reuse the same
 idempotency key and payload after reconnect or refresh. Server-side analysis must
 read `replay_weekly_trace_batches_safe`; the browser has RPC-only append access and
 cannot read or alter stored batches.
+
+For the dry-run-only cold archive schema and deterministic offline
+export/verification contract, see
+[`pipeline/docs/weekly-trace-cold-archive.md`](pipeline/docs/weekly-trace-cold-archive.md).
+The foundation adds no upload or deletion operation; compact vote revisions and
+comments remain hot.
