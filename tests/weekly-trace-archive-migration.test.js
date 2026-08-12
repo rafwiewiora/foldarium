@@ -20,6 +20,15 @@ test('cold archive catalog is private, exact, and has no destructive operation',
   assert.match(sql, /archive_record_ordinal/);
   assert.match(sql, /visit_ordinal/);
   assert.match(sql, /accounted_omitted_sequence_count/);
+  assert.match(
+    sql,
+    /foreign key \(session_id\) references public\.weekly_quiz_sessions\(session_id\)/,
+  );
+  assert.match(
+    sql,
+    /foreign key \(round_id\) references public\.weekly_quiz_rounds\(round_id\)/,
+  );
+  assert.doesNotMatch(sql, /weekly_quiz_sessions\(session_id, round_id\)/);
   assert.match(sql, /revoke all on table private\.weekly_trace_archives from authenticated/);
   assert.match(sql, /vote metadata and comments remain hot/);
   assert.doesNotMatch(sql, /create (or replace )?function/);

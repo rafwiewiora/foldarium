@@ -87,8 +87,10 @@ create table private.weekly_trace_archives (
   last_verified_at timestamptz,
   created_at timestamptz not null default clock_timestamp(),
   unique (session_id, content_sha256),
-  foreign key (session_id, round_id)
-    references public.weekly_quiz_sessions(session_id, round_id),
+  foreign key (session_id)
+    references public.weekly_quiz_sessions(session_id),
+  foreign key (round_id)
+    references public.weekly_quiz_rounds(round_id),
   check (
     (first_submitted_at is null and last_submitted_at is null)
     or (first_submitted_at is not null and last_submitted_at >= first_submitted_at)
