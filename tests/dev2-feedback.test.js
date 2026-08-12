@@ -54,7 +54,7 @@ test('tester shell separates inspection, selection, rejection, and optional vote
   assert.match(app, /inspectGridChoice\(cell\.entry, cell\.paneId, 'ligand-click'\)/);
   assert.match(app, /choice_selected/);
   assert.match(app, /choice_rejected/);
-  assert.match(app, /vote_comment: typeof cur\?\.voteCommentText/);
+  assert.match(app, /voteComment: cur\.voteCommentText/);
   assert.match(app, /cur\.voteCommentText = text/);
   assert.match(html, /data-review="select"|grid-review-actions/);
   assert.match(html, /id="vote-comment-enabled"[^>]*checked/);

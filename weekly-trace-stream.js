@@ -1,8 +1,11 @@
 const DATABASE_NAME = 'foldarium-research-v1';
 const DATABASE_VERSION = 1;
 const STORE_NAME = 'weekly-trace-batches';
-const MAX_TRACE_BYTES = 480 * 1024;
+// PostgreSQL validates jsonb::text after parsing. Keep substantial headroom for
+// its normalized textual representation instead of targeting the 480 KiB DB cap.
+export const MAX_WEEKLY_TRACE_CLIENT_BYTES = 300 * 1024;
 const MAX_BATCH_ENTRIES = 500;
+const MAX_QUEUED_BATCHES = 256;
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
 
 function jsonBytes(value) {
@@ -19,15 +22,19 @@ function jsonClone(value) {
 }
 
 const IDENTITY_KEYS = new Set([
-  'display_name', 'participant_name', 'player_name', 'username',
+  'displayname', 'participantname', 'playername', 'username', 'votecomment',
 ]);
+
+function normalizedKey(key) {
+  return String(key).replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
 
 function stripIdentityFields(value) {
   if (Array.isArray(value)) return value.map(stripIdentityFields);
   if (!value || typeof value !== 'object') return value;
   const result = {};
   for (const [key, child] of Object.entries(value)) {
-    if (!IDENTITY_KEYS.has(key.toLowerCase())) result[key] = stripIdentityFields(child);
+    if (!IDENTITY_KEYS.has(normalizedKey(key))) result[key] = stripIdentityFields(child);
   }
   return result;
 }
@@ -102,9 +109,17 @@ export function createWeeklyTraceStream({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   flushIntervalMs = DEFAULT_FLUSH_INTERVAL_MS,
-  maxTraceBytes = MAX_TRACE_BYTES,
+  maxTraceBytes = MAX_WEEKLY_TRACE_CLIENT_BYTES,
   getAppState = () => null,
   onWarning = message => console.warn(message),
+  classifyError = error => {
+    const rawCode = String(error?.code || '');
+    const status = Number(error?.status ?? error?.statusCode);
+    if (status === 400 || status === 401 || status === 403 || status === 404
+      || status === 409 || status === 413 || status === 422) return 'permanent';
+    if (/^(22|23|42|P0|PGRST)/.test(rawCode)) return 'permanent';
+    return 'retryable';
+  },
 } = {}) {
   if (typeof submitBatch !== 'function') throw new Error('Trace batch submitter is required.');
   let session = null;
@@ -115,6 +130,8 @@ export function createWeeklyTraceStream({
   let draining = null;
   let drainRequested = false;
   const volatileRecords = new Map();
+  const acknowledgedThrough = new Map();
+  const undurableVisits = new Set();
   let disposed = false;
 
   const schedule = () => {
@@ -152,6 +169,10 @@ export function createWeeklyTraceStream({
           try {
             await submitBatch(record.payload);
             volatileRecords.delete(record.traceBatchId);
+            acknowledgedThrough.set(record.payload.visitId, Math.max(
+              acknowledgedThrough.get(record.payload.visitId) ?? -1,
+              record.payload.lastSequence,
+            ));
           } catch (error) {
             onWarning(`Thinking trace remains queued in memory: ${error.message}`);
             blocked = true;
@@ -160,10 +181,30 @@ export function createWeeklyTraceStream({
         }
         if (blocked) break;
         for (const record of await store.list()) {
+          if (record.deadLetter) continue;
           try {
             await submitBatch(record.payload);
             await store.delete(record.traceBatchId);
+            acknowledgedThrough.set(record.payload.visitId, Math.max(
+              acknowledgedThrough.get(record.payload.visitId) ?? -1,
+              record.payload.lastSequence,
+            ));
           } catch (error) {
+            const permanent = classifyError(error) === 'permanent';
+            const attempts = (record.attempts ?? 0) + 1;
+            if (permanent) {
+              const deadLetter = {
+                reason: 'permanent_submission_error',
+                attempts,
+                failedAt: now(),
+                message: String(error?.message || 'unknown error').slice(0, 240),
+              };
+              await store.put({ ...record, attempts, deadLetter });
+              undurableVisits.add(record.payload.visitId);
+              onWarning(`Thinking trace batch needs attention (${deadLetter.reason}); later batches will continue.`);
+              continue;
+            }
+            await store.put({ ...record, attempts });
             onWarning(`Thinking trace remains queued: ${error.message}`);
             blocked = true;
             break;
@@ -179,12 +220,51 @@ export function createWeeklyTraceStream({
   };
 
   const persist = record => {
-    persistence = persistence.catch(() => {}).then(() => store.put(record)).catch(error => {
-      volatileRecords.set(record.traceBatchId, record);
-      onWarning(`Thinking trace could not be queued: ${error.message}`);
+    const queued = persistence.catch(() => {}).then(async () => {
+      try {
+        const queuedRecords = await store.list();
+        if (queuedRecords.length >= MAX_QUEUED_BATCHES) {
+          undurableVisits.add(record.payload.visitId);
+          onWarning('Thinking trace queue is full; this visit will retain the legacy vote snapshot.');
+          return false;
+        }
+        await store.put(record);
+        return true;
+      } catch (error) {
+        volatileRecords.set(record.traceBatchId, record);
+        onWarning(`Thinking trace could not be queued: ${error.message}`);
+        return false;
+      }
     });
-    void persistence.then(drain).catch(() => {});
-    return persistence;
+    persistence = queued;
+    void queued.then(drain).catch(() => {});
+    return queued;
+  };
+
+  const visitHasVolatileRecords = (visitId, throughSequence) => (
+    [...volatileRecords.values()].some(candidate => (
+      candidate.payload.visitId === visitId
+      && candidate.payload.firstSequence <= throughSequence
+    ))
+  );
+
+  const storeHasCoverage = async (visitId, throughSequence) => {
+    if (undurableVisits.has(visitId)) return false;
+    const records = await store.list();
+    const intervals = records.filter(record => (
+      !record.deadLetter
+      &&
+      record.payload.visitId === visitId
+      && record.payload.firstSequence <= throughSequence
+    )).map(record => [record.payload.firstSequence, record.payload.lastSequence])
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    let covered = acknowledgedThrough.get(visitId) ?? -1;
+    for (const [first, last] of intervals) {
+      if (first > covered + 1) return false;
+      covered = Math.max(covered, last);
+      if (covered >= throughSequence) return true;
+    }
+    return covered >= throughSequence;
   };
 
   const takeBatch = reason => {
@@ -207,7 +287,11 @@ export function createWeeklyTraceStream({
       reason,
       trace: {
         version: 1,
+        stream_schema_version: 2,
+        molstar_version: '4.6.0',
         visit_id: visit.visitId,
+        visit_started_at: visit.startedAt,
+        visit_ordinal: visit.ordinal,
         entries: taken,
       },
       appState: normalizedState(),
@@ -218,7 +302,7 @@ export function createWeeklyTraceStream({
   const stream = {
     startSession({ sessionId, roundId }) {
       if (!sessionId || !roundId) throw new Error('Trace session identity is invalid.');
-      session = { sessionId, roundId };
+      session = { sessionId, roundId, nextVisitOrdinal: 0, lastVisitStartedAt: -1 };
       disposed = false;
       schedule();
       void drain();
@@ -229,7 +313,16 @@ export function createWeeklyTraceStream({
         throw new Error('Trace visit identity is invalid.');
       }
       if (visit && entries.length) void stream.flush('navigation');
-      visit = { itemId, questionIndex, visitId };
+      const startedAt = Math.max(now(), session.lastVisitStartedAt + 1);
+      session.lastVisitStartedAt = startedAt;
+      visit = {
+        itemId,
+        questionIndex,
+        visitId,
+        lastSequence: null,
+        startedAt,
+        ordinal: session.nextVisitOrdinal++,
+      };
       entries = [];
       schedule();
       return visitId;
@@ -239,6 +332,13 @@ export function createWeeklyTraceStream({
       if (!session || !visit || !rawEntry || typeof rawEntry !== 'object') return false;
       let entry;
       try { entry = stripIdentityFields(jsonClone(rawEntry)); } catch { return false; }
+      const expectedSequence = visit.lastSequence === null ? 0 : visit.lastSequence + 1;
+      if (!Number.isInteger(entry.seq) || entry.seq !== expectedSequence) {
+        undurableVisits.add(visit.visitId);
+        onWarning('Thinking trace sequence is discontinuous; this visit will retain the legacy vote snapshot.');
+        return false;
+      }
+      visit.lastSequence = entry.seq;
       if (jsonBytes(entry) > maxTraceBytes - 256) entry = compactOversizedEntry(entry);
       if (entries.length >= MAX_BATCH_ENTRIES) {
         const record = takeBatch('byte_budget');
@@ -259,6 +359,22 @@ export function createWeeklyTraceStream({
       return persist(record).then(drain);
     },
 
+    async checkpoint(reason = 'vote') {
+      if (!visit || !Number.isInteger(visit.lastSequence)) return null;
+      const binding = {
+        visitId: visit.visitId,
+        throughSequence: visit.lastSequence,
+      };
+      const record = takeBatch(reason);
+      let durable = true;
+      if (record) {
+        durable = await persist(record);
+      }
+      if (visitHasVolatileRecords(binding.visitId, binding.throughSequence)) durable = false;
+      else if (durable) durable = await storeHasCoverage(binding.visitId, binding.throughSequence);
+      return { ...binding, durable };
+    },
+
     endVisit(reason = 'navigation') {
       const result = stream.flush(reason);
       visit = null;
@@ -268,6 +384,15 @@ export function createWeeklyTraceStream({
 
     async drain() {
       return drain();
+    },
+
+    async queueStatus() {
+      await persistence;
+      const stored = await store.list();
+      return {
+        queued: stored.filter(record => !record.deadLetter).length + volatileRecords.size,
+        deadLettered: stored.filter(record => !!record.deadLetter).length,
+      };
     },
 
     dispose() {

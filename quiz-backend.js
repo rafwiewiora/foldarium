@@ -496,7 +496,7 @@ export function createQuizBackend({
     },
     async submitWeeklyVoteAttempt({
       voteAttemptId = uuid(), sessionId, roundId, itemId, questionIndex, choiceId, pickedNone,
-      viewerTrace = null, appState = null,
+      viewerTrace = null, appState = null, voteComment = null,
     }) {
       if (!voteAttemptId || !sessionId || !roundId || !itemId || !Number.isInteger(questionIndex)
         || questionIndex < 0 || typeof pickedNone !== 'boolean') {
@@ -511,6 +511,12 @@ export function createQuizBackend({
       }
       const normalizedState = appState == null
         ? null : normalizeJsonObject(appState, 'Weekly app state');
+      const normalizedComment = voteComment == null || String(voteComment).trim() === ''
+        ? null : String(voteComment).trim();
+      if (normalizedComment && (normalizedComment.length > 4000
+        || new TextEncoder().encode(normalizedComment).byteLength > 16000)) {
+        throw new Error('Weekly vote comment is invalid or too large.');
+      }
       const stateFromTrace = normalizedTrace.value?.app_state;
       const submittedState = normalizedState || (stateFromTrace && typeof stateFromTrace === 'object'
         ? normalizeJsonObject(stateFromTrace, 'Weekly app state') : null);
@@ -525,6 +531,7 @@ export function createQuizBackend({
         p_viewer_trace: normalizedTrace.value,
         p_app_state: submittedState,
         p_active_pane_id: submittedState?.active_pane_id || null,
+        p_vote_comment: normalizedComment,
       }, true);
     },
     async submitWeeklyTraceBatch({
@@ -548,13 +555,20 @@ export function createQuizBackend({
       }
       const sequences = normalizedTrace.entries.map(entry => entry?.seq);
       if (normalizedTrace.visit_id !== visitId
+        || normalizedTrace.stream_schema_version !== 2
+        || typeof normalizedTrace.molstar_version !== 'string'
+        || !normalizedTrace.molstar_version
+        || !Number.isInteger(normalizedTrace.visit_started_at)
+        || normalizedTrace.visit_started_at < 0
+        || !Number.isInteger(normalizedTrace.visit_ordinal)
+        || normalizedTrace.visit_ordinal < 0
         || sequences.some(sequence => !Number.isInteger(sequence) || sequence < 0)
-        || sequences.some((sequence, index) => index > 0 && sequence <= sequences[index - 1])
+        || sequences.some((sequence, index) => sequence !== firstSequence + index)
         || sequences[0] !== firstSequence || sequences.at(-1) !== lastSequence) {
         throw new Error('Weekly trace batch sequence binding is invalid.');
       }
-      if (new TextEncoder().encode(JSON.stringify(normalizedTrace)).byteLength > 480 * 1024) {
-        throw new Error('Weekly trace batch exceeds its 491520-byte limit.');
+      if (new TextEncoder().encode(JSON.stringify(normalizedTrace)).byteLength > 300 * 1024) {
+        throw new Error('Weekly trace batch exceeds its 307200-byte client limit.');
       }
       const normalizedState = appState == null
         ? null : normalizeJsonObject(appState, 'Weekly trace app state', 64 * 1024);

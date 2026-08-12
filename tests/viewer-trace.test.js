@@ -234,6 +234,45 @@ test('marks the trace truncated at 100 entries', () => {
   assert.equal(plugin.cameraReads, 0);
 });
 
+test('weekly continuous mode keeps semantic events after visual snapshot truncation', () => {
+  const streamed = [];
+  const recorder = createViewerTraceRecorder({
+    plugin: fakePlugin(),
+    maxEntries: 2,
+    shouldContinueSemanticStream: () => true,
+    onEntry: entry => streamed.push(structuredClone(entry)),
+  });
+  recorder.start();
+  recorder.captureState();
+  assert.equal(recorder.recordAppEvent('choice_rejected', { rejected_choice_ids: ['b'] }), true);
+  assert.equal(recorder.recordAppEvent('vote_submitted', { selected_choice_id: 'a' }), true);
+
+  assert.deepEqual(streamed.map(entry => [entry.seq, entry.kind]), [
+    [0, 'state'], [1, 'state'], [2, 'omitted'], [3, 'app'], [4, 'app'],
+  ]);
+  assert.equal(streamed[2].reason, 'snapshot_limit');
+  assert.equal(recorder.stop().truncated, true);
+});
+
+test('oversized snapshots emit a contiguous omission marker before later app events', () => {
+  const plugin = fakePlugin();
+  plugin.state.getSnapshot = () => ({ data: { text: 'x'.repeat(16_000) } });
+  const streamed = [];
+  const recorder = createViewerTraceRecorder({
+    plugin,
+    maxBytes: 2048,
+    shouldContinueSemanticStream: () => true,
+    onEntry: entry => streamed.push(structuredClone(entry)),
+  });
+  recorder.start();
+  recorder.recordAppEvent('vote_submitted', { selected_choice_id: 'a' });
+
+  assert.deepEqual(streamed.map(entry => entry.seq), [0, 1]);
+  assert.equal(streamed[0].kind, 'omitted');
+  assert.equal(streamed[0].reason, 'single_entry_byte_budget');
+  assert.equal(streamed[1].action, 'vote_submitted');
+});
+
 test('caps snapshots at 100 even when maxEntries exceeds 100', () => {
   const plugin = fakePlugin();
   const recorder = createViewerTraceRecorder({ plugin, maxEntries: 200 });

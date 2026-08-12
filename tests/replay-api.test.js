@@ -133,8 +133,12 @@ test('returns ordered weekly vote attempts and bounded suggestion records from s
     session_id: '00000000-0000-4000-8000-000000000001',
   });
   assert.equal(weekly.statusCode, 200);
-  assert.match(fetchImpl.url, /replay_weekly_vote_attempts_safe/);
-  assert.match(fetchImpl.url, /order=question_index\.asc,submitted_at\.asc/);
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.match(fetchImpl.calls[0].url, /replay_weekly_vote_attempts_safe/);
+  assert.match(fetchImpl.calls[0].url, /vote_comment/);
+  assert.match(fetchImpl.calls[0].url, /order=question_index\.asc,submitted_at\.asc/);
+  assert.match(fetchImpl.calls[1].url, /replay_weekly_trace_batches_safe/);
+  assert.deepEqual(JSON.parse(weekly.body), { attempts: [], batches: [] });
 
   const suggestions = await invoke(handler({ fetchImpl }), {
     password: 'correct horse',

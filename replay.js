@@ -1,4 +1,5 @@
 import { playViewerTrace, validateViewerTrace } from './replay-player.js';
+import { reconstructWeeklyAttempts } from './weekly-trace-replay.js';
 
 const VIEWER_OPTIONS = {
   layoutIsExpanded: false, layoutShowControls: false, layoutShowRemoteState: false,
@@ -413,7 +414,11 @@ async function initReplayPage() {
       throw new Error('Replay request failed');
     }
     if (!response.ok) throw new Error(data?.error || 'Replay request failed');
-    if (!Array.isArray(data)) throw new Error('Replay request failed');
+    if (!Array.isArray(data)
+      && !(payload.action === 'weekly-attempts'
+        && Array.isArray(data?.attempts) && Array.isArray(data?.batches))) {
+      throw new Error('Replay request failed');
+    }
     return data;
   }
 
@@ -488,13 +493,16 @@ async function initReplayPage() {
     answerRequests,
     connectionGeneration,
     playbackUi,
-    requestAnswers: (sessionKey, signal) => {
+    requestAnswers: async (sessionKey, signal) => {
       const session = sessionsById.get(sessionKey);
       if (!session) throw new Error('Select a replay session.');
-      return requestReplay({
+      const response = await requestReplay({
         action: replayActionForSession(session),
         session_id: session.session_id || session.id,
       }, signal);
+      return session.session_kind === 'weekly'
+        ? reconstructWeeklyAttempts(response.attempts, response.batches)
+        : response;
     },
     clearAnswers() {
       answersById.clear();

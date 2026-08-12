@@ -56,12 +56,16 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
       }
       if (body.action === 'weekly-attempts' && validSessionId(body.session_id)) {
         const id = encodeURIComponent(body.session_id);
-        return send(response, 200, await fetchRows(
+        const [attempts, batches] = await Promise.all([fetchRows(
           '/rest/v1/replay_weekly_vote_attempts_safe?select=vote_attempt_id,session_id,'
           + 'round_id,participant_hash,display_name_hash,item_id,question_index,choice_id,'
-          + `picked_none,viewer_trace,app_state,active_pane_id,submitted_at&session_id=eq.${id}`
-          + '&viewer_trace=not.is.null&order=question_index.asc,submitted_at.asc',
-        ));
+          + `picked_none,viewer_trace,app_state,active_pane_id,vote_comment,submitted_at&session_id=eq.${id}`
+          + '&order=question_index.asc,submitted_at.asc'), fetchRows(
+          '/rest/v1/replay_weekly_trace_batches_safe?select=trace_batch_id,session_id,'
+          + 'item_id,question_index,visit_id,first_sequence,last_sequence,trace,app_state,submitted_at'
+          + `&session_id=eq.${id}&order=submitted_at.asc,trace_batch_id.asc&limit=1000`,
+        )]);
+        return send(response, 200, { attempts, batches });
       }
       if (body.action === 'weekly-trace-batches' && validSessionId(body.session_id)) {
         const id = encodeURIComponent(body.session_id);

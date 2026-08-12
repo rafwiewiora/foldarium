@@ -32,6 +32,7 @@ test('flushes one append-only visit batch and removes it only after acknowledgem
     submitBatch: async payload => { submitted.push(payload); },
     setTimer: () => 1,
     clearTimer: () => {},
+    now: () => 1234,
     getAppState: () => ({ item_id: 'item-1', display_mode: 'grid' }),
   });
   stream.startSession({ sessionId: 'session-1', roundId: 'round-1' });
@@ -54,7 +55,11 @@ test('flushes one append-only visit batch and removes it only after acknowledgem
     reason: 'interval',
     trace: {
       version: 1,
+      stream_schema_version: 2,
+      molstar_version: '4.6.0',
       visit_id: 'visit-1',
+      visit_started_at: 1234,
+      visit_ordinal: 0,
       entries: [
         { seq: 0, t_ms: 0, kind: 'app', action: 'question_start' },
         { seq: 1, t_ms: 100, kind: 'camera', camera: { radius: 12 } },
@@ -81,7 +86,7 @@ test('retains an identical idempotent batch through retryable submission failure
   });
   stream.startSession({ sessionId: 'session-2', roundId: 'round-2' });
   stream.startVisit({ itemId: 'item-2', questionIndex: 2 });
-  stream.recordEntry({ seq: 4, t_ms: 90, kind: 'app', action: 'choice_rejected' });
+  stream.recordEntry({ seq: 0, t_ms: 90, kind: 'app', action: 'choice_rejected' });
   await stream.flush('navigation');
   assert.equal(store.records.size, 1);
 
@@ -91,6 +96,97 @@ test('retains an identical idempotent batch through retryable submission failure
   assert.equal(attempts.length, 2);
   assert.deepEqual(attempts[0], attempts[1]);
   assert.equal(attempts[1].traceBatchId, 'batch-2');
+});
+
+test('vote checkpoint returns the exact durable replay boundary while offline', async () => {
+  const store = memoryStore();
+  const stream = createWeeklyTraceStream({
+    store,
+    uuid: uuids('visit-checkpoint', 'batch-checkpoint'),
+    submitBatch: async () => { throw new Error('offline'); },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    onWarning: () => {},
+  });
+  stream.startSession({ sessionId: 'session-checkpoint', roundId: 'round-checkpoint' });
+  stream.startVisit({ itemId: 'item-checkpoint', questionIndex: 3 });
+  stream.recordEntry({ seq: 0, t_ms: 0, kind: 'state', snapshot: {} });
+  stream.recordEntry({ seq: 1, t_ms: 10, kind: 'app', action: 'vote_submitted' });
+
+  assert.deepEqual(await stream.checkpoint('vote'), {
+    visitId: 'visit-checkpoint', throughSequence: 1, durable: true,
+  });
+  assert.equal(store.records.size, 1, 'offline batches remain durable in IndexedDB');
+});
+
+test('vote checkpoint requests the legacy safety snapshot if durable storage fails', async () => {
+  const stream = createWeeklyTraceStream({
+    store: {
+      async put() { throw new Error('quota exceeded'); },
+      async list() { return []; },
+      async delete() {},
+    },
+    uuid: uuids('visit-volatile', 'batch-volatile'),
+    submitBatch: async () => { throw new Error('offline'); },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    onWarning: () => {},
+  });
+  stream.startSession({ sessionId: 'session-volatile', roundId: 'round-volatile' });
+  stream.startVisit({ itemId: 'item-volatile', questionIndex: 2 });
+  stream.recordEntry({ seq: 0, kind: 'state', snapshot: {} });
+  assert.equal((await stream.checkpoint('vote')).durable, false);
+});
+
+test('vote checkpoint waits only for local durability, not a trace network round trip', async () => {
+  const store = memoryStore();
+  let release;
+  const submitting = new Promise(resolve => { release = resolve; });
+  const stream = createWeeklyTraceStream({
+    store,
+    uuid: uuids('visit-fast', 'batch-fast'),
+    submitBatch: async () => submitting,
+    setTimer: () => 1,
+    clearTimer: () => {},
+  });
+  stream.startSession({ sessionId: 'session-fast', roundId: 'round-fast' });
+  stream.startVisit({ itemId: 'item-fast', questionIndex: 0 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'vote_submitted' });
+
+  const checkpoint = await stream.checkpoint('vote');
+  assert.deepEqual(checkpoint, { visitId: 'visit-fast', throughSequence: 0, durable: true });
+  assert.equal(store.records.size, 1);
+  release();
+  await stream.drain();
+});
+
+test('dead-letters a permanent poison batch and continues draining later rows', async () => {
+  const store = memoryStore();
+  const accepted = [];
+  const warnings = [];
+  const stream = createWeeklyTraceStream({
+    store,
+    uuid: uuids('visit-poison', 'batch-poison', 'visit-good', 'batch-good'),
+    submitBatch: async payload => {
+      if (payload.itemId === 'item-poison') throw Object.assign(new Error('invalid row'), { code: '22023' });
+      accepted.push(payload.traceBatchId);
+    },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    onWarning: warning => warnings.push(warning),
+  });
+  stream.startSession({ sessionId: 'session-poison', roundId: 'round-poison' });
+  stream.startVisit({ itemId: 'item-poison', questionIndex: 0 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'question_start' });
+  await stream.flush('navigation');
+  stream.startVisit({ itemId: 'item-good', questionIndex: 1 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'question_start' });
+  await stream.flush('navigation');
+
+  assert.deepEqual(accepted, ['batch-good']);
+  assert.equal(store.records.get('batch-poison').deadLetter.reason, 'permanent_submission_error');
+  assert.deepEqual(await stream.queueStatus(), { queued: 0, deadLettered: 1 });
+  assert.match(warnings.join(' '), /needs attention/);
 });
 
 test('ends visits independently so unsubmitted question exploration is retained', async () => {
@@ -142,6 +238,29 @@ test('strips participant identity fields from queued entries and app state', asy
   assert.deepEqual(submitted[0].trace.entries[0].state, { selected_choice_id: 'choice-1' });
 });
 
+test('strips camelCase identity and dedicated comment text from every streamed location', async () => {
+  const submitted = [];
+  const stream = createWeeklyTraceStream({
+    store: memoryStore(),
+    uuid: uuids('visit-private', 'batch-private'),
+    submitBatch: async payload => { submitted.push(payload); },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    getAppState: () => ({ displayName: 'Rafal', voteComment: 'private note', item_id: 'item-private' }),
+  });
+  stream.startSession({ sessionId: 'session-private', roundId: 'round-private' });
+  stream.startVisit({ itemId: 'item-private', questionIndex: 0 });
+  stream.recordEntry({
+    seq: 0,
+    kind: 'app',
+    state: { participantName: 'Rafal', vote_comment: 'private note', selected_choice_id: 'a' },
+  });
+  await stream.flush('vote');
+
+  assert.doesNotMatch(JSON.stringify(submitted), /Rafal|private note/);
+  assert.deepEqual(submitted[0].appState, { item_id: 'item-private' });
+});
+
 test('splits batches before exceeding the configured byte budget', async () => {
   const submitted = [];
   const stream = createWeeklyTraceStream({
@@ -184,4 +303,45 @@ test('never places more than 500 entries in one trace batch', async () => {
   assert.deepEqual(submitted.map(batch => [batch.firstSequence, batch.lastSequence]), [
     [0, 499], [500, 500],
   ]);
+});
+
+test('fails closed to a legacy vote snapshot on an unexplained sequence gap', async () => {
+  const warnings = [];
+  const stream = createWeeklyTraceStream({
+    store: memoryStore(),
+    uuid: uuids('visit-gap', 'batch-gap'),
+    submitBatch: async () => {},
+    setTimer: () => 1,
+    clearTimer: () => {},
+    onWarning: warning => warnings.push(warning),
+  });
+  stream.startSession({ sessionId: 'session-gap', roundId: 'round-gap' });
+  stream.startVisit({ itemId: 'item-gap', questionIndex: 0 });
+  assert.equal(stream.recordEntry({ seq: 0, kind: 'state', snapshot: {} }), true);
+  assert.equal(stream.recordEntry({ seq: 2, kind: 'app', action: 'vote_submitted' }), false);
+  assert.equal((await stream.checkpoint('vote')).durable, false);
+  assert.match(warnings.join(' '), /discontinuous/);
+});
+
+test('visit ordering remains deterministic when wall-clock timestamps tie', async () => {
+  const submitted = [];
+  const stream = createWeeklyTraceStream({
+    store: memoryStore(),
+    uuid: uuids('visit-order-a', 'batch-order-a', 'visit-order-b', 'batch-order-b'),
+    now: () => 5000,
+    submitBatch: async payload => { submitted.push(payload); },
+    setTimer: () => 1,
+    clearTimer: () => {},
+  });
+  stream.startSession({ sessionId: 'session-order', roundId: 'round-order' });
+  stream.startVisit({ itemId: 'item-a', questionIndex: 0 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'question_start' });
+  await stream.endVisit('navigation');
+  stream.startVisit({ itemId: 'item-b', questionIndex: 1 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'question_start' });
+  await stream.endVisit('navigation');
+
+  assert.deepEqual(submitted.map(batch => [
+    batch.trace.visit_ordinal, batch.trace.visit_started_at,
+  ]), [[0, 5000], [1, 5001]]);
 });

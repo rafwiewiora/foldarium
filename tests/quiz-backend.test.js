@@ -350,6 +350,7 @@ test('persists a named weekly session, append-only traced vote, and contextual s
     pickedNone: false,
     viewerTrace: trace,
     appState,
+    voteComment: '  Strong hydrogen-bond network.  ',
   });
   await backend.submitUserSuggestion({
     sessionId,
@@ -387,6 +388,7 @@ test('persists a named weekly session, append-only traced vote, and contextual s
         p_viewer_trace: trace,
         p_app_state: appState,
         p_active_pane_id: 'pane-0-2',
+        p_vote_comment: 'Strong hydrogen-bond network.',
       },
     },
     {
@@ -436,7 +438,11 @@ test('submits one bounded idempotent weekly thinking-trace batch', async () => {
   const backend = createQuizBackend({ client, storage: memoryStorage() });
   const trace = {
     version: 1,
+    stream_schema_version: 2,
+    molstar_version: '4.6.0',
     visit_id: '00000000-0000-4000-8000-000000000003',
+    visit_started_at: 1000,
+    visit_ordinal: 0,
     entries: [
       { seq: 0, t_ms: 0, kind: 'app', action: 'question_start' },
       { seq: 1, t_ms: 250, kind: 'app', action: 'choice_rejected' },
@@ -494,6 +500,35 @@ test('rejects a trace batch whose visit or sequence bounds do not match its entr
       entries: [{ seq: 1 }, { seq: 2 }],
     },
   }), /sequence binding/);
+  assert.deepEqual(rpcs, []);
+});
+
+test('keeps conservative headroom below the database jsonb text limit', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+  const trace = {
+    version: 1,
+    stream_schema_version: 2,
+    molstar_version: '4.6.0',
+    visit_id: '00000000-0000-4000-8000-000000000013',
+    visit_started_at: 1,
+    visit_ordinal: 0,
+    entries: [{ seq: 0, kind: 'app', action: 'x', state: { text: 'é'.repeat(160_000) } }],
+  };
+  const utf8Bytes = new TextEncoder().encode(JSON.stringify(trace)).byteLength;
+  assert.ok(utf8Bytes > 300 * 1024 && utf8Bytes < 480 * 1024);
+  await assert.rejects(() => backend.submitWeeklyTraceBatch({
+    traceBatchId: '00000000-0000-4000-8000-000000000011',
+    sessionId: '00000000-0000-4000-8000-000000000012',
+    roundId: 'weekly-1',
+    itemId: 'item-3',
+    questionIndex: 3,
+    visitId: trace.visit_id,
+    firstSequence: 0,
+    lastSequence: 0,
+    reason: 'vote',
+    trace,
+  }), /307200-byte client limit/);
   assert.deepEqual(rpcs, []);
 });
 
@@ -558,6 +593,7 @@ test('weekly votes survive an invalid optional viewer trace', async () => {
       p_viewer_trace: null,
       p_app_state: appState,
       p_active_pane_id: null,
+      p_vote_comment: null,
     },
   }]);
 });

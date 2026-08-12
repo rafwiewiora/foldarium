@@ -184,6 +184,7 @@ function subscribe(observable, callback) {
 export function createViewerTraceRecorder({
   plugin,
   onEntry = () => {},
+  shouldContinueSemanticStream = () => false,
   now = () => performance.now(),
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -199,6 +200,8 @@ export function createViewerTraceRecorder({
   let appTrace = [];
   let truncated = false;
   let byteCompacted = false;
+  let visualCaptureActive = false;
+  let visualOmissionReported = false;
   let activePaneId = null;
   let sequence = 0;
   let cameraTimer = null;
@@ -215,12 +218,41 @@ export function createViewerTraceRecorder({
     return pending;
   };
 
-  const stopCaptureWork = () => {
-    active = false;
+  const stopVisualCaptureWork = () => {
+    visualCaptureActive = false;
     if (cameraTimer !== null) clearTimer(cameraTimer);
     cameraTimer = null;
     for (const pending of stateTimers.values()) clearTimer(pending.timer);
     stateTimers.clear();
+  };
+
+  const streamOmission = ({ reason, omittedKind, omittedBytes = null }) => {
+    if (!active) return false;
+    const omission = {
+      kind: 'omitted',
+      t_ms: elapsed(),
+      seq: sequence++,
+      omitted_kind: omittedKind,
+      omitted_entry_count: 1,
+      reason,
+    };
+    if (Number.isInteger(omittedBytes) && omittedBytes >= 0) omission.omitted_bytes = omittedBytes;
+    try { onEntry(omission); } catch (error) {
+      console.warn('Viewer trace omission marker skipped:', error.message);
+    }
+    return true;
+  };
+
+  const stopVisualCaptureWithMarker = reason => {
+    truncated = true;
+    let keepSemanticStream = false;
+    try { keepSemanticStream = !!shouldContinueSemanticStream(); } catch {}
+    if (keepSemanticStream && !visualOmissionReported) {
+      visualOmissionReported = true;
+      streamOmission({ reason, omittedKind: 'visual_capture' });
+    }
+    stopVisualCaptureWork();
+    if (!keepSemanticStream) active = false;
   };
 
   const compactRecordedEntries = () => {
@@ -239,27 +271,31 @@ export function createViewerTraceRecorder({
   };
 
   const appendSnapshot = entry => {
-    if (!active) return false;
+    if (!active || !visualCaptureActive) return false;
     if (snapshots.length >= entryLimit) {
-      truncated = true;
-      stopCaptureWork();
+      stopVisualCaptureWithMarker('snapshot_limit');
       return false;
     }
-    const candidate = { t_ms: elapsed(), seq: sequence++, ...entry };
+    const candidate = { t_ms: elapsed(), seq: sequence, ...entry };
     snapshots.push(candidate);
     if (serializedBytes(candidate) >= byteLimit - 256) {
       snapshots.pop();
       truncated = true;
       byteCompacted = true;
+      streamOmission({
+        reason: 'single_entry_byte_budget',
+        omittedKind: typeof entry?.kind === 'string' ? entry.kind : 'unknown',
+        omittedBytes: serializedBytes(candidate),
+      });
       return false;
     }
+    sequence += 1;
     compactRecordedEntries();
     try { onEntry(candidate); } catch (error) {
       console.warn('Viewer trace stream entry skipped:', error.message);
     }
     if (snapshots.length === entryLimit) {
-      truncated = true;
-      stopCaptureWork();
+      stopVisualCaptureWithMarker('snapshot_limit');
     }
     return true;
   };
@@ -284,7 +320,7 @@ export function createViewerTraceRecorder({
     sourcePaneId = null,
     scope = sourcePaneId ? 'pane' : 'viewer',
   } = {}) => {
-    if (!active) return false;
+    if (!active || !visualCaptureActive) return false;
     try {
       const snapshot = targetPlugin.state.getSnapshot(SNAPSHOT_PARAMS);
       const entry = { kind: 'state', snapshot };
@@ -302,7 +338,7 @@ export function createViewerTraceRecorder({
     targetPlugin = plugin,
     sourcePaneId = activePaneId,
   } = {}) => {
-    if (!active) return false;
+    if (!active || !visualCaptureActive) return false;
     try {
       const camera = cameraSnapshot ?? targetPlugin.canvas3d.camera.getSnapshot();
       const entry = { kind: 'camera', camera };
@@ -316,7 +352,7 @@ export function createViewerTraceRecorder({
   };
 
   const scheduleStateCapture = (key, options) => {
-    if (!active) return;
+    if (!active || !visualCaptureActive) return;
     clearPendingStateTimer(key);
     const timer = setTimer(() => {
       stateTimers.delete(key);
@@ -327,7 +363,7 @@ export function createViewerTraceRecorder({
 
   const cameraChanges = plugin.canvas3d.camera.changed ?? plugin.canvas3d.camera.stateChanged;
   const cameraSubscription = subscribe(cameraChanges, () => {
-    if (!active) return;
+    if (!active || !visualCaptureActive) return;
     if (cameraTimer !== null) clearTimer(cameraTimer);
     cameraTimer = setTimer(() => {
       cameraTimer = null;
@@ -360,11 +396,13 @@ export function createViewerTraceRecorder({
   const recorder = {
     start({ appState, activePaneId: initialPaneId } = {}) {
       active = entryLimit > 0;
+      visualCaptureActive = entryLimit > 0;
       startedAt = now();
       snapshots = [];
       appTrace = [];
       truncated = entryLimit === 0;
       byteCompacted = false;
+      visualOmissionReported = false;
       activePaneId = normalizePaneId(initialPaneId);
       sequence = 0;
       if (cameraTimer !== null) clearTimer(cameraTimer);
@@ -526,11 +564,13 @@ export function createViewerTraceRecorder({
         captureCameraFrom();
       }
       active = false;
+      visualCaptureActive = false;
       return buildCurrentTrace(appState);
     },
 
     dispose() {
-      stopCaptureWork();
+      active = false;
+      stopVisualCaptureWork();
       cameraSubscription.unsubscribe();
       focusSubscription.unsubscribe();
       selectionSubscription.unsubscribe();

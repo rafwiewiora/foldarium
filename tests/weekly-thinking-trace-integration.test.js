@@ -15,8 +15,19 @@ test('weekly thinking trace covers periodic, navigation, vote, visibility, and c
   assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\('navigation'\)/);
   assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\(idx \+ 1 < ITEMS\.length \? 'vote' : 'completion'\)/);
   assert.match(app, /weeklyTraceStream\?\.flush\?\.\('visibility'\)/);
+  assert.match(app, /recordAppEvent\('vote_submitted'\)/);
+  assert.match(app, /await weeklyTraceStream\?\.checkpoint\?\.\('vote'\)/);
+  assert.match(app, /viewerTrace: !traceCheckpoint \|\| traceCheckpoint\.durable === false/);
+  assert.match(app, /voteComment: cur\.voteCommentText/);
   assert.match(app, /selected_choice_ids: selectedChoiceIds/);
   assert.match(app, /rejected_choice_ids:/);
+});
+
+test('classic answer persistence keeps its legacy viewer trace path', async () => {
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop/);
+  assert.match(app, /updateScore\(\); logAnswer\(picked, af3, viewerTrace\)/);
+  assert.match(app, /recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);
 });
 
 test('weekly vote feedback bypasses the Molstar idle gate while classic reveal keeps it', async () => {

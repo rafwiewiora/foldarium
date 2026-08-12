@@ -131,7 +131,7 @@ const interactionBlocked = () => viewerTransitionBusy || revealRequested || lock
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)'
   : (quizSource === 'weekly' ? 'Weekly benchmark' : 'AlphaFold3 (pLDDT-ranked)'));
 
-function currentReplayableAppState() {
+function currentReplayableAppState({ includeVoteComment = false, continuousTrace = null } = {}) {
   const selectionKind = !cur?.selected ? null
     : (cur.selected.none ? 'none' : (cur.selectionExact ? 'exact' : 'cluster'));
   const selectedChoiceIds = cur?.selected && !cur.selected.none
@@ -162,7 +162,10 @@ function currentReplayableAppState() {
     context_choice_id: cur?.contextChoice?._weeklyChoiceId || null,
     rejected_choice_ids: cur ? [...(cur.rejectedChoiceIds || [])].slice(0, 50) : [],
     vote_comment_enabled: quizSource === 'weekly' ? weeklyCommentPromptEnabled : null,
-    vote_comment: typeof cur?.voteCommentText === 'string' ? cur.voteCommentText : null,
+    ...(includeVoteComment && typeof cur?.voteCommentText === 'string'
+      ? { vote_comment: cur.voteCommentText }
+      : {}),
+    ...(continuousTrace ? { continuous_trace: continuousTrace } : {}),
     viewer_busy: viewerTransitionBusy || revealRequested,
     viewport: {
       width: window.innerWidth,
@@ -213,6 +216,16 @@ function recordAppEvent(action) {
   catch (error) { console.warn('App replay event omitted:', error.message); }
 }
 
+function reportWeeklyTraceWarning(message) {
+  console.warn(message);
+  const status = $('#verdict');
+  if (!status || status.textContent === 'Recording…') return;
+  status.style.display = '';
+  status.textContent = /remains queued/i.test(message)
+    ? 'Interaction history is queued locally and will retry automatically.'
+    : 'Part of the interaction history could not be saved; vote recording will keep a safety replay.';
+}
+
 function startWeeklyThinkingTrace() {
   if (quizSource !== 'weekly' || !remoteSessionId
       || typeof window.createWeeklyTraceStream !== 'function') return;
@@ -222,6 +235,7 @@ function startWeeklyThinkingTrace() {
     weeklyTraceStream = window.createWeeklyTraceStream({
       submitBatch: payload => backend.submitWeeklyTraceBatch(payload),
       getAppState: currentReplayableAppState,
+      onWarning: reportWeeklyTraceWarning,
     });
     weeklyTraceStream.startSession({
       sessionId: remoteSessionId,
@@ -2066,7 +2080,15 @@ async function finalizeWeeklyVote() {
     const backend = researchBackend();
     if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
     if (!cur.pendingWeeklyVote) {
-      const appState = currentReplayableAppState();
+      recordAppEvent('vote_submitted');
+      const traceCheckpoint = await weeklyTraceStream?.checkpoint?.('vote') ?? null;
+      const continuousTrace = traceCheckpoint
+        ? {
+            visit_id: traceCheckpoint.visitId,
+            through_sequence: traceCheckpoint.throughSequence,
+          }
+        : null;
+      const appState = currentReplayableAppState({ continuousTrace });
       cur.pendingWeeklyVote = {
         voteAttemptId: newVoteAttemptId(),
         sessionId: remoteSessionId,
@@ -2075,8 +2097,13 @@ async function finalizeWeeklyVote() {
         questionIndex: idx,
         choiceId,
         pickedNone: !!picked.none,
-        viewerTrace: viewerTraceRecorder?.snapshot?.(appState) ?? null,
+        // A durable continuous batch contains the same recorder entries. Retain the legacy
+        // snapshot only as a safety fallback when neither IndexedDB nor the server accepted it.
+        viewerTrace: !traceCheckpoint || traceCheckpoint.durable === false
+          ? (viewerTraceRecorder?.snapshot?.(appState) ?? null)
+          : null,
         appState,
+        voteComment: cur.voteCommentText,
       };
     }
     await backend.submitWeeklyVoteAttempt(cur.pendingWeeklyVote);
@@ -2394,6 +2421,9 @@ async function init() {
       viewerTraceRecorder = window.createViewerTraceRecorder({
         plugin,
         onEntry: entry => weeklyTraceStream?.recordEntry?.(entry),
+        // Weekly continuous recording must keep semantic selection/rejection/vote
+        // events even after the bounded legacy visual snapshot reaches its cap.
+        shouldContinueSemanticStream: () => quizSource === 'weekly' && !!weeklyTraceStream,
       });
     } catch (error) {
       console.warn('Viewer recording disabled:', error.message);
