@@ -563,6 +563,22 @@ async function pinCameraSnapshot(targetPlugin, snapshot) {
     });
   } else setSnapshot(snapshot);
 }
+// Grid panes share a viewpoint, but each Mol* scene has its own molecular
+// extent.  Never replace a pane's clipping envelope with a smaller pane's:
+// doing so can make atoms disappear as the shared camera rotates.
+function cameraSnapshotForScene(sharedSnapshot, sceneSnapshot) {
+  if (!sharedSnapshot) return sharedSnapshot;
+  if (!sceneSnapshot) return sharedSnapshot;
+  const snapshot = { ...sharedSnapshot };
+  for (const field of ['radius', 'radiusMax']) {
+    const shared = Number(sharedSnapshot[field]);
+    const local = Number(sceneSnapshot[field]);
+    if (Number.isFinite(local) && (!Number.isFinite(shared) || local > shared)) {
+      snapshot[field] = local;
+    }
+  }
+  return snapshot;
+}
 // Keep the current viewpoint pinned while Mol* replaces structures. The
 // builders can publish an automatic focus between awaits; restoring only after
 // the whole rebuild lets that intermediate camera render as a visible flash.
@@ -751,6 +767,15 @@ function allGridEntries() {
   if (cur?.item?.source === 'weekly') return gridEntriesFor(null);
   const methods = cur?.gridMethods || [];
   return methods.length ? methods.flatMap(gridEntriesFor) : gridEntriesFor(null);
+}
+function choiceEntriesForSidebar() {
+  if (displayMode === 'grid') {
+    // Grid pagination is only a rendering optimization.  Keep the complete
+    // ballot visible so moving to page 2 never hides or forgets page-1 poses.
+    return cur?.item?.source === 'weekly' ? allGridEntries() : gridEntries();
+  }
+  return visibleChoices().map((choice, choiceIndex) => ({ choice, choiceIndex,
+    cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }));
 }
 function gridChoiceSelected(choice) {
   if (!cur?.selected || cur.selected.none) return false;
@@ -977,10 +1002,15 @@ function syncGridCameras(cells) {
       const snapshot = snapshots[source];
       activatePane(cells[source].paneId, 'camera');
       for (let i = 0; i < cells.length; i++) {
-        if (i !== source) cells[i].plugin?.canvas3d?.camera?.setState(snapshot, 0);
+        if (i !== source) cells[i].plugin?.canvas3d?.camera?.setState(
+          cameraSnapshotForScene(snapshot, cells[i].cameraEnvelope), 0);
       }
       // mirror into the hidden canonical viewer so the trace recorder still sees Grid camera movement
-      try { plugin?.canvas3d?.camera?.setState(snapshot, 0); } catch (e) {}
+      try {
+        const canonicalEnvelope = plugin?.canvas3d?.camera?.getSnapshot?.();
+        plugin?.canvas3d?.camera?.setState(
+          cameraSnapshotForScene(snapshot, canonicalEnvelope), 0);
+      } catch (e) {}
       try { viewerTraceRecorder?.captureCamera?.(snapshot, { sourcePaneId: cells[source].paneId }); }
       catch (error) { console.warn('Grid camera replay event omitted:', error.message); }
       last = cells.map(cell => JSON.stringify(cameraSnapshot(cell)));
@@ -1058,6 +1088,7 @@ async function buildGridCell(cell, revision) {
         cameraChanged: cameraChanges(cell.plugin),
         requestReset: () => cell.plugin.canvas3d?.requestCameraReset?.(),
       });
+      cell.cameraEnvelope = cell.plugin.canvas3d?.camera?.getSnapshot?.() || null;
     }
   } catch (e) {
     try { cell.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
@@ -1124,7 +1155,8 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
     actions.append(select, reject);
     const host = document.createElement('div'); host.className = 'grid-host';
     card.append(host, head, actions); cellsBox.appendChild(card);
-    return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null, disposed: false,
+    return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null,
+      cameraEnvelope: null, disposed: false,
       detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         clustered, showHbonds, showProteinEnsemble, showSurface } };
@@ -1135,8 +1167,12 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
   const active = cells.filter(cell => cell.plugin?.canvas3d);
   if (active.length) {
     const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
-    await Promise.all(active.map(cell => pinCameraSnapshot(cell.plugin, snapshot)));
-    try { await pinCameraSnapshot(plugin, snapshot); } catch (e) {}
+    await Promise.all(active.map(cell => pinCameraSnapshot(
+      cell.plugin, cameraSnapshotForScene(snapshot, cell.cameraEnvelope))));
+    try {
+      await pinCameraSnapshot(plugin, cameraSnapshotForScene(
+        snapshot, plugin?.canvas3d?.camera?.getSnapshot?.()));
+    } catch (e) {}
     stopGridCameraSync = syncGridCameras(active);
   }
   view.classList.remove('loading-grid'); syncReviewState();
@@ -1435,10 +1471,7 @@ function renderUI() {
       : 'Pick the pose that best fits the binding pocket.');
   $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
   const box = $('#choices'); box.innerHTML = '';
-  const uiEntries = displayMode === 'grid'
-    ? gridEntries()
-    : visibleChoices().map((choice, choiceIndex) => ({ choice, choiceIndex,
-      cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }));
+  const uiEntries = choiceEntriesForSidebar();
   uiEntries.forEach(entry => {
     const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');

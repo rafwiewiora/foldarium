@@ -1327,6 +1327,8 @@ test('Grid camera sync mirrors the canonical viewer and tolerates lost canvases'
     requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
     cancelAnimationFrame: () => {},
   };
+  sandbox.cameraSnapshotForScene = evaluateDeclaration(
+    app, 'function cameraSnapshotForScene(sharedSnapshot, sceneSnapshot)', sandbox);
   const syncGridCameras = evaluateDeclaration(app, 'function syncGridCameras(cells)', sandbox);
   const fakeCamera = position => {
     let snapshot = { position };
@@ -1350,10 +1352,54 @@ test('Grid camera sync mirrors the canonical viewer and tolerates lost canvases'
   cells[0].plugin.canvas3d.camera.setState({ position: 11 });
   cells[1].plugin.canvas3d = null;
   assert.doesNotThrow(() => frames.pop()(), 'a cell losing its canvas mid-loop must not break the loop');
-  assert.deepEqual(sandbox.plugin.canvas3d.camera.getSnapshot(), { position: 11 },
+  assert.equal(sandbox.plugin.canvas3d.camera.getSnapshot().position, 11,
     'expected the active Grid camera to be mirrored into the canonical viewer');
 
   stop();
+});
+
+test('Grid camera sharing preserves each molecular scene clipping envelope', async () => {
+  const app = await readApp();
+  const cameraSnapshotForScene = evaluateDeclaration(
+    app, 'function cameraSnapshotForScene(sharedSnapshot, sceneSnapshot)', {});
+
+  const larger = cameraSnapshotForScene(
+      { position: [1, 2, 3], target: [0, 0, 0], radius: 12, radiusMax: 18 },
+      { position: [9, 9, 9], target: [8, 8, 8], radius: 30, radiusMax: 48 },
+    );
+  assert.deepEqual(Array.from(larger.position), [1, 2, 3]);
+  assert.deepEqual(Array.from(larger.target), [0, 0, 0]);
+  assert.equal(larger.radius, 30);
+  assert.equal(larger.radiusMax, 48,
+    'the larger scene should keep safe near/far bounds');
+  const smaller = cameraSnapshotForScene(
+      { position: [1, 2, 3], radius: 30, radiusMax: 48 },
+      { position: [9, 9, 9], radius: 12, radiusMax: 18 },
+    );
+  assert.equal(smaller.radius, 30);
+  assert.equal(smaller.radiusMax, 48,
+    'a smaller pane must not shrink the shared clipping envelope');
+});
+
+test('Weekly Grid pagination keeps the complete ballot in the sidebar', async () => {
+  const app = await readApp();
+  const all = Array.from({ length: 10 }, (_, choiceIndex) => ({ choiceIndex }));
+  const pageTwo = [all[9]];
+  const sandbox = {
+    displayMode: 'grid',
+    cur: { item: { source: 'weekly' } },
+    allGridEntries: () => all,
+    gridEntries: () => pageTwo,
+    visibleChoices: () => [],
+  };
+  const choiceEntriesForSidebar = evaluateDeclaration(
+    app, 'function choiceEntriesForSidebar()', sandbox);
+
+  assert.deepEqual(choiceEntriesForSidebar(), all,
+    'page 2 should change viewer tiles without hiding page-1 choices from the ballot');
+  sandbox.cur.item.source = 'rnp';
+  assert.deepEqual(choiceEntriesForSidebar(), pageTwo,
+    'classic method pages retain their existing method-specific sidebar');
 });
 
 test('documents the standalone leaderboard page and the benchmark upload prerequisite', async () => {
