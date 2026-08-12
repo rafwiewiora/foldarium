@@ -52,7 +52,10 @@ weekly intake -> normalized target -> deterministic prediction task
 
 The scientific identity includes target content, method/version, pinned container image, and inference
 configuration. Retries keep the same `task_id`; a scientific change creates a new one. Raw mmCIF and
-confidence files go to object storage. Supabase holds state, hashes, provenance, and object URIs.
+compact confidence summaries go to object storage. Per-atom pLDDT remains embedded in each retained
+model structure; redundant pLDDT arrays, quadratic PAE/PDE arrays, and OpenFold3 full-confidence JSON
+are never published because the quiz does not consume them. Supabase holds state, hashes, provenance,
+and object URIs.
 
 Modal Volumes or GCP disks are caches only. They are never the catalog or sole copy of an output. Method
 code has no Modal/GCP imports, and the SQL schema stores an opaque `execution_backend` and job ID. This is
@@ -113,8 +116,9 @@ materialize them. Do not send non-public sequences to an external MSA service.
 
 ### Boltz-2
 
-Pin `boltz[cuda]==2.2.1` in a Python 3.11 image and store its downloaded weights/molecule cache under an
-absolute persistent cache path. The starter production policy is five diffusion samples, one parallel
+Pin Boltz 2.2.1 plus the reviewed upstream no-full-error-matrices fix recorded in
+`deploy/modal_app.py`, and store its downloaded weights/molecule cache under an absolute persistent
+cache path. The starter production policy is five diffusion samples, one parallel
 sample, three recycles, 200 sampling steps, and fixed seeds. `msa_mode: empty` is useful only for a GPU
 packaging smoke test; production campaigns should use versioned precomputed MSAs.
 

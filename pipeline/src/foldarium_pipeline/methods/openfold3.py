@@ -16,6 +16,7 @@ OPENFOLD3_IMAGE = (
 )
 OPENFOLD3_CHECKPOINT = "openfold3-p2-155k"
 OPENFOLD3_ACTIVATE = "/opt/activate.sh"
+OPENFOLD3_OUTPUT_POLICY = "quiz-retained-artifacts/v1"
 _MODEL_RE = re.compile(r"_seed_(?P<seed>\d+)_sample_(?P<sample>\d+)_model\.(?:cif|pdb)$")
 
 
@@ -41,7 +42,13 @@ class OpenFold3Adapter(MethodAdapter):
 
     def plan(self, task: Mapping[str, Any], work_dir: Path) -> CommandPlan:
         config = task["config"]
-        allowed = {"checkpoint", "diffusion_samples", "model_seeds", "msa_mode", "runner_yaml"}
+        allowed = {
+            "checkpoint",
+            "diffusion_samples",
+            "model_seeds",
+            "msa_mode",
+            "output_policy",
+        }
         unknown = set(config) - allowed
         if unknown:
             raise ContractError(f"unsupported OpenFold3 config keys: {sorted(unknown)}")
@@ -59,9 +66,24 @@ class OpenFold3Adapter(MethodAdapter):
             raise ContractError("OpenFold3 checkpoint must be a safe registry name")
 
         input_path = work_dir / "input" / "query.json"
+        runner_path = work_dir / "input" / "runner.yaml"
         output_dir = work_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         write_json(input_path, self._query(task))
+        output_policy = config.get("output_policy", OPENFOLD3_OUTPUT_POLICY)
+        if output_policy != OPENFOLD3_OUTPUT_POLICY:
+            raise ContractError(
+                f"OpenFold3 output_policy must be {OPENFOLD3_OUTPUT_POLICY}"
+            )
+        # Full confidence output contains quadratic PAE/PDE matrices and can be
+        # tens of megabytes per sample. Foldarium's quiz uses the model mmCIF
+        # (including per-atom pLDDT in B factors) and the compact aggregate JSON,
+        # so tell the pinned OF3 writer not to materialize the full arrays.
+        runner_path.write_text(
+            "output_writer_settings:\n"
+            "  write_full_confidence_scores: false\n",
+            encoding="utf-8",
+        )
         argv = [
             "/bin/bash",
             "-lc",
@@ -73,6 +95,8 @@ class OpenFold3Adapter(MethodAdapter):
             str(input_path),
             "--output_dir",
             str(output_dir),
+            "--runner_yaml",
+            str(runner_path),
             "--inference_ckpt_name",
             checkpoint,
             "--num_model_seeds",
@@ -84,11 +108,6 @@ class OpenFold3Adapter(MethodAdapter):
             argv.append("--use_msa_server=True")
         elif msa_mode == "none":
             argv.append("--use_msa_server=False")
-        runner_yaml = config.get("runner_yaml")
-        if runner_yaml:
-            if not isinstance(runner_yaml, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,256}", runner_yaml):
-                raise ContractError("runner_yaml must be a safe path supplied by the runtime image")
-            argv.extend(["--runner_yaml", runner_yaml])
         return CommandPlan(tuple(argv), input_path, output_dir)
 
     def collect(self, task: Mapping[str, Any], output_dir: Path) -> list[dict[str, Any]]:
@@ -99,14 +118,11 @@ class OpenFold3Adapter(MethodAdapter):
                 continue
             stem = model.name.rsplit("_model.", 1)[0]
             aggregate = model.with_name(f"{stem}_confidences_aggregated.json")
-            full = model.with_name(f"{stem}_confidences.json")
             artifacts = [artifact(model, output_dir, "predicted_complex")]
             summary: dict[str, float] = {}
             if aggregate.exists():
                 artifacts.append(artifact(aggregate, output_dir, "confidence_summary"))
                 summary = confidence_summary(aggregate)
-            if full.exists():
-                artifacts.append(artifact(full, output_dir, "confidence_full"))
             samples.append(
                 {
                     "sample_id": f"seed-{match.group('seed')}-sample-{match.group('sample')}",

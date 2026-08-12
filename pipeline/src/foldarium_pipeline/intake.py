@@ -17,10 +17,11 @@ from datetime import date, datetime, timezone
 from typing import Any, Iterable, Mapping
 
 from .contracts import canonical_json, make_prediction_task, validate_target
-from .methods.boltz2 import BOLTZ2_VERSION
+from .methods.boltz2 import BOLTZ2_OUTPUT_POLICY, BOLTZ2_VERSION
 from .methods.openfold3 import (
     OPENFOLD3_CHECKPOINT,
     OPENFOLD3_IMAGE,
+    OPENFOLD3_OUTPUT_POLICY,
     OPENFOLD3_VERSION,
 )
 from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand
@@ -29,7 +30,7 @@ from .sizing import SizingError, count_tokens, resolve_gpu_class, validate_gpu_c
 WWPDB_SEQUENCE_URL = "https://www.wwpdb.org/files/new_release_structure_sequence_canonical.tsv"
 WWPDB_NONPOLYMER_URL = "https://www.wwpdb.org/files/new_release_structure_nonpolymer.tsv"
 INTAKE_SCHEMA_VERSION = "foldarium.weekly-intake/v1"
-ADAPTER_VERSION = "foldarium-pipeline/0.3"
+ADAPTER_VERSION = "foldarium-pipeline/0.4"
 
 POLYMER_TYPES = {"protein": "protein", "peptide": "protein", "dna": "dna", "rna": "rna"}
 NUCLEIC_ACID_CANONICAL_ALPHABET = frozenset("ACGTUIN")
@@ -344,6 +345,7 @@ def build_method_tasks(
                 "diffusion_samples": policy.diffusion_samples,
                 "model_seeds": 1,
                 "msa_mode": of3_msa,
+                "output_policy": OPENFOLD3_OUTPUT_POLICY,
             },
         ),
         (
@@ -354,6 +356,7 @@ def build_method_tasks(
                 "diffusion_samples": policy.diffusion_samples,
                 "max_parallel_samples": 1,
                 "msa_mode": boltz_msa,
+                "output_policy": BOLTZ2_OUTPUT_POLICY,
                 "recycling_steps": 3,
                 "sampling_steps": 200,
                 "seed": 0,

@@ -11,6 +11,7 @@ from ..contracts import ContractError, validate_int_config
 from .base import CommandPlan, MethodAdapter, artifact, confidence_summary
 
 BOLTZ2_VERSION = "2.2.1"
+BOLTZ2_OUTPUT_POLICY = "quiz-retained-artifacts/v1"
 _MODEL_RE = re.compile(r"_model_(?P<rank>\d+)\.(?:cif|pdb)$")
 
 
@@ -51,6 +52,7 @@ class Boltz2Adapter(MethodAdapter):
             "diffusion_samples",
             "max_parallel_samples",
             "msa_mode",
+            "output_policy",
             "recycling_steps",
             "sampling_steps",
             "seed",
@@ -72,6 +74,11 @@ class Boltz2Adapter(MethodAdapter):
         msa_mode = config.get("msa_mode", "server")
         if msa_mode not in {"server", "empty", "artifact"}:
             raise ContractError("Boltz-2 msa_mode must be server, empty, or artifact")
+        output_policy = config.get("output_policy", BOLTZ2_OUTPUT_POLICY)
+        if output_policy != BOLTZ2_OUTPUT_POLICY:
+            raise ContractError(
+                f"Boltz-2 output_policy must be {BOLTZ2_OUTPUT_POLICY}"
+            )
 
         input_path = work_dir / "input" / "target.yaml"
         input_path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +108,12 @@ class Boltz2Adapter(MethodAdapter):
             str(max_parallel),
             "--step_scale",
             str(float(step_scale)),
+            # The Modal image pins the upstream fix that makes these negative
+            # flags effective for Boltz-2. Keep them explicit in every command:
+            # the quiz needs the compact confidence summary and per-atom pLDDT,
+            # not quadratic full PAE/PDE matrices.
+            "--no_write_full_pae",
+            "--no_write_full_pde",
         ]
         if msa_mode == "server":
             argv.append("--use_msa_server")
@@ -121,10 +134,6 @@ class Boltz2Adapter(MethodAdapter):
             if confidence.exists():
                 artifacts.append(artifact(confidence, output_dir, "confidence_summary"))
                 summary = confidence_summary(confidence)
-            for prefix, role in (("pae_", "pae"), ("pde_", "pde"), ("plddt_", "plddt")):
-                array = model.with_name(f"{prefix}{base}_model_{rank}.npz")
-                if array.exists():
-                    artifacts.append(artifact(array, output_dir, role))
             samples.append(
                 {
                     "sample_id": f"seed-{seed}-rank-{rank}",

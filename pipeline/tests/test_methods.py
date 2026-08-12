@@ -28,9 +28,16 @@ class MethodAdapterTests(unittest.TestCase):
             self.assertIn("--inference_ckpt_name", plan.argv)
             self.assertIn("--num_model_seeds", plan.argv)
             self.assertIn("--num_diffusion_samples", plan.argv)
+            self.assertIn("--runner_yaml", plan.argv)
             self.assertIn("--use_msa_server=True", plan.argv)
             self.assertNotIn("--query-json", plan.argv)
             self.assertNotIn("shell=True", plan.argv)
+            runner = Path(plan.argv[plan.argv.index("--runner_yaml") + 1])
+            self.assertEqual(
+                runner.read_text(encoding="utf-8"),
+                "output_writer_settings:\n"
+                "  write_full_confidence_scores: false\n",
+            )
 
     def test_openfold3_plan_can_disable_msa_server(self) -> None:
         task = make_task("openfold3", {"msa_mode": "none"})
@@ -50,6 +57,8 @@ class MethodAdapterTests(unittest.TestCase):
             self.assertEqual(protein["msa"], "empty")
             self.assertIn("--model", plan.argv)
             self.assertNotIn("--use_msa_server", plan.argv)
+            self.assertIn("--no_write_full_pae", plan.argv)
+            self.assertIn("--no_write_full_pde", plan.argv)
 
     def test_openfold3_collects_models_and_confidence(self) -> None:
         task = make_task("openfold3", {})
@@ -59,11 +68,18 @@ class MethodAdapterTests(unittest.TestCase):
             model.write_text("data_test\n")
             confidence = output / "test-target_seed_3_sample_1_confidences_aggregated.json"
             confidence.write_text('{"avg_pLDDT": 82.5, "ranking_score": 0.7}\n')
+            (output / "test-target_seed_3_sample_1_confidences.json").write_text(
+                '{"pae": [[1.0]], "pde": [[1.0]], "plddt": [82.5]}\n'
+            )
             samples = OpenFold3Adapter().collect(task, output)
             self.assertEqual(samples[0]["seed"], 3)
             self.assertEqual(samples[0]["sample_index"], 1)
             self.assertEqual(samples[0]["confidence"]["ranking_score"], 0.7)
             self.assertEqual(len(samples[0]["artifacts"][0]["sha256"]), 64)
+            self.assertEqual(
+                [row["role"] for row in samples[0]["artifacts"]],
+                ["predicted_complex", "confidence_summary"],
+            )
 
     def test_boltz2_collects_nested_output(self) -> None:
         task = make_task("boltz2", {"seed": 4})
@@ -72,10 +88,17 @@ class MethodAdapterTests(unittest.TestCase):
             predictions.mkdir(parents=True)
             (predictions / "target_model_0.cif").write_text("data_test\n")
             (predictions / "confidence_target_model_0.json").write_text('{"confidence_score": 0.9}\n')
+            (predictions / "pae_target_model_0.npz").write_bytes(b"unused pae")
+            (predictions / "pde_target_model_0.npz").write_bytes(b"unused pde")
+            (predictions / "plddt_target_model_0.npz").write_bytes(b"small plddt")
             samples = Boltz2Adapter().collect(task, Path(temporary))
             self.assertEqual(samples[0]["seed"], 4)
             self.assertEqual(samples[0]["sample_index"], 0)
             self.assertEqual(samples[0]["confidence"]["confidence_score"], 0.9)
+            self.assertEqual(
+                [row["role"] for row in samples[0]["artifacts"]],
+                ["predicted_complex", "confidence_summary"],
+            )
 
 
 if __name__ == "__main__":

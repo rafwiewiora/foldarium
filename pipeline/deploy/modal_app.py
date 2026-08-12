@@ -91,7 +91,15 @@ OPENFOLD3_IMAGE_REF = (
 )
 
 BOLTZ2_VERSION = "2.2.1"
-BOLTZ2_PACKAGE = f"boltz[cuda]=={BOLTZ2_VERSION}"
+# Upstream 2.2.1 exposes PAE/PDE flags but ignores them in Boltz-2. Pin the
+# minimal upstream fix so --no_write_full_pae/--no_write_full_pde actually avoid
+# materializing the quadratic matrices. This commit is 2.2.1 plus that bounded
+# three-file fix; changing it requires explicit runtime/provenance review.
+BOLTZ2_NO_FULL_ERRORS_COMMIT = "43f36705508d1a85bd0236370434d7bdfd94b169"
+BOLTZ2_PACKAGE = (
+    "boltz[cuda] @ git+https://github.com/jwohlwend/boltz.git@"
+    f"{BOLTZ2_NO_FULL_ERRORS_COMMIT}"
+)
 
 OPENFOLD3_CONTROL_PYTHON = "3.12"
 OPENFOLD3_ACTIVATE = "/opt/activate.sh"
