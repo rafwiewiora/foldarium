@@ -1254,6 +1254,14 @@ test('Surface toggle rebuilds the canonical protein when disabled', async () => 
   assert.deepEqual(deleted, ['protein-data']);
 });
 
+test('Weekly question changes preserve layout and H-bonds but reset expensive surfaces', async () => {
+  const app = await readApp();
+  assert.match(app, /Molecular surfaces are a deliberately question-local expensive opt-in/);
+  assert.match(app, /userView\.showSurface = false;[\s\S]*?applyUserView\(\)/);
+  assert.match(app, /question_load_ms: Math\.max\(0, Date\.now\(\) - loadStartedAt\)/);
+  assert.match(app, /Vote saved\. Loading next question/);
+});
+
 test('Easy eligibility keeps reachable pick puzzles and drops sets whose clusters hide an option', async () => {
   const app = await readApp();
   const thresholds = /const CORRECT_THRESH = ([\d.]+), WRONG_THRESH = ([\d.]+);/.exec(app);

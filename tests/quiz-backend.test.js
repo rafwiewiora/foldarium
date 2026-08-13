@@ -409,6 +409,36 @@ test('persists a named weekly session, append-only traced vote, and contextual s
   ]);
 });
 
+test('resumes an owner-bound weekly session with monotonic trace continuation metadata', async () => {
+  const { client, rpcs, setRpcResult } = fakeSupabase();
+  setRpcResult('resume_named_weekly_quiz_session', {
+    data: [{
+      session_id: '00000000-0000-4000-8000-000000000701',
+      round_id: 'weekly-2026-08-08',
+      next_visit_ordinal: 12,
+      last_visit_started_at: 1770000000123,
+    }],
+    error: null,
+  });
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+
+  assert.deepEqual(await backend.resumeNamedWeeklySession({
+    sessionId: '00000000-0000-4000-8000-000000000701',
+    roundId: 'weekly-2026-08-08',
+  }), {
+    sessionId: '00000000-0000-4000-8000-000000000701',
+    nextVisitOrdinal: 12,
+    lastVisitStartedAt: 1770000000123,
+  });
+  assert.deepEqual(rpcs, [{
+    name: 'resume_named_weekly_quiz_session',
+    args: {
+      p_session_id: '00000000-0000-4000-8000-000000000701',
+      p_round_id: 'weekly-2026-08-08',
+    },
+  }]);
+});
+
 test('rejects malformed named research events before any RPC', async () => {
   const { client, rpcs } = fakeSupabase();
   const backend = createQuizBackend({ client, storage: memoryStorage() });

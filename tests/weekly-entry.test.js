@@ -38,6 +38,9 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(html, /<label>Your name\s*<input id="participant-name"/);
   assert.doesNotMatch(html, /required before starting/);
   assert.match(app, /function syncStartGate\(\)/);
+  assert.match(html, /Do not invite name entry until the backend, round, and Mol\* are ready/);
+  assert.match(html, /foldariumWeeklySessionResume\.hasToken\(\)/);
+  assert.match(app, /resumeWeeklyQuizIfAvailable\(\)/);
   assert.match(html, /id="mode"/);
   assert.match(html, /id="choices"/);
   assert.match(html, /id="lock"/);

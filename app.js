@@ -95,6 +95,7 @@ let remoteSessionId = null;
 let participantDisplayName = '';
 let viewerTraceRecorder = null;
 let weeklyTraceStream = null;
+let weeklyTraceSessionSeed = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
 let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
@@ -211,9 +212,24 @@ async function navigateWeeklyQuestion(nextIndex, action = 'question_navigated') 
   await loadQuestion(nextIndex);
 }
 
-function recordAppEvent(action) {
-  try { viewerTraceRecorder?.recordAppEvent?.(action, currentReplayableAppState()); }
+function recordAppEvent(action, stateDetails = null) {
+  const state = currentReplayableAppState();
+  if (stateDetails && typeof stateDetails === 'object') Object.assign(state, stateDetails);
+  try { viewerTraceRecorder?.recordAppEvent?.(action, state); }
   catch (error) { console.warn('App replay event omitted:', error.message); }
+}
+
+function saveWeeklyResumePosition(questionIndex = idx) {
+  if (quizSource !== 'weekly' || !remoteSessionId || !WEEKLY_ROUND?.round_id) return;
+  try {
+    window.foldariumWeeklySessionResume?.save?.({
+      sessionId: remoteSessionId,
+      roundId: WEEKLY_ROUND.round_id,
+      questionIndex,
+    });
+  } catch (error) {
+    console.warn('Weekly refresh position was not saved:', error.message);
+  }
 }
 
 function reportWeeklyTraceWarning(message) {
@@ -240,7 +256,9 @@ function startWeeklyThinkingTrace() {
     weeklyTraceStream.startSession({
       sessionId: remoteSessionId,
       roundId: WEEKLY_ROUND.round_id,
+      ...(weeklyTraceSessionSeed || {}),
     });
+    weeklyTraceSessionSeed = null;
   } catch (error) {
     weeklyTraceStream = null;
     console.warn('Continuous thinking trace disabled:', error.message);
@@ -1393,6 +1411,7 @@ function requestQuestionCameraReset() {
 
 async function loadQuestion(i) {
   const item = ITEMS[i];
+  const loadStartedAt = Date.now();
   $('#stage').classList.add('loading-system');
   const savedWeeklyState = item.source === 'weekly' ? WEEKLY_ITEM_STATES.get(item.id) : null;
   // Keep a Weekly question's randomised labels and all local review state stable when navigating away/back.
@@ -1451,7 +1470,13 @@ async function loadQuestion(i) {
       gridMethodIndex = savedWeeklyState?.savedGridPage || 0;
       activePaneId = null;
       selectedPaneId = null;
-      // Seed view preferences from the player's last choice, then reset question-specific navigation/reveal state.
+      // Molecular surfaces are a deliberately question-local expensive opt-in.
+      // Carrying them into a six-pane Grid rebuilt 19 surfaces and made an
+      // observed transition take 20.3 s rather than 4.4 s. Preserve the chosen
+      // layout and H-bonds, but begin each new question without surfaces.
+      userView.showSurface = false;
+      // Seed the remaining view preferences from the player's last choice,
+      // then reset question-specific navigation/reveal state.
       applyUserView();
       shownOne = savedWeeklyState?.savedShownOne || 0;
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
@@ -1472,8 +1497,11 @@ async function loadQuestion(i) {
       });
       weeklyTraceStream?.startVisit?.({ itemId: item.id, questionIndex: i });
       viewerTraceRecorder?.start({ appState: currentReplayableAppState() });
-      recordAppEvent('question_loaded');
+      recordAppEvent('question_loaded', {
+        question_load_ms: Math.max(0, Date.now() - loadStartedAt),
+      });
       renderUI();
+      saveWeeklyResumePosition(i);
       requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
       void prefetchQuestionAssets(i + 1);
     },
@@ -1687,7 +1715,7 @@ function drawSession() {
     for (const item of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(item)) { picked.push(item); used.add(item); } }
   return shuffle(picked).slice(0, SESSION_SIZE);
 }
-function beginQuiz() {
+function beginQuiz(initialQuestionIndex = 0) {
   ITEMS = drawSession();
   WEEKLY_ITEM_STATES = new Map();
   weeklyCommentPromptEnabled = true;
@@ -1711,7 +1739,42 @@ function beginQuiz() {
   // testing; only the database-backed Send action remains unavailable.
   $('#suggestion-open').disabled = !(remoteSessionId || isReadOnlyPreview());
   startWeeklyThinkingTrace();
-  loadQuestion(0);
+  const questionIndex = Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
+  loadQuestion(questionIndex);
+}
+
+async function resumeWeeklyQuizIfAvailable() {
+  if (DEV || isReadOnlyPreview() || quizSource !== 'weekly' || !WEEKLY_ROUND?.round_id) return false;
+  const store = window.foldariumWeeklySessionResume;
+  const token = store?.read?.();
+  if (!token) return false;
+  if (token.round_id !== WEEKLY_ROUND.round_id) {
+    store.clear?.();
+    return false;
+  }
+  try {
+    const backend = researchBackend();
+    if (!backend) throw new Error('Quiz persistence is unavailable.');
+    const resumed = await backend.resumeNamedWeeklySession({
+      sessionId: token.session_id,
+      roundId: token.round_id,
+    });
+    remoteSessionId = resumed.sessionId;
+    weeklyTraceSessionSeed = {
+      nextVisitOrdinal: resumed.nextVisitOrdinal,
+      lastVisitStartedAt: resumed.lastVisitStartedAt,
+    };
+    participantDisplayName = '';
+    beginQuiz(token.question_index);
+    return true;
+  } catch (error) {
+    store.clear?.();
+    remoteSessionId = null;
+    participantDisplayName = '';
+    weeklyTraceSessionSeed = null;
+    console.warn('Weekly session could not be resumed:', error.message);
+    return false;
+  }
 }
 
 function normalizedParticipantName() {
@@ -1763,6 +1826,7 @@ async function startQuiz() {
     });
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
+    saveWeeklyResumePosition(0);
     beginQuiz();
   } catch (error) {
     remoteSessionId = null;
@@ -2111,6 +2175,9 @@ async function finalizeWeeklyVote() {
     verdict.textContent = `Vote was not recorded. ${error.message}`;
     return;
   }
+  verdict.textContent = idx + 1 < ITEMS.length
+    ? 'Vote saved. Loading next question…'
+    : 'Vote saved.';
   recordAppEvent('vote_recorded');
   if (idx + 1 >= ITEMS.length) recordAppEvent('quiz_completed');
   viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
@@ -2732,6 +2799,6 @@ async function init() {
   if (!WEEKLY_ONLY && !POOLS.cameo.length && !POOLS.rnp.length) {
     $('#ligand').textContent = 'no quiz items'; return;
   }
-  showIntro();
+  if (!await resumeWeeklyQuizIfAvailable()) showIntro();
 }
 init().catch(e => { $('#ligand').textContent = 'error: ' + e.message; console.error(e); });

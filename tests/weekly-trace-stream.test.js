@@ -69,6 +69,42 @@ test('flushes one append-only visit batch and removes it only after acknowledgem
   });
 });
 
+test('continues visit ordering monotonically after a same-session tab refresh', async () => {
+  const submitted = [];
+  const stream = createWeeklyTraceStream({
+    store: memoryStore(),
+    uuid: uuids('visit-resumed', 'batch-resumed'),
+    submitBatch: async payload => { submitted.push(payload); },
+    setTimer: () => 1,
+    clearTimer: () => {},
+    now: () => 1000,
+  });
+  stream.startSession({
+    sessionId: 'session-resumed',
+    roundId: 'round-resumed',
+    nextVisitOrdinal: 7,
+    lastVisitStartedAt: 2000,
+  });
+  stream.startVisit({ itemId: 'item-resumed', questionIndex: 4 });
+  stream.recordEntry({ seq: 0, kind: 'app', action: 'question_loaded' });
+  await stream.flush('navigation');
+
+  assert.equal(submitted[0].trace.visit_ordinal, 7);
+  assert.equal(submitted[0].trace.visit_started_at, 2001);
+});
+
+test('rejects invalid same-session continuation metadata', () => {
+  const stream = createWeeklyTraceStream({
+    store: memoryStore(),
+    submitBatch: async () => {},
+    setTimer: () => 1,
+    clearTimer: () => {},
+  });
+  assert.throws(() => stream.startSession({
+    sessionId: 'session-invalid', roundId: 'round-invalid', nextVisitOrdinal: -1,
+  }), /continuation metadata/);
+});
+
 test('retains an identical idempotent batch through retryable submission failure', async () => {
   const store = memoryStore();
   const attempts = [];

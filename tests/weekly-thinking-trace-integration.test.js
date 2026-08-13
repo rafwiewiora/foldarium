@@ -39,13 +39,14 @@ test('weekly vote feedback bypasses the Molstar idle gate while classic reveal k
   assert.match(reveal, /viewerTransitionBusy/);
 });
 
-test('name form exposes an immediate loading Start state and overlaps persistence initialization', async () => {
+test('name form waits for readiness while persistence initializes in parallel', async () => {
   const html = await readFile(htmlUrl, 'utf8');
   const persistenceStart = html.indexOf('void initPersistence();');
   const molstarLoad = html.indexOf("await loadScript('https://cdn.jsdelivr.net/npm/molstar");
 
   assert.match(html, /start\.textContent = 'Loading quiz…'/);
-  assert.match(html, /name-status'\)\.textContent = 'Preparing quiz…'/);
+  assert.match(html, /participant-setup'\)\.style\.display = 'none'/);
+  assert.match(html, /Do not invite name entry until the backend, round, and Mol\* are ready/);
   assert.ok(persistenceStart > 0 && persistenceStart < molstarLoad);
 });
 

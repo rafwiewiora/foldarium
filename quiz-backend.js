@@ -56,6 +56,9 @@ const disabledBackend = {
   startNamedSession: async () => {
     throw new Error('Named quiz persistence is unavailable.');
   },
+  resumeNamedWeeklySession: async () => {
+    throw new Error('Named weekly quiz resumption is unavailable.');
+  },
   recordAnswer: () => {},
   completeSession: () => {},
   flush: async ({ strict = false } = {}) => {
@@ -91,6 +94,7 @@ function readOnlyBackend(readBackend) {
   return {
     startSession: () => null,
     startNamedSession: async () => unavailable(),
+    resumeNamedWeeklySession: async () => unavailable(),
     recordAnswer: () => {},
     completeSession: () => {},
     flush: async ({ strict = false } = {}) => {
@@ -151,6 +155,9 @@ export function createDeferredBackend({
     },
     async startNamedSession(...args) {
       return (await requireTarget()).startNamedSession(...args);
+    },
+    async resumeNamedWeeklySession(...args) {
+      return (await requireTarget()).resumeNamedWeeklySession(...args);
     },
     recordAnswer: (...args) => { call('recordAnswer', args); },
     completeSession: (...args) => { call('completeSession', args); },
@@ -398,6 +405,29 @@ export function createQuizBackend({
         }, true);
       }
       return id;
+    },
+    async resumeNamedWeeklySession({ sessionId, roundId }) {
+      if (!sessionId || !roundId) {
+        throw new Error('Named weekly session resumption identity is invalid.');
+      }
+      const rows = await leaderboardRpc('resume_named_weekly_quiz_session', {
+        p_session_id: sessionId,
+        p_round_id: roundId,
+      }, true);
+      if (!Array.isArray(rows) || rows.length !== 1
+        || rows[0]?.session_id !== sessionId || rows[0]?.round_id !== roundId
+        || !Number.isSafeInteger(Number(rows[0]?.next_visit_ordinal))
+        || Number(rows[0]?.next_visit_ordinal) < 0
+        || !Number.isSafeInteger(Number(rows[0]?.last_visit_started_at))
+        || Number(rows[0]?.last_visit_started_at) < -1) {
+        throw new Error('Named weekly session resumption response is invalid.');
+      }
+      weeklyNamedSessionIds.add(sessionId);
+      return {
+        sessionId,
+        nextVisitOrdinal: Number(rows[0].next_visit_ordinal),
+        lastVisitStartedAt: Number(rows[0].last_visit_started_at),
+      };
     },
     recordAnswer(sessionId, questionIndex, record) {
       if (!sessionId) return;

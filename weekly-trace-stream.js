@@ -300,9 +300,18 @@ export function createWeeklyTraceStream({
   };
 
   const stream = {
-    startSession({ sessionId, roundId }) {
+    startSession({
+      sessionId,
+      roundId,
+      nextVisitOrdinal = 0,
+      lastVisitStartedAt = -1,
+    }) {
       if (!sessionId || !roundId) throw new Error('Trace session identity is invalid.');
-      session = { sessionId, roundId, nextVisitOrdinal: 0, lastVisitStartedAt: -1 };
+      if (!Number.isSafeInteger(nextVisitOrdinal) || nextVisitOrdinal < 0
+          || !Number.isSafeInteger(lastVisitStartedAt) || lastVisitStartedAt < -1) {
+        throw new Error('Trace session continuation metadata is invalid.');
+      }
+      session = { sessionId, roundId, nextVisitOrdinal, lastVisitStartedAt };
       disposed = false;
       schedule();
       void drain();
