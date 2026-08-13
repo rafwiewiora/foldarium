@@ -116,6 +116,7 @@
     text-overflow:ellipsis;box-shadow:0 2px 7px #16202b18}
   .grid-card .msp-highlight-info-additional{font-size:inherit!important;color:#6f7984!important}
   .grid-card .msp-highlight-info-hr{display:none!important}
+  .grid-card .msp-viewport-controls{display:none!important}
   #gridpages{overflow-x:auto}
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
   h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
@@ -173,6 +174,11 @@
   button.ghost.mini{padding:8px 11px;font-size:12.5px;color:var(--muted);align-self:flex-start}
   button.ghost.on{border-color:var(--accent);color:var(--accent)}
   .verdict{font-size:14px;line-height:1.55;padding:14px;border-radius:9px;background:#f6f8fa;border:1px solid var(--line)}
+  .verdict[data-state]{font-weight:650;box-shadow:0 2px 10px #16202b10}
+  .verdict[data-state="recording"]{border-color:#9dcfe4;background:#edf8fc;color:#176686}
+  .verdict[data-state="saved"]{border-color:#9bcca8;background:#eef9f1;color:#216d39}
+  .verdict[data-state="warning"]{border-color:#ddc283;background:#fff9e9;color:#795818}
+  .verdict[data-state="error"]{border-color:#d7a2a7;background:#fff3f3;color:#862f39}
   .verdict strong{display:block;font-size:19px;margin-bottom:4px}
   .score{border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:8px}
   .score .row{display:flex;justify-content:space-between}
@@ -436,7 +442,7 @@
     <p class="quick-start-intro" id="quick-start-intro">A short guide to inspecting and recording a weekly prediction.</p>
     <ol class="quick-start-list">
       <li>
-        <div><strong>Inspect a pose</strong><p>Click or tap a ligand to focus on it and its binding pocket. In Show all, click empty viewer space to return to the overview.</p></div>
+        <div><strong>Move around</strong><p>Click or tap a ligand to zoom in; click white space to zoom out. Drag to rotate, right-drag or Ctrl-drag to pan, and scroll or pinch to zoom.</p></div>
       </li>
       <li>
         <div><strong>Choose a layout</strong><p><b>Show all</b> overlays poses, <b>One at a time</b> isolates them, and <b>Grid</b> compares them side by side.</p></div>
@@ -445,10 +451,9 @@
         <div><strong>Review the evidence</strong><p><b>Select</b> your best pose and <b>Reject</b> any you rule out. Surface and H-bonds are optional viewing aids.</p></div>
       </li>
       <li>
-        <div><strong>Save and revisit</strong><p><b>Record vote</b> saves your choice; it becomes <b>Update vote</b> if you revise it. The arrows beside the question number let you skip or revisit questions.</p></div>
+        <div><strong>Save and revisit</strong><p><b>Record vote</b> saves each question immediately, even if you do not finish. <b>Update vote</b> records a revision without erasing your earlier submission; the arrows let you skip or revisit questions.</p></div>
       </li>
     </ol>
-    <p class="quick-start-note">Inspection never reveals the reference structure or the answer.</p>
     <div class="dialog-actions">
       <button class="primary" id="quick-start-close" type="submit">Start exploring</button>
     </div>

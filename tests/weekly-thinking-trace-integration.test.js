@@ -34,7 +34,7 @@ test('weekly vote feedback bypasses the Molstar idle gate while classic reveal k
   const app = await readFile(appUrl, 'utf8');
   const reveal = app.slice(app.indexOf('async function reveal()'), app.indexOf('async function finalizeReveal()'));
 
-  assert.match(reveal, /verdict\.textContent = 'Recording…';\s*await finalizeReveal\(\);/);
+  assert.match(reveal, /setVoteStatus\('Recording…', 'recording'\);\s*await finalizeReveal\(\);/);
   assert.match(reveal, /else \{\s*await revealAfterIdle\(\);/);
   assert.match(reveal, /viewerTransitionBusy/);
 });

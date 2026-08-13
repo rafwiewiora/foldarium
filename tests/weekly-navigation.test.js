@@ -60,6 +60,12 @@ test('weekly vote completion releases question arrows after the next question re
       ITEMS: Array.from({ length: 29 }, (_, index) => ({ id: `item-${index}` })),
       WEEKLY_ROUND: { public_status: 'open' },
       $: selector => elements.get(selector),
+      setVoteStatus(message, state) {
+        const verdict = elements.get('#verdict');
+        verdict.style.display = '';
+        verdict.textContent = message;
+        verdict.dataset = { state };
+      },
       recordAppEvent() {},
       openVoteCommentDialog() {
         assert.fail(`${commentState.name} should proceed directly to recording`);

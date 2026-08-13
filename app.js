@@ -249,9 +249,26 @@ function reportWeeklyTraceWarning(message) {
   const status = $('#verdict');
   if (!status || status.textContent === 'Recording…') return;
   status.style.display = '';
+  status.dataset.state = 'warning';
   status.textContent = /remains queued/i.test(message)
     ? 'Interaction history is queued locally and will retry automatically.'
     : 'Part of the interaction history could not be saved; vote recording will keep a safety replay.';
+}
+
+function weeklyViewerInstruction() {
+  const reset = displayMode === 'all'
+    ? 'zoom out and restore all poses'
+    : 'zoom out';
+  return `Click a ligand to zoom in; click white space to ${reset}. `
+    + 'Drag to rotate, right-drag or Ctrl-drag to pan, and scroll or pinch to zoom; '
+    + 'use Select or a pose name to vote.';
+}
+
+function setVoteStatus(message, state) {
+  const status = $('#verdict');
+  status.style.display = '';
+  status.dataset.state = state;
+  status.textContent = message;
 }
 
 function startWeeklyThinkingTrace() {
@@ -1536,7 +1553,7 @@ function renderUI() {
     : null;
   $('#instruction').textContent = alignmentWarning
     || (cur.item.source === 'weekly'
-      ? 'Click a ligand to inspect it; use Select or a pose name to choose your vote. In Show all, click empty viewer space to return to the overview.'
+      ? weeklyViewerInstruction()
       : 'Pick the pose that best fits the binding pocket.');
   $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
   const box = $('#choices'); box.innerHTML = '';
@@ -1590,6 +1607,7 @@ function renderUI() {
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
   $('#verdict').style.display = cur.revealed ? '' : 'none';
+  if (!cur.revealed) delete $('#verdict').dataset.state;
   $('#next').style.display = quizSource !== 'weekly' && cur.revealed ? '' : 'none';
   updateScore();
 }
@@ -1740,7 +1758,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = ''; $('#view-options').hidden = false;
   $('#instruction').textContent = quizSource === 'weekly'
-    ? 'Click a ligand to inspect it; use Select or a pose name to choose your vote. In Show all, click empty viewer space to return to the overview.'
+    ? weeklyViewerInstruction()
     : 'Pick the pose that best fits the binding pocket.';
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
@@ -2074,9 +2092,7 @@ async function reveal() {
   syncQuestionNavigation();
   try {
     if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
-      const verdict = $('#verdict');
-      verdict.style.display = '';
-      verdict.textContent = 'Recording…';
+      setVoteStatus('Recording…', 'recording');
       await finalizeReveal();
     } else {
       await revealAfterIdle();
@@ -2151,7 +2167,7 @@ async function finalizeWeeklyVote() {
     }
     return;
   }
-  verdict.textContent = 'Recording…';
+  setVoteStatus('Recording…', 'recording');
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Weekly quiz persistence is unavailable.');
@@ -2184,12 +2200,12 @@ async function finalizeWeeklyVote() {
     }
     await backend.submitWeeklyVoteAttempt(cur.pendingWeeklyVote);
   } catch (error) {
-    verdict.textContent = `Vote was not recorded. ${error.message}`;
+    setVoteStatus(`Vote was not recorded. ${error.message}`, 'error');
     return;
   }
-  verdict.textContent = idx + 1 < ITEMS.length
+  setVoteStatus(idx + 1 < ITEMS.length
     ? 'Vote saved. Loading next question…'
-    : 'Vote saved.';
+    : 'Vote saved.', 'saved');
   recordAppEvent('vote_recorded');
   if (idx + 1 >= ITEMS.length) recordAppEvent('quiz_completed');
   viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });

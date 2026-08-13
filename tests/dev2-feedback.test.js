@@ -93,6 +93,7 @@ test('Grid compacts the actual Molstar residue highlight overlay', async () => {
   const html = await read('index.html');
   assert.match(html, /\.grid-card \.msp-highlight-toast-wrapper/);
   assert.match(html, /\.grid-card \.msp-highlight-info\{[^}]*max-width:220px!important/);
+  assert.match(html, /\.grid-card \.msp-viewport-controls\{display:none!important\}/);
   assert.doesNotMatch(html, /\.grid-card \.msp-hover-box\{/);
 });
 

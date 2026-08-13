@@ -21,16 +21,18 @@ test('weekly Quick start is accessible, concise, and does not imply inspection s
   const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
   assert.match(html, /id="quick-start-open"[^>]*aria-haspopup="dialog"[^>]*aria-controls="quick-start-dialog"[^>]*hidden/);
   assert.match(html, /<dialog id="quick-start-dialog"[^>]*aria-labelledby="quick-start-title"[^>]*aria-describedby="quick-start-intro"/);
-  assert.match(html, /Click or tap a ligand to focus on it and its binding pocket/);
-  assert.match(html, /In Show all, click empty viewer space to return to the overview/);
+  assert.match(html, /Click or tap a ligand to zoom in; click white space to zoom out/);
+  assert.match(html, /Drag to rotate, right-drag or Ctrl-drag to pan, and scroll or pinch to zoom/);
   assert.match(html, /<b>Show all<\/b> overlays poses, <b>One at a time<\/b> isolates them, and <b>Grid<\/b> compares them side by side/);
   assert.match(html, /<b>Select<\/b> your best pose and <b>Reject<\/b> any you rule out/);
   assert.match(html, /Surface and H-bonds are optional viewing aids/);
-  assert.match(html, /<b>Record vote<\/b> saves your choice; it becomes <b>Update vote<\/b> if you revise it/);
-  assert.match(html, /arrows beside the question number let you skip or revisit questions/);
-  assert.match(html, /Inspection never reveals the reference structure or the answer/);
+  assert.match(html, /<b>Record vote<\/b> saves each question immediately, even if you do not finish/);
+  assert.match(html, /<b>Update vote<\/b> records a revision without erasing your earlier submission/);
+  assert.match(html, /the arrows let you skip or revisit questions/);
+  assert.doesNotMatch(html, /Inspection never reveals the reference structure or the answer/);
   assert.doesNotMatch(html, /Click or tap a ligand to (?:select|vote)/i);
-  assert.match(app, /Click a ligand to inspect it; use Select or a pose name to choose your vote\. In Show all, click empty viewer space to return to the overview\./);
+  assert.match(app, /Click a ligand to zoom in; click white space to/);
+  assert.match(app, /right-drag or Ctrl-drag to pan/);
   assert.doesNotMatch(app, /Inspect freely\. Select one pose; reject any you rule out\./);
 });
 
