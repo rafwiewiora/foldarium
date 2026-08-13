@@ -80,6 +80,7 @@ const OPTS = {
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
+const WEEKLY_QUICK_START_KEY = 'foldariumWeeklyQuickStartSeenV1';
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
@@ -199,9 +200,32 @@ function syncQuestionNavigation() {
   if (!nav) return;
   const visible = !!cur && quizSource === 'weekly' && ITEMS.length > 0;
   nav.style.display = visible ? 'flex' : 'none';
+  const quickStart = $('#quick-start-open');
+  if (quickStart) quickStart.hidden = !visible;
   if (!visible) return;
   $('#question-prev').disabled = viewerTransitionBusy || revealRequested || idx <= 0;
   $('#question-next').disabled = viewerTransitionBusy || revealRequested || idx >= ITEMS.length - 1;
+}
+
+function quickStartWasSeen() {
+  try { return window.sessionStorage?.getItem(WEEKLY_QUICK_START_KEY) === '1'; }
+  catch (error) { return false; }
+}
+
+function openWeeklyQuickStart(origin = 'manual') {
+  if (quizSource !== 'weekly') return false;
+  const dialog = $('#quick-start-dialog');
+  if (!dialog || dialog.open) return false;
+  try { window.sessionStorage?.setItem(WEEKLY_QUICK_START_KEY, '1'); }
+  catch (error) {}
+  try { dialog.showModal(); }
+  catch (error) { dialog.setAttribute('open', ''); }
+  recordAppEvent('quick_start_opened', { quick_start_origin: origin });
+  return true;
+}
+
+function maybeOpenWeeklyQuickStart() {
+  if (quizSource === 'weekly' && !quickStartWasSeen()) openWeeklyQuickStart('automatic');
 }
 
 async function navigateWeeklyQuestion(nextIndex, action = 'question_navigated') {
@@ -1524,7 +1548,7 @@ function renderUI() {
     : null;
   $('#instruction').textContent = alignmentWarning
     || (cur.item.source === 'weekly'
-      ? 'Inspect freely. Select one pose; reject any you rule out.'
+      ? 'Click a ligand to inspect it; use Select to choose your vote. In Show all, click empty viewer space to return to the overview.'
       : 'Pick the pose that best fits the binding pocket.');
   $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
   const box = $('#choices'); box.innerHTML = '';
@@ -1728,7 +1752,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = ''; $('#view-options').hidden = false;
   $('#instruction').textContent = quizSource === 'weekly'
-    ? 'Inspect freely. Select one pose; reject any you rule out.'
+    ? 'Click a ligand to inspect it; use Select to choose your vote. In Show all, click empty viewer space to return to the overview.'
     : 'Pick the pose that best fits the binding pocket.';
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
@@ -1739,6 +1763,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   // testing; only the database-backed Send action remains unavailable.
   $('#suggestion-open').disabled = !(remoteSessionId || isReadOnlyPreview());
   startWeeklyThinkingTrace();
+  maybeOpenWeeklyQuickStart();
   const questionIndex = Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
   loadQuestion(questionIndex);
 }
@@ -2743,6 +2768,10 @@ async function init() {
   $('#question-next').onclick = () => {
     void navigateWeeklyQuestion(idx + 1, 'question_next');
   };
+  $('#quick-start-open').onclick = () => { openWeeklyQuickStart('manual'); };
+  $('#quick-start-dialog').addEventListener('close', () => {
+    if (quizSource === 'weekly' && cur) recordAppEvent('quick_start_closed');
+  });
   $('#vote-comment-enabled').onchange = event => {
     weeklyCommentPromptEnabled = event.target.checked;
     invalidatePendingWeeklyVote();

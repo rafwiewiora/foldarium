@@ -191,6 +191,10 @@
     background:#fff;color:var(--muted);font-size:14px;font-weight:700;line-height:1;cursor:pointer}
   .question-nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
   .question-nav button:disabled{opacity:.3;cursor:default}
+  .quick-start-open{align-self:flex-start;min-height:27px;padding:4px 8px;border:1px solid var(--line);
+    border-radius:7px;background:#fff;color:var(--muted);font-size:11px;font-weight:650;cursor:pointer}
+  .quick-start-open:hover{border-color:var(--accent);color:var(--accent)}
+  .quick-start-open[hidden]{display:none}
   dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
     border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
   dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
@@ -204,6 +208,18 @@
   .dialog-actions{display:flex;justify-content:flex-end;gap:8px}
   .dialog-status{min-height:1.3em;margin:0;color:var(--muted);font-size:12px;line-height:1.4}
   .dialog-status:empty{display:none}
+  .quick-start-form{gap:15px}
+  .quick-start-form h2{letter-spacing:0}
+  .quick-start-intro{margin:-7px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+  .quick-start-list{display:grid;gap:11px;margin:0;padding:0;list-style:none;counter-reset:quick-start}
+  .quick-start-list li{display:grid;grid-template-columns:25px 1fr;gap:9px;align-items:start;
+    color:var(--muted);font-size:12px;line-height:1.45;counter-increment:quick-start}
+  .quick-start-list li::before{content:counter(quick-start);display:grid;place-items:center;width:24px;height:24px;
+    border-radius:50%;background:#e9f5fa;color:#116d94;font-size:11px;font-weight:750}
+  .quick-start-list strong{display:block;margin-bottom:2px;color:var(--ink);font-size:12.5px}
+  .quick-start-list p{margin:0}
+  .quick-start-note{margin:0;padding:9px 10px;border-radius:7px;background:#f4f7f9;color:var(--muted);
+    font-size:11.5px;line-height:1.45}
   .privacy-note{margin:0;padding:9px 10px;border:1px solid var(--line);border-radius:7px;
     background:#f6f8fa;color:var(--muted);font-size:11px;line-height:1.45}
   .participant-setup{display:flex;flex-direction:column;gap:8px;padding:11px;border:1px solid var(--line);
@@ -331,6 +347,8 @@
         </div>
       </div>
       <div class="q" id="score-summary">score 0 / 0</div>
+      <button class="quick-start-open" id="quick-start-open" type="button"
+        aria-haspopup="dialog" aria-controls="quick-start-dialog" hidden>Quick start</button>
     </div>
 
     <div class="choices" id="choices"></div>
@@ -412,6 +430,30 @@
 </div>
 <button class="ghost mini" id="suggestion-open" type="button" disabled hidden>✦ Feedback</button>
 <div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden></div>
+<dialog id="quick-start-dialog" aria-labelledby="quick-start-title" aria-describedby="quick-start-intro">
+  <form class="dialog-form quick-start-form" method="dialog">
+    <h2 id="quick-start-title">Quick start</h2>
+    <p class="quick-start-intro" id="quick-start-intro">A short guide to inspecting and recording a weekly prediction.</p>
+    <ol class="quick-start-list">
+      <li>
+        <div><strong>Inspect a pose</strong><p>Click or tap a ligand to focus on it and its binding pocket. Click empty viewer space to return to the full view.</p></div>
+      </li>
+      <li>
+        <div><strong>Choose a layout</strong><p><b>Show all</b> overlays poses, <b>One at a time</b> isolates them, and <b>Grid</b> compares them side by side.</p></div>
+      </li>
+      <li>
+        <div><strong>Review the evidence</strong><p><b>Select</b> your best pose and <b>Reject</b> any you rule out. Surface and H-bonds are optional viewing aids.</p></div>
+      </li>
+      <li>
+        <div><strong>Save and revisit</strong><p><b>Record vote</b> saves your choice; it becomes <b>Update vote</b> if you revise it. The arrows beside the question number let you skip or revisit questions.</p></div>
+      </li>
+    </ol>
+    <p class="quick-start-note">Inspection never reveals the reference structure or the answer.</p>
+    <div class="dialog-actions">
+      <button class="primary" id="quick-start-close" type="submit">Start exploring</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
   <form class="dialog-form" id="suggestion-form">
     <h2 id="suggestion-title">Suggestions</h2>
@@ -523,7 +565,7 @@ import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608111');
+      await loadScript('app.js?v=202608121');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;
