@@ -77,7 +77,7 @@ test('One at a time exposes Select and Reject review controls without adding the
   assert.match(html, /id="one-reject"[^>]*>Reject<\/button>/);
   assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly' && !cur\.revealed/);
   assert.match(app, /if \(!cur \|\| displayMode !== 'one'\) return null/);
-  assert.match(app, /Click a ligand to inspect it; use Select to choose your vote/);
+  assert.match(app, /Click a ligand to inspect it; use Select or a pose name to choose your vote/);
   assert.match(html, /\.grid-card\.rejected,#app\.rejected\{opacity:\.32;filter:grayscale\(\.8\)\}/);
   assert.match(app, /\$\('#app'\)\?\.classList\.toggle\('rejected', rejected\)/);
 });
