@@ -322,7 +322,10 @@ function structureRequestUrl(url) {
   return resolved + (resolved.includes('?') ? '&' : '?') + 'v=' + CACHE_BUST;
 }
 async function loadStruct(url, format, targetPlugin = plugin) {
-  const data = await targetPlugin.builders.data.download({ url: structureRequestUrl(url), isBinary: false });
+  // Mol* otherwise uses the full signed/public Storage URL as the model label,
+  // which leaks into its residue hover overlay.
+  const data = await targetPlugin.builders.data.download({ url: structureRequestUrl(url),
+    isBinary: false, label: 'Foldarium' });
   const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
   const model = await targetPlugin.builders.structure.createModel(traj);
   const struct = await targetPlugin.builders.structure.createStructure(model);
@@ -1052,11 +1055,22 @@ function reserveGridControlClearance() {
   const height = Math.ceil(controls.getBoundingClientRect().height);
   stage.style.setProperty('--grid-controls-clearance', `${height + 28}px`);
 }
+function reserveGridTopClearance() {
+  const question = $('#viewer-question'), stage = $('#stage');
+  if (!question || !stage) return;
+  const questionRect = question.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  const clearance = Math.max(84, Math.ceil(questionRect.bottom - stageRect.top + 12));
+  stage.style.setProperty('--grid-top-clearance', `${clearance}px`);
+}
 function startGridLayout() {
-  const observer = new ResizeObserver(() => { reserveGridControlClearance(); layoutGrid(); });
+  const observer = new ResizeObserver(() => {
+    reserveGridControlClearance(); reserveGridTopClearance(); layoutGrid();
+  });
   observer.observe($('#gridview'));
   observer.observe($('#view-options'));
-  reserveGridControlClearance(); layoutGrid();
+  observer.observe($('#viewer-question'));
+  reserveGridControlClearance(); reserveGridTopClearance(); layoutGrid();
   stopGridLayout = () => observer.disconnect();
 }
 function hideGrid() {

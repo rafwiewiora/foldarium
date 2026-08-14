@@ -44,14 +44,15 @@
   #wrap{display:flex;height:100vh}
   #side{width:380px;flex:none;background:var(--panel);border-right:1px solid var(--line);
     padding:26px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
-  #stage{--grid-controls-clearance:96px;flex:1;position:relative;min-width:0;background:#fff}
+  #stage{--grid-controls-clearance:96px;--grid-top-clearance:84px;flex:1;position:relative;
+    min-width:0;background:#fff}
   #app{position:absolute;inset:0}
   #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
   #stage.loading-system #app canvas{opacity:0;transition:none}
   #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
     transition:opacity .14s ease-out}
-  #gridview.on{display:block;top:84px;bottom:var(--grid-controls-clearance)}
+  #gridview.on{display:block;top:var(--grid-top-clearance);bottom:var(--grid-controls-clearance)}
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
     min-height:100%;transition:opacity .14s ease-out}
   #gridview.loading-grid #gridcells{opacity:0;transition:none}

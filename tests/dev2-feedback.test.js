@@ -90,11 +90,21 @@ test('weekly voting keeps comment prompting optional and supports free question 
 });
 
 test('Grid compacts the actual Molstar residue highlight overlay', async () => {
-  const html = await read('index.html');
+  const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
   assert.match(html, /\.grid-card \.msp-highlight-toast-wrapper/);
   assert.match(html, /\.grid-card \.msp-highlight-info\{[^}]*max-width:220px!important/);
   assert.match(html, /\.grid-card \.msp-viewport-controls\{display:none!important\}/);
+  assert.match(app, /label: 'Foldarium'/);
   assert.doesNotMatch(html, /\.grid-card \.msp-hover-box\{/);
+});
+
+test('Grid reserves the measured instruction height above its viewers', async () => {
+  const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
+  assert.match(html, /--grid-top-clearance:84px/);
+  assert.match(html, /#gridview\.on\{display:block;top:var\(--grid-top-clearance\)/);
+  assert.match(app, /function reserveGridTopClearance\(\)/);
+  assert.match(app, /questionRect\.bottom - stageRect\.top \+ 12/);
+  assert.match(app, /observer\.observe\(\$\('#viewer-question'\)\)/);
 });
 
 test('View actions use independent switch affordances', async () => {
