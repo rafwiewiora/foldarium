@@ -95,6 +95,7 @@ test('question context is arranged at the top of the viewer', async () => {
 
   assert.ok(stage < context && context < ligand && ligand < instruction);
   assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
+  assert.match(html, /max-width:min\(760px,calc\(100% - 240px\)\)/);
   assert.match(html, /\.badge\{[\s\S]*?right:64px/);
   assert.match(html, /#gridview\.on\{display:block;top:var\(--grid-top-clearance\);bottom:var\(--grid-controls-clearance\)\}/);
 });
