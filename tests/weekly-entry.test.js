@@ -20,6 +20,7 @@ test('Vercel serves weekly and retrospective entry points through their shells',
   assert.deepEqual(config.rewrites, [
     { source: '/weekly/retrospectives/:roundId', destination: '/weekly-retrospectives.html' },
     { source: '/weekly/retrospectives', destination: '/weekly-retrospectives.html' },
+    { source: '/api/weekly-selector/:path*', destination: '/api/weekly-selector?action=:path*' },
     { source: '/weekly', destination: '/index.html' },
     { source: '/weekly.html', destination: '/index.html' },
   ]);
@@ -50,6 +51,9 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(html, /id="lock"/);
   assert.match(html, /id="weekly-results"/);
   assert.match(html, /Available Wednesday\./);
+  assert.match(html, /Programmatic voting · v2/);
+  assert.match(html, /independent clustered \(Cluster or None\) and unclustered \(exact Pose or None\)/);
+  assert.match(html, /#wrap:not\(\.intro\) #programmatic-voting\{display:none!important\}/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /Wednesday results are available\./);
   assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);

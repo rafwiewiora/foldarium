@@ -20,7 +20,7 @@ from .clustering import (
     choice_order_digest,
     cluster_distance_matrix,
 )
-from .contracts import canonical_json, validate_prediction_task
+from .contracts import canonical_json, validate_prediction_task, validate_target, stable_id
 from .evaluation import (
     EvaluationError,
     _mapped_rmsd,
@@ -28,6 +28,12 @@ from .evaluation import (
     exact_complex_tm_superposition,
 )
 from .quiz import build_blind_manifest, manifest_sha256
+from .weekly_selector import (
+    WeeklySelectorError,
+    assert_no_forbidden_content,
+    build_selector_kit,
+    parse_selector_kit,
+)
 from .selection import (
     HEAVY_ATOM_MINIMUM,
     SELECTION_POLICY_VERSION,
@@ -79,6 +85,8 @@ MAX_TARGET_ALIGNMENT_WORKERS = 8
 # Callers may still opt into bounded concurrency for controlled backfills.
 DEFAULT_PUBLIC_UPLOAD_WORKERS = 1
 MAX_PUBLIC_UPLOAD_WORKERS = 8
+SELECTOR_KIT_ZIP_MEDIA_TYPE = "application/zip"
+SELECTOR_TARGETS_JSON_MEDIA_TYPE = "application/json"
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -1802,6 +1810,7 @@ def stage_weekly_quiz(
                 "heavy_atoms": heavy_atom_count,
             },
             "ligand_eligibility": ligand_eligibility,
+            "selector_target": _sanitize_selector_target(target),
             "protein_path": protein_relative,
             "pocket_path": pocket_relative,
             "clustering": clustering,
@@ -2094,6 +2103,519 @@ def _validate_staged_display_alignment_qa(
     return normalized_items, normalized_warnings
 
 
+def _sanitize_selector_target(raw_target: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a leak-safe normalized target for selector kit publication."""
+
+    try:
+        normalized = validate_target(raw_target)
+    except Exception as exc:
+        raise WeeklyQuizAssemblyError("selector target is invalid") from exc
+    try:
+        assert_no_forbidden_content(normalized, path="selector_target")
+    except WeeklySelectorError as exc:
+        raise WeeklyQuizAssemblyError(str(exc)) from exc
+    return normalized
+
+
+def _selector_storage_path(bucket: str, digest: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise WeeklyQuizAssemblyError("selector kit digest must be a SHA-256 hex string")
+    return f"{bucket}/sha256/{digest[:2]}/{digest}"
+
+
+def _selector_targets_from_stage_items(
+    stage_items: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    targets: dict[str, dict[str, Any]] = {}
+    for item in stage_items:
+        if not isinstance(item, Mapping):
+            raise WeeklyQuizAssemblyError("stage items must be objects")
+        item_id = item.get("id")
+        selector_target = item.get("selector_target")
+        if not isinstance(item_id, str) or not item_id:
+            raise WeeklyQuizAssemblyError("stage item id is required for selector kits")
+        if not isinstance(selector_target, Mapping):
+            raise WeeklyQuizAssemblyError(
+                f"stage item {item_id} lacks a normalized selector target"
+            )
+        targets[item_id] = _sanitize_selector_target(selector_target)
+    if not targets:
+        raise WeeklyQuizAssemblyError("selector targets must be non-empty")
+    return targets
+
+
+def _selector_assets_from_stage(
+    root: Path,
+    blind_manifest: Mapping[str, Any],
+    stage_items: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], dict[str, bytes]]:
+    stage_by_id = {
+        item["id"]: item
+        for item in stage_items
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    assets: dict[tuple[str, str], dict[str, bytes]] = {}
+    blind_items = blind_manifest.get("items")
+    if not isinstance(blind_items, list) or not blind_items:
+        raise WeeklyQuizAssemblyError("blind manifest has no selector items")
+    for blind_item in blind_items:
+        if not isinstance(blind_item, Mapping):
+            raise WeeklyQuizAssemblyError("blind manifest item is invalid")
+        item_id = blind_item.get("id")
+        stage_item = stage_by_id.get(item_id)
+        if not isinstance(item_id, str) or stage_item is None:
+            raise WeeklyQuizAssemblyError(
+                f"blind manifest item {item_id!r} is absent from the stage"
+            )
+        choices = blind_item.get("choices")
+        stage_choices = stage_item.get("choices")
+        if not isinstance(choices, list) or not isinstance(stage_choices, list):
+            raise WeeklyQuizAssemblyError(f"stage item {item_id} has invalid choices")
+        stage_choice_by_id: dict[str, Mapping[str, Any]] = {}
+        for stage_choice in stage_choices:
+            if not isinstance(stage_choice, Mapping):
+                raise WeeklyQuizAssemblyError(f"stage item {item_id} has invalid choices")
+            run_id = stage_choice.get("run_id")
+            sample_id = stage_choice.get("sample_id")
+            if not isinstance(run_id, str) or not isinstance(sample_id, str):
+                raise WeeklyQuizAssemblyError(
+                    f"stage item {item_id} choice lacks run/sample identity"
+                )
+            choice_id = stable_id(
+                "choice",
+                {
+                    "round_id": blind_manifest["round_id"],
+                    "item_id": item_id,
+                    "run_id": run_id,
+                    "sample_id": sample_id,
+                },
+                length=16,
+            )
+            if choice_id in stage_choice_by_id:
+                raise WeeklyQuizAssemblyError(
+                    f"stage item {item_id} contains duplicate blind choice identities"
+                )
+            stage_choice_by_id[choice_id] = stage_choice
+        for blind_choice in choices:
+            if not isinstance(blind_choice, Mapping):
+                raise WeeklyQuizAssemblyError("blind manifest choice is invalid")
+            choice_id = blind_choice.get("id")
+            if not isinstance(choice_id, str) or not choice_id:
+                raise WeeklyQuizAssemblyError("blind manifest choice id is invalid")
+            stage_choice = stage_choice_by_id.get(choice_id)
+            if stage_choice is None:
+                raise WeeklyQuizAssemblyError(
+                    f"blind choice {item_id}/{choice_id} is absent from the stage"
+                )
+            asset_bytes: dict[str, bytes] = {}
+            for kind, field in (
+                ("pose", "pose_path"),
+                ("protein", "protein_path"),
+                ("pocket", "pocket_path"),
+            ):
+                path = _safe_path(root, stage_choice.get(field), f"choice.{field}")
+                try:
+                    content = path.read_bytes()
+                except OSError as exc:
+                    raise WeeklyQuizAssemblyError(
+                        f"selector asset {item_id}/{choice_id}/{kind} could not be read"
+                    ) from exc
+                if not content:
+                    raise WeeklyQuizAssemblyError(
+                        f"selector asset {item_id}/{choice_id}/{kind} is empty"
+                    )
+                asset_bytes[kind] = content
+            assets[(item_id, choice_id)] = asset_bytes
+    return assets
+
+
+def _selector_assets_from_blind_manifest(
+    blind_manifest: Mapping[str, Any],
+    *,
+    downloader: Callable[[str], bytes],
+) -> dict[tuple[str, str], dict[str, bytes]]:
+    assets: dict[tuple[str, str], dict[str, bytes]] = {}
+    blind_items = blind_manifest.get("items")
+    if not isinstance(blind_items, list) or not blind_items:
+        raise WeeklyQuizAssemblyError("blind manifest has no selector items")
+    for blind_item in blind_items:
+        if not isinstance(blind_item, Mapping):
+            raise WeeklyQuizAssemblyError("blind manifest item is invalid")
+        item_id = blind_item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise WeeklyQuizAssemblyError("blind manifest item id is invalid")
+        choices = blind_item.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise WeeklyQuizAssemblyError(f"blind item {item_id} has no choices")
+        for blind_choice in choices:
+            if not isinstance(blind_choice, Mapping):
+                raise WeeklyQuizAssemblyError("blind manifest choice is invalid")
+            choice_id = blind_choice.get("id")
+            if not isinstance(choice_id, str) or not choice_id:
+                raise WeeklyQuizAssemblyError("blind manifest choice id is invalid")
+            asset_bytes: dict[str, bytes] = {}
+            for kind, uri_key in (
+                ("pose", "pose_uri"),
+                ("protein", "protein_uri"),
+                ("pocket", "pocket_uri"),
+            ):
+                uri = blind_choice.get(uri_key)
+                if not isinstance(uri, str) or not uri.strip():
+                    raise WeeklyQuizAssemblyError(
+                        f"blind choice {item_id}/{choice_id} lacks {uri_key}"
+                    )
+                content = downloader(uri.strip())
+                if not isinstance(content, bytes) or not content:
+                    raise WeeklyQuizAssemblyError(
+                        f"selector asset download for {item_id}/{choice_id}/{kind} is empty"
+                    )
+                asset_bytes[kind] = content
+            assets[(item_id, choice_id)] = asset_bytes
+    return assets
+
+
+def _build_selector_kit_bundle(
+    *,
+    round_id: str,
+    blind_manifest: Mapping[str, Any],
+    targets_by_item_id: Mapping[str, Mapping[str, Any]],
+    assets_by_choice: Mapping[tuple[str, str], Mapping[str, bytes]],
+) -> tuple[bytes, dict[str, Any]]:
+    try:
+        return build_selector_kit(
+            round_id=round_id,
+            blind_manifest=blind_manifest,
+            targets_by_item_id=targets_by_item_id,
+            assets_by_choice=assets_by_choice,
+        )
+    except WeeklySelectorError as exc:
+        raise WeeklyQuizAssemblyError(str(exc)) from exc
+
+
+def build_staged_selector_kit(
+    stage_directory: str | Path,
+    blind_manifest: Mapping[str, Any],
+    *,
+    stage_items: Iterable[Mapping[str, Any]] | None = None,
+) -> tuple[bytes, dict[str, Any], dict[str, dict[str, Any]]]:
+    """Build a deterministic selector kit from one local weekly quiz stage."""
+
+    root = Path(stage_directory).resolve()
+    if stage_items is None:
+        try:
+            stage = json.loads((root / "stage.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WeeklyQuizAssemblyError("stage.json is missing or invalid") from exc
+        stage_items = stage.get("items")
+    if not isinstance(stage_items, list) or not stage_items:
+        raise WeeklyQuizAssemblyError("stage items must be a non-empty list")
+    round_id = blind_manifest.get("round_id")
+    if not isinstance(round_id, str) or not round_id:
+        raise WeeklyQuizAssemblyError("blind manifest round_id is required")
+    targets_by_item_id = _selector_targets_from_stage_items(stage_items)
+    assets_by_choice = _selector_assets_from_stage(root, blind_manifest, stage_items)
+    zip_bytes, descriptor = _build_selector_kit_bundle(
+        round_id=round_id,
+        blind_manifest=blind_manifest,
+        targets_by_item_id=targets_by_item_id,
+        assets_by_choice=assets_by_choice,
+    )
+    return zip_bytes, descriptor, targets_by_item_id
+
+
+def load_selector_targets_from_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    coordinator: Any,
+) -> dict[str, dict[str, Any]]:
+    pointer = metadata.get("selector_targets")
+    if not isinstance(pointer, Mapping):
+        raise WeeklyQuizAssemblyError("weekly round metadata lacks selector_targets")
+    object_uri = pointer.get("object_uri")
+    digest = pointer.get("sha256")
+    if not isinstance(object_uri, str) or not isinstance(digest, str):
+        raise WeeklyQuizAssemblyError("selector_targets pointer is invalid")
+    content = coordinator.download_content_object(object_uri, expected_sha256=digest)
+    try:
+        raw = json.loads(content)
+    except (TypeError, ValueError) as exc:
+        raise WeeklyQuizAssemblyError("selector_targets object is not valid JSON") from exc
+    if not isinstance(raw, Mapping) or not raw:
+        raise WeeklyQuizAssemblyError("selector_targets object must be a non-empty map")
+    return {
+        item_id: _sanitize_selector_target(raw_target)
+        for item_id, raw_target in raw.items()
+        if isinstance(item_id, str) and isinstance(raw_target, Mapping)
+    }
+
+
+def selector_targets_from_campaign_tasks(
+    round_row: Mapping[str, Any],
+    *,
+    coordinator: Any,
+) -> dict[str, dict[str, Any]]:
+    """Recover leak-safe targets for a round published before selector metadata."""
+
+    campaign_id = round_row.get("campaign_id")
+    blind_manifest = round_row.get("blind_manifest")
+    if not isinstance(campaign_id, str) or not campaign_id:
+        raise WeeklyQuizAssemblyError("weekly round campaign_id is required for target recovery")
+    if not isinstance(blind_manifest, Mapping):
+        raise WeeklyQuizAssemblyError("weekly round blind_manifest is required for target recovery")
+    blind_items = blind_manifest.get("items")
+    if not isinstance(blind_items, list) or not blind_items:
+        raise WeeklyQuizAssemblyError("weekly round has no blind items for target recovery")
+
+    recovered_by_target_id: dict[str, dict[str, Any]] = {}
+    for row in coordinator.campaign_prediction_run_statuses(campaign_id):
+        if not isinstance(row, Mapping):
+            raise WeeklyQuizAssemblyError("campaign task recovery returned an invalid row")
+        target_id = row.get("target_id")
+        task_payload = row.get("task_payload")
+        raw_target = task_payload.get("target") if isinstance(task_payload, Mapping) else None
+        if not isinstance(target_id, str) or not isinstance(raw_target, Mapping):
+            raise WeeklyQuizAssemblyError("campaign task recovery row lacks its target")
+        normalized = _sanitize_selector_target(raw_target)
+        if normalized.get("target_id") != target_id:
+            raise WeeklyQuizAssemblyError("campaign task target identity is inconsistent")
+        existing = recovered_by_target_id.get(target_id)
+        if existing is not None and canonical_json(existing) != canonical_json(normalized):
+            raise WeeklyQuizAssemblyError(
+                f"campaign task targets disagree for {target_id}"
+            )
+        recovered_by_target_id[target_id] = normalized
+
+    targets_by_item_id: dict[str, dict[str, Any]] = {}
+    for blind_item in blind_items:
+        if not isinstance(blind_item, Mapping):
+            raise WeeklyQuizAssemblyError("weekly blind item is invalid during target recovery")
+        item_id = blind_item.get("id")
+        if not isinstance(item_id, str):
+            raise WeeklyQuizAssemblyError("weekly blind item lacks target identity")
+        target = recovered_by_target_id.get(item_id)
+        if target is None:
+            raise WeeklyQuizAssemblyError(
+                f"campaign tasks contain no selector target for {item_id}"
+            )
+        targets_by_item_id[item_id] = target
+    return targets_by_item_id
+
+
+def _selector_targets_for_round(
+    round_row: Mapping[str, Any],
+    *,
+    coordinator: Any,
+) -> dict[str, dict[str, Any]]:
+    metadata = round_row.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise WeeklyQuizAssemblyError("weekly round metadata is required")
+    if isinstance(metadata.get("selector_targets"), Mapping):
+        return load_selector_targets_from_metadata(metadata, coordinator=coordinator)
+    return selector_targets_from_campaign_tasks(round_row, coordinator=coordinator)
+
+
+def publish_selector_kit(
+    *,
+    round_id: str,
+    blind_manifest_sha256: str,
+    zip_bytes: bytes,
+    descriptor: Mapping[str, Any],
+    public_coordinator: Any,
+    private_coordinator: Any,
+    selector_targets: Mapping[str, Mapping[str, Any]] | None = None,
+    register_catalog: bool = True,
+) -> dict[str, Any]:
+    """Upload one selector kit ZIP and optionally register its catalog row."""
+
+    if not isinstance(round_id, str) or not round_id:
+        raise WeeklyQuizAssemblyError("round_id is required for selector kit publication")
+    if not re.fullmatch(r"[0-9a-f]{64}", blind_manifest_sha256):
+        raise WeeklyQuizAssemblyError("blind_manifest_sha256 must be a SHA-256 hex string")
+    kit_sha256 = descriptor.get("kit_sha256")
+    if not isinstance(kit_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", kit_sha256):
+        raise WeeklyQuizAssemblyError("selector kit descriptor lacks a valid kit_sha256")
+    try:
+        parsed = parse_selector_kit(zip_bytes)
+    except WeeklySelectorError as exc:
+        raise WeeklyQuizAssemblyError(str(exc)) from exc
+    if parsed["kit_sha256"] != kit_sha256:
+        raise WeeklyQuizAssemblyError("selector kit ZIP manifest does not match descriptor")
+    stored = public_coordinator.store_bytes(zip_bytes, SELECTOR_KIT_ZIP_MEDIA_TYPE)
+    storage_path = _selector_storage_path(public_coordinator.storage_bucket, stored["sha256"])
+    catalog_descriptor = {
+        **dict(descriptor),
+        "storage_path": storage_path,
+        "blind_manifest_sha256": blind_manifest_sha256,
+    }
+    selector_targets_object = None
+    if selector_targets is not None:
+        selector_targets_object = private_coordinator.store_bytes(
+            (canonical_json(dict(selector_targets)) + "\n").encode("utf-8"),
+            SELECTOR_TARGETS_JSON_MEDIA_TYPE,
+        )
+    registration = None
+    if register_catalog:
+        registration = private_coordinator.register_weekly_selector_kit(
+            round_id=round_id,
+            kit_sha256=kit_sha256,
+            item_count=int(descriptor["item_count"]),
+            byte_size=len(zip_bytes),
+            storage_path=storage_path,
+            descriptor=catalog_descriptor,
+            blind_manifest_sha256=blind_manifest_sha256,
+        )
+    return {
+        "round_id": round_id,
+        "kit_sha256": kit_sha256,
+        "item_count": descriptor["item_count"],
+        "choice_count": descriptor.get("choice_count"),
+        "byte_size": len(zip_bytes),
+        "storage_path": storage_path,
+        "object_uri": stored["object_uri"],
+        "descriptor": catalog_descriptor,
+        "selector_targets": selector_targets_object,
+        "registration": registration,
+        "registered": register_catalog,
+    }
+
+
+def publish_staged_selector_kit(
+    stage_directory: str | Path,
+    blind_manifest: Mapping[str, Any],
+    *,
+    public_coordinator: Any,
+    private_coordinator: Any,
+    stage_items: Iterable[Mapping[str, Any]] | None = None,
+    register_catalog: bool = True,
+) -> dict[str, Any]:
+    """Build and publish one selector kit from a local weekly quiz stage."""
+
+    zip_bytes, descriptor, targets_by_item_id = build_staged_selector_kit(
+        stage_directory,
+        blind_manifest,
+        stage_items=stage_items,
+    )
+    return publish_selector_kit(
+        round_id=str(blind_manifest["round_id"]),
+        blind_manifest_sha256=manifest_sha256(blind_manifest),
+        zip_bytes=zip_bytes,
+        descriptor=descriptor,
+        public_coordinator=public_coordinator,
+        private_coordinator=private_coordinator,
+        selector_targets=targets_by_item_id,
+        register_catalog=register_catalog,
+    )
+
+
+def publish_selector_kit_from_blind_manifest(
+    blind_manifest: Mapping[str, Any],
+    targets_by_item_id: Mapping[str, Mapping[str, Any]],
+    *,
+    asset_downloader: Callable[[str], bytes],
+    public_coordinator: Any,
+    private_coordinator: Any,
+    register_catalog: bool = True,
+) -> dict[str, Any]:
+    """Rebuild and publish one round-bound selector kit from a blind manifest."""
+
+    round_id = blind_manifest.get("round_id")
+    if not isinstance(round_id, str) or not round_id:
+        raise WeeklyQuizAssemblyError("blind manifest round_id is required")
+    assets_by_choice = _selector_assets_from_blind_manifest(
+        blind_manifest,
+        downloader=asset_downloader,
+    )
+    zip_bytes, descriptor = _build_selector_kit_bundle(
+        round_id=round_id,
+        blind_manifest=blind_manifest,
+        targets_by_item_id={
+            item_id: _sanitize_selector_target(raw_target)
+            for item_id, raw_target in targets_by_item_id.items()
+        },
+        assets_by_choice=assets_by_choice,
+    )
+    return publish_selector_kit(
+        round_id=round_id,
+        blind_manifest_sha256=manifest_sha256(blind_manifest),
+        zip_bytes=zip_bytes,
+        descriptor=descriptor,
+        public_coordinator=public_coordinator,
+        private_coordinator=private_coordinator,
+        selector_targets=targets_by_item_id,
+        register_catalog=register_catalog,
+    )
+
+
+def regenerate_promoted_selector_kit(
+    *,
+    source_round: Mapping[str, Any],
+    source_metadata: Mapping[str, Any],
+    promoted_blind_manifest: Mapping[str, Any],
+    public_coordinator: Any,
+    private_coordinator: Any,
+    register_catalog: bool = True,
+) -> dict[str, Any]:
+    """Regenerate a promoted round's selector kit instead of reusing source ZIP bytes."""
+
+    source_with_metadata = {**dict(source_round), "metadata": dict(source_metadata)}
+    targets_by_item_id = _selector_targets_for_round(
+        source_with_metadata, coordinator=private_coordinator
+    )
+    blind_item_ids = {
+        item["id"]
+        for item in promoted_blind_manifest.get("items", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    if not blind_item_ids:
+        raise WeeklyQuizAssemblyError("promoted blind manifest has no selector items")
+    missing_targets = blind_item_ids.difference(targets_by_item_id)
+    if missing_targets:
+        raise WeeklyQuizAssemblyError(
+            "promoted selector items lack normalized targets: "
+            + ", ".join(sorted(missing_targets))
+        )
+    filtered_targets = {
+        item_id: targets_by_item_id[item_id]
+        for item_id in sorted(blind_item_ids)
+    }
+    return publish_selector_kit_from_blind_manifest(
+        promoted_blind_manifest,
+        filtered_targets,
+        asset_downloader=public_coordinator.download_content_object,
+        public_coordinator=public_coordinator,
+        private_coordinator=private_coordinator,
+        register_catalog=register_catalog,
+    )
+
+
+def backfill_selector_kit_for_round(
+    round_row: Mapping[str, Any],
+    *,
+    public_coordinator: Any,
+    private_coordinator: Any,
+    register_catalog: bool = True,
+) -> dict[str, Any]:
+    """Publish a selector kit for one already-open weekly round."""
+
+    metadata = round_row.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise WeeklyQuizAssemblyError("weekly round metadata is required for selector backfill")
+    blind_manifest = round_row.get("blind_manifest")
+    if not isinstance(blind_manifest, Mapping):
+        raise WeeklyQuizAssemblyError("weekly round blind_manifest is required for backfill")
+    targets_by_item_id = _selector_targets_for_round(
+        round_row, coordinator=private_coordinator
+    )
+    return publish_selector_kit_from_blind_manifest(
+        blind_manifest,
+        targets_by_item_id,
+        asset_downloader=public_coordinator.download_content_object,
+        public_coordinator=public_coordinator,
+        private_coordinator=private_coordinator,
+        register_catalog=register_catalog,
+    )
+
+
 def clone_weekly_quiz_manifests(
     blind_manifest: Mapping[str, Any],
     private_index: Mapping[str, Any],
@@ -2302,6 +2824,8 @@ def publish_staged_weekly_quiz(
         "stage_sha256",
         "private_index",
         "public_quiz_bucket",
+        "selector_targets",
+        "selector_kit",
         "display_alignment_qa_policy",
         "display_alignment_warnings",
         "display_alignment_warned_target_ids",
@@ -2461,6 +2985,14 @@ def publish_staged_weekly_quiz(
         private_index,
         (item["id"] for item in manifest_items),
     )
+    selector_kit = publish_staged_selector_kit(
+        root,
+        blind,
+        public_coordinator=public_coordinator,
+        private_coordinator=private_coordinator,
+        stage_items=stage_items,
+        register_catalog=False,
+    )
     private_object = private_coordinator.store_bytes(
         canonical_json(private_index).encode("utf-8"), "application/json"
     )
@@ -2494,6 +3026,15 @@ def publish_staged_weekly_quiz(
         "stage_sha256": declared_digest,
         "private_index": private_object,
         "public_quiz_bucket": public_coordinator.storage_bucket,
+        "selector_targets": selector_kit["selector_targets"],
+        "selector_kit": {
+            "kit_sha256": selector_kit["kit_sha256"],
+            "item_count": selector_kit["item_count"],
+            "byte_size": selector_kit["byte_size"],
+            "storage_path": selector_kit["storage_path"],
+            "object_uri": selector_kit["object_uri"],
+            "registered": selector_kit["registered"],
+        },
         "display_alignment_qa_policy": DISPLAY_ALIGNMENT_QA_POLICY,
         "display_alignment_warnings": warning_object,
         "display_alignment_warned_target_ids": sorted(
@@ -2519,6 +3060,17 @@ def publish_staged_weekly_quiz(
             metadata=metadata,
             environment=round_environment,
         )
+        selector_kit["registration"] = private_coordinator.register_weekly_selector_kit(
+            round_id=stage["round_id"],
+            kit_sha256=selector_kit["kit_sha256"],
+            item_count=int(selector_kit["item_count"]),
+            byte_size=int(selector_kit["byte_size"]),
+            storage_path=selector_kit["storage_path"],
+            descriptor=selector_kit["descriptor"],
+            blind_manifest_sha256=manifest_sha256(blind),
+        )
+        selector_kit["registered"] = True
+        metadata["selector_kit"]["registered"] = True
     (root / "blind-manifest.json").write_text(
         json.dumps(blind, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -2551,6 +3103,7 @@ def publish_staged_weekly_quiz(
         ),
         "blind_manifest_sha256": manifest_sha256(blind),
         "private_index": private_object,
+        "selector_kit": selector_kit,
         "open_response": response,
     }
 
@@ -2568,7 +3121,13 @@ __all__ = [
     "WEEKLY_QUIZ_STAGE_VERSION",
     "WEEKLY_QUIZ_ENVIRONMENTS",
     "WeeklyQuizAssemblyError",
+    "backfill_selector_kit_for_round",
+    "build_staged_selector_kit",
+    "publish_selector_kit",
+    "publish_selector_kit_from_blind_manifest",
+    "publish_staged_selector_kit",
     "publish_staged_weekly_quiz",
+    "regenerate_promoted_selector_kit",
     "select_complete_method_pairs",
     "stage_weekly_quiz",
 ]

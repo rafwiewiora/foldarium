@@ -4,3 +4,5 @@ docs/
 pipeline/
 prep/
 supabase/
+tools/weekly-selector-wasm/target/
+tools/weekly-selector-wasm/pkg/

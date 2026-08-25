@@ -117,6 +117,7 @@ class FakeCoordinator:
         self.stored: list[tuple[bytes, str]] = []
         self.opened: dict | None = None
         self.public_bucket_checked = False
+        self.registered_selector_kits: list[dict] = []
 
     def require_public_bucket(self) -> None:
         self.public_bucket_checked = True
@@ -134,6 +135,10 @@ class FakeCoordinator:
     def open_weekly_quiz_round(self, **kwargs):
         self.opened = kwargs
         return {"status": "open", "round_id": kwargs["round_id"]}
+
+    def register_weekly_selector_kit(self, **kwargs):
+        self.registered_selector_kits.append(kwargs)
+        return {"status": "registered", "round_id": kwargs["round_id"]}
 
 
 class TrackingPublicCoordinator(FakeCoordinator):

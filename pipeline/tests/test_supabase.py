@@ -1509,6 +1509,40 @@ class SupabaseCoordinatorTests(unittest.TestCase):
             coordinator.download_predicted_complex("run-of3", "sample-4")
         self.assertEqual(len(opener.calls), 1)
 
+    def test_registers_weekly_selector_kit_via_rpc(self) -> None:
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        descriptor = {
+            "schema_version": "foldarium.weekly-selector-kit/v1",
+            "round_id": "weekly-2026-08-08",
+            "kit_sha256": "b" * 64,
+            "item_count": 2,
+            "choice_count": 3,
+            "size_bytes": 4096,
+        }
+        coordinator.register_weekly_selector_kit(
+            round_id="weekly-2026-08-08",
+            kit_sha256="b" * 64,
+            item_count=2,
+            byte_size=4096,
+            storage_path="quiz-public/sha256/bb/" + ("b" * 64),
+            descriptor=descriptor,
+            blind_manifest_sha256="c" * 64,
+        )
+        request = opener.calls[0][0]
+        self.assertTrue(  # type: ignore[attr-defined]
+            request.full_url.endswith("/rest/v1/rpc/register_weekly_selector_kit")
+        )
+        payload = json.loads(request.data)  # type: ignore[attr-defined]
+        self.assertEqual(payload["p_round_id"], "weekly-2026-08-08")
+        self.assertEqual(payload["p_kit_sha256"], "b" * 64)
+        self.assertEqual(payload["p_item_count"], 2)
+        self.assertEqual(payload["p_byte_size"], 4096)
+        self.assertEqual(payload["p_blind_manifest_sha256"], "c" * 64)
+        self.assertEqual(payload["p_descriptor"]["choice_count"], 3)
+
 
 class CampaignTargetPackageTests(unittest.TestCase):
     @staticmethod

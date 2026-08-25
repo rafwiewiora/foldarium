@@ -177,6 +177,10 @@ let retrospectiveQuestionFilter = 'all';
 let WEEKLY_LEADERBOARD_ERROR = '';
 let localWeeklyScore = { correct: 0, answered: 0 };
 let localWeeklyScoredItems = new Set();
+let WEEKLY_SELECTOR_RESULTS = null;
+let WEEKLY_SELECTOR_RESULTS_ERROR = '';
+let SELECTOR_ROUND_DESCRIPTOR = null;
+let SELECTOR_API_TOKEN = '';
 let WEEKLY_ITEM_STATES = new Map();
 let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
@@ -215,6 +219,7 @@ const applyUserView = () => {
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
 const $ = s => document.querySelector(s);
 const CACHE_BUST = Date.now();
+const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 const hex = c => '#' + c.toString(16).padStart(6, '0');
 // "locked" = the green/red answer is on screen; controls are inert only then. In "my view" (revealed but
 // answer hidden) everything is interactive again, exactly as before voting.
@@ -3129,11 +3134,378 @@ function showIntro() {
     $('#start').style.display = pool.length
       && (isRetrospectiveReview() || status !== 'closed') ? '' : 'none';
     syncStartGate();
+    syncProgrammaticVotingPanel();
     return;
   }
   $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
   $('#start').style.display = pool.length ? '' : 'none';
   syncStartGate();
+}
+
+function escapeSelectorText(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
+function readSelectorIdentityFields() {
+  return {
+    displayName: $('#selector-display-name')?.value.trim().replace(/\s+/g, ' ') || '',
+    methodName: $('#selector-method-name')?.value.trim() || '',
+    methodVersion: $('#selector-method-version')?.value.trim() || '',
+    provider: $('#selector-provider')?.value.trim() || '',
+    model: $('#selector-model')?.value.trim() || '',
+    modelVersion: $('#selector-model-version')?.value.trim() || '',
+    promptSha256: $('#selector-prompt-sha256')?.value.trim() || '',
+    toolsSha256: $('#selector-tools-sha256')?.value.trim() || '',
+    configSha256: $('#selector-config-sha256')?.value.trim() || '',
+  };
+}
+
+function setProgrammaticVotingStatus(message = '') {
+  const status = $('#programmatic-voting-status');
+  if (status) status.textContent = message;
+}
+
+function syncProgrammaticVotingPanel() {
+  const panel = $('#programmatic-voting');
+  if (!panel) return;
+  panel.hidden = !WEEKLY_ONLY || !$('#wrap')?.classList.contains('intro');
+  const open = SELECTOR_ROUND_DESCRIPTOR?.public_status === 'open';
+  for (const selector of ['#selector-create-token', '#selector-submit-file', '#selector-submission-file']) {
+    const control = $(selector);
+    if (control) control.disabled = !open;
+  }
+}
+
+async function getBrowserSupabaseAccessToken() {
+  const config = window.FOLDARIUM_SUPABASE;
+  if (!config?.enabled || !config.url || !config.publishableKey) return null;
+  try {
+    const { createClient } = await import(SUPABASE_ESM);
+    const client = createClient(config.url, config.publishableKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+    const current = await client.auth.getSession();
+    if (current.error) throw current.error;
+    if (current.data.session?.access_token) return current.data.session.access_token;
+    const created = await client.auth.signInAnonymously();
+    if (created.error) throw created.error;
+    return created.data.session?.access_token || null;
+  } catch (error) {
+    console.warn('Selector token auth unavailable:', error.message);
+    return null;
+  }
+}
+
+async function loadProgrammaticVotingDescriptor() {
+  if (!WEEKLY_ONLY) return;
+  setProgrammaticVotingStatus('');
+  try {
+    const response = await fetch('/api/weekly-selector/rounds/current', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Selector API is unavailable.');
+    const descriptor = await response.json();
+    if (
+      descriptor?.kit?.schema_version !== 'foldarium.weekly-selector-kit/v2'
+      || !descriptor?.round_id
+      || !descriptor?.environment
+      || !descriptor?.blind_manifest_sha256
+    ) {
+      throw new Error('The explicit dual-mode v2 selector round is unavailable.');
+    }
+    SELECTOR_ROUND_DESCRIPTOR = descriptor;
+    syncProgrammaticVotingPanel();
+    setProgrammaticVotingStatus(
+      descriptor.public_status === 'open'
+        ? 'Dual-mode v2 voting is open. Submit both clustered and unclustered decisions.'
+        : 'Dual-mode v2 submissions are closed for this round.',
+    );
+  } catch (error) {
+    SELECTOR_ROUND_DESCRIPTOR = null;
+    syncProgrammaticVotingPanel();
+    setProgrammaticVotingStatus(error.message);
+  }
+}
+
+async function downloadSelectorKit() {
+  setProgrammaticVotingStatus('Preparing kit download…');
+  try {
+    const descriptor = SELECTOR_ROUND_DESCRIPTOR?.round_id
+      ? SELECTOR_ROUND_DESCRIPTOR
+      : await (async () => {
+        const response = await fetch('/api/weekly-selector/rounds/current', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Selector API is unavailable.');
+        const payload = await response.json();
+        if (
+          payload?.kit?.schema_version !== 'foldarium.weekly-selector-kit/v2'
+          || !payload?.round_id
+          || !payload?.environment
+          || !payload?.blind_manifest_sha256
+        ) {
+          throw new Error('The explicit dual-mode v2 selector round is unavailable.');
+        }
+        SELECTOR_ROUND_DESCRIPTOR = payload;
+        return payload;
+      })();
+    const response = await fetch(
+      `/api/weekly-selector/kits/${encodeURIComponent(descriptor.round_id)}`,
+      { cache: 'no-store' },
+    );
+    if (!response.ok) throw new Error('Kit download descriptor is unavailable.');
+    const payload = await response.json();
+    if (!payload?.download_url) throw new Error('Verified kit URL is missing.');
+    if (
+      payload.round_id !== descriptor.round_id
+      || payload.environment !== descriptor.environment
+      || payload.blind_manifest_sha256 !== descriptor.blind_manifest_sha256
+      || payload.kit_sha256 !== descriptor.kit.kit_sha256
+    ) {
+      throw new Error('Verified kit descriptor does not match the active v2 round.');
+    }
+    window.open(payload.download_url, '_blank', 'noopener,noreferrer');
+    setProgrammaticVotingStatus('Kit download opened in a new tab.');
+  } catch (error) {
+    setProgrammaticVotingStatus(error.message);
+  }
+}
+
+async function createSelectorApiToken() {
+  const identity = readSelectorIdentityFields();
+  const digest = /^[0-9a-f]{64}$/;
+  if (
+    !identity.displayName || !identity.methodName || !identity.methodVersion
+    || !identity.provider || !identity.model || !identity.modelVersion
+  ) {
+    setProgrammaticVotingStatus(
+      'Enter display name, method, provider, model, and their exact versions.',
+    );
+    return;
+  }
+  if (![identity.promptSha256, identity.toolsSha256, identity.configSha256].every(value => digest.test(value))) {
+    setProgrammaticVotingStatus('Enter lowercase SHA-256 digests for the prompt, tools, and config.');
+    return;
+  }
+  if (SELECTOR_ROUND_DESCRIPTOR?.public_status !== 'open') {
+    setProgrammaticVotingStatus('Dual-mode v2 submissions are not open.');
+    return;
+  }
+  setProgrammaticVotingStatus('Creating API token…');
+  try {
+    const accessToken = await getBrowserSupabaseAccessToken();
+    if (!accessToken) throw new Error('Sign in is unavailable for token creation.');
+    const response = await fetch('/api/weekly-selector/tokens', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        round_id: SELECTOR_ROUND_DESCRIPTOR.round_id,
+        environment: SELECTOR_ROUND_DESCRIPTOR.environment,
+        display_name: identity.displayName,
+        method_name: identity.methodName,
+        method_version: identity.methodVersion,
+        provider: identity.provider,
+        model_name: identity.model,
+        model_version: identity.modelVersion,
+        prompt_sha256: identity.promptSha256,
+        tools_sha256: identity.toolsSha256,
+        config_sha256: identity.configSha256,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.error || 'Token creation failed.');
+    }
+    if (
+      typeof payload?.token !== 'string'
+      || !payload.token
+      || payload.round_id !== SELECTOR_ROUND_DESCRIPTOR.round_id
+      || payload.environment !== SELECTOR_ROUND_DESCRIPTOR.environment
+    ) {
+      throw new Error('Token response is invalid.');
+    }
+    SELECTOR_API_TOKEN = payload.token;
+    const input = $('#selector-api-token');
+    if (input) input.value = payload.token;
+    const copyButton = $('#selector-copy-token');
+    if (copyButton) copyButton.disabled = false;
+    setProgrammaticVotingStatus('Token created. Copy it now — it will not be shown again.');
+  } catch (error) {
+    setProgrammaticVotingStatus(error.message);
+  }
+}
+
+async function copySelectorApiToken() {
+  const token = SELECTOR_API_TOKEN || $('#selector-api-token')?.value || '';
+  if (!token) {
+    setProgrammaticVotingStatus('Create a token before copying.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(token);
+    setProgrammaticVotingStatus('Token copied to clipboard.');
+  } catch {
+    setProgrammaticVotingStatus('Clipboard copy failed. Select the token and copy manually.');
+  }
+}
+
+async function submitSelectorFile() {
+  const token = SELECTOR_API_TOKEN || $('#selector-api-token')?.value || '';
+  const file = $('#selector-submission-file')?.files?.[0];
+  if (!token) {
+    setProgrammaticVotingStatus('Create an API token before uploading.');
+    return;
+  }
+  if (!file) {
+    setProgrammaticVotingStatus('Choose a complete selector JSON file.');
+    return;
+  }
+  if (file.size > 131_072) {
+    setProgrammaticVotingStatus('Selector JSON exceeds the 128 KiB request limit.');
+    return;
+  }
+  setProgrammaticVotingStatus('Validating and submitting complete dual-mode v2 JSON…');
+  try {
+    const body = JSON.parse(await file.text());
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new Error('Selector JSON must contain one object.');
+    }
+    if (body.schema_version !== 'foldarium.selector-submission/v2') {
+      throw new Error('Selector JSON must use foldarium.selector-submission/v2.');
+    }
+    if (SELECTOR_ROUND_DESCRIPTOR?.round_id
+        && body.round_id !== SELECTOR_ROUND_DESCRIPTOR.round_id) {
+      throw new Error('Selector JSON is for a different weekly round.');
+    }
+    if (SELECTOR_ROUND_DESCRIPTOR?.environment
+        && body.environment !== SELECTOR_ROUND_DESCRIPTOR.environment) {
+      throw new Error('Selector JSON is bound to a different environment.');
+    }
+    if (SELECTOR_ROUND_DESCRIPTOR?.blind_manifest_sha256
+        && body.blind_manifest_sha256 !== SELECTOR_ROUND_DESCRIPTOR.blind_manifest_sha256) {
+      throw new Error('Selector JSON is bound to a different blind manifest.');
+    }
+    if (SELECTOR_ROUND_DESCRIPTOR?.kit?.kit_sha256
+        && body.kit_sha256 !== SELECTOR_ROUND_DESCRIPTOR.kit.kit_sha256) {
+      throw new Error('Selector JSON is bound to a different kit.');
+    }
+    if (!Array.isArray(body.items) || !body.items.length || body.items.some(item => (
+      !item || typeof item !== 'object'
+      || !item.clustered || !['cluster', 'none'].includes(item.clustered.selection_kind)
+      || !item.unclustered || !['exact', 'none'].includes(item.unclustered.selection_kind)
+    ))) {
+      throw new Error('Every item needs explicit clustered and unclustered v2 decisions.');
+    }
+    const response = await fetch('/api/weekly-selector/submissions', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.error || 'Selector submission failed.');
+    if (
+      !payload?.submission_id
+      || !payload?.payload_digest
+      || payload.round_id !== body.round_id
+      || payload.environment !== body.environment
+      || payload.blind_manifest_sha256 !== body.blind_manifest_sha256
+      || payload.kit_sha256 !== body.kit_sha256
+    ) {
+      throw new Error('Selector receipt is invalid.');
+    }
+    setProgrammaticVotingStatus(
+      `Complete dual-mode submission accepted · revision ${payload.revision_number} · receipt ${payload.submission_id}`,
+    );
+  } catch (error) {
+    setProgrammaticVotingStatus(
+      error instanceof SyntaxError ? 'Selector file is not valid JSON.' : error.message,
+    );
+  }
+}
+
+function formatSelectorScoreLine(row) {
+  const identity = row.identity || {};
+  const name = escapeSelectorText(identity.display_name || 'Selector');
+  const method = escapeSelectorText(
+    `${identity.provider || ''} ${identity.model_name || 'model'} ${identity.model_version || ''}`.trim(),
+  );
+  const cluster = row.clustered || {};
+  const exact = row.unclustered || {};
+  const clusterScore = `${cluster.correct}/${cluster.item_count}`;
+  const exactScore = `${exact.correct}/${exact.item_count}`;
+  const clusterPct = Number.isFinite(cluster.accuracy) ? `${Math.round(cluster.accuracy)}%` : '—';
+  const exactPct = Number.isFinite(exact.accuracy) ? `${Math.round(exact.accuracy)}%` : '—';
+  const clusterRank = Number.isInteger(cluster.rank) ? `#${cluster.rank} ` : '';
+  const exactRank = Number.isInteger(exact.rank) ? `#${exact.rank} ` : '';
+  return `<b>${name}</b> · ${method} · Cluster ${clusterRank}${clusterScore} (${clusterPct}) · Exact ${exactRank}${exactScore} (${exactPct})`;
+}
+
+function renderWeeklySelectorLeaderboard() {
+  if (!WEEKLY_ONLY) return;
+  const host = $('#weekly-selector-leaderboard');
+  if (!host) return;
+  const revealed = WEEKLY_ROUND?.public_status === 'revealed';
+  if (!revealed) {
+    host.hidden = true;
+    host.replaceChildren();
+    return;
+  }
+  host.hidden = false;
+  if (WEEKLY_SELECTOR_RESULTS_ERROR && !WEEKLY_SELECTOR_RESULTS) {
+    host.innerHTML = `<p class="hint">${escapeSelectorText(WEEKLY_SELECTOR_RESULTS_ERROR)}</p>`;
+    return;
+  }
+  const rows = WEEKLY_SELECTOR_RESULTS?.rows || [];
+  if (!WEEKLY_SELECTOR_RESULTS) {
+    host.innerHTML = '<p class="hint">Selector leaderboard is loading…</p>';
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = '<p class="hint">No complete programmatic selector runs yet.</p>';
+    return;
+  }
+  host.innerHTML = `<div class="weekly-selector-heading">Programmatic selectors · dual-mode v2</div>${
+    rows.map(row => `<div class="weekly-selector-row">${formatSelectorScoreLine(row)}</div>`).join('')
+  }`;
+}
+
+async function loadWeeklySelectorResults() {
+  WEEKLY_SELECTOR_RESULTS_ERROR = '';
+  if (!WEEKLY_ROUND?.round_id || WEEKLY_ROUND.public_status !== 'revealed') {
+    WEEKLY_SELECTOR_RESULTS = null;
+    renderWeeklySelectorLeaderboard();
+    return;
+  }
+  try {
+    const response = await fetch(
+      `/api/weekly-selector-results?round_id=${encodeURIComponent(WEEKLY_ROUND.round_id)}`,
+      { cache: 'no-store' },
+    );
+    if (!response.ok) throw new Error('Selector results are unavailable.');
+    const payload = await response.json();
+    if (
+      payload?.format_version !== 'foldarium.weekly-selector-results/v2'
+      || !Array.isArray(payload.rows)
+      || !Array.isArray(payload.questions)
+    ) {
+      throw new Error('Selector results response is invalid.');
+    }
+    WEEKLY_SELECTOR_RESULTS = payload;
+  } catch (error) {
+    WEEKLY_SELECTOR_RESULTS = null;
+    WEEKLY_SELECTOR_RESULTS_ERROR = error.message;
+  }
+  renderWeeklySelectorLeaderboard();
 }
 
 function renderWeeklyResultsStatus() {
@@ -3165,6 +3537,10 @@ function renderWeeklyResultsStatus() {
         || 'Results Wednesday.');
   }
   renderWeeklyLeaderboard();
+  renderWeeklySelectorLeaderboard();
+  if (revealed && !WEEKLY_SELECTOR_RESULTS && !WEEKLY_SELECTOR_RESULTS_ERROR) {
+    void loadWeeklySelectorResults().then(() => renderWeeklyResultsStatus());
+  }
 }
 
 function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null }) {
@@ -3625,6 +4001,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#wrap').classList.remove('intro');
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
+  syncProgrammaticVotingPanel();
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = isRetrospectiveReview() ? 'none' : '';
@@ -4801,7 +5178,10 @@ async function init() {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
     });
+    syncProgrammaticVotingPanel();
+    void loadProgrammaticVotingDescriptor();
     renderWeeklyResultsStatus();
+    if (WEEKLY_ROUND?.public_status === 'revealed') void loadWeeklySelectorResults();
     startWeeklyCountdown();
   } else {
     document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {
@@ -4955,6 +5335,10 @@ async function init() {
   $('#participant-name').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
   });
+  $('#selector-download-kit')?.addEventListener('click', () => { void downloadSelectorKit(); });
+  $('#selector-create-token')?.addEventListener('click', () => { void createSelectorApiToken(); });
+  $('#selector-copy-token')?.addEventListener('click', () => { void copySelectorApiToken(); });
+  $('#selector-submit-file')?.addEventListener('click', () => { void submitSelectorFile(); });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) return;
     recordAppEvent('page_hidden');

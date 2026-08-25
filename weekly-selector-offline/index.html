@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Foldarium offline selector</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    body { max-width: 760px; margin: 0 auto; padding: 3rem 1.25rem; background: #0d1117; color: #e6edf3; }
+    h1 { font: 700 2rem/1.1 system-ui, sans-serif; }
+    .card { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid #30363d; border-radius: 10px; background: #161b22; }
+    label { display: block; margin: 1rem 0 .35rem; font-weight: 700; }
+    button { margin: 1rem .5rem 0 0; padding: .65rem .9rem; border: 0; border-radius: 6px; cursor: pointer; font: inherit; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 18rem; padding: .75rem; color: inherit; background: #0d1117; border: 1px solid #30363d; }
+    .muted { color: #8b949e; }
+    #status[data-error="true"] { color: #ff7b72; }
+  </style>
+</head>
+<body>
+  <h1>Foldarium offline selector</h1>
+  <p>This auditable v2 WebAssembly mapper runs entirely in your browser. No selected file or decision leaves this page.</p>
+  <div class="card">
+    <label for="manifest">1. Select <code>manifest.json</code> from the unzipped blind kit</label>
+    <input id="manifest" type="file" accept="application/json,.json">
+    <label for="submission">2. Optionally select a completed submission JSON</label>
+    <input id="submission" type="file" accept="application/json,.json">
+    <div>
+      <button id="template" type="button">Create dual-mode abstaining template</button>
+      <button id="validate" type="button">Validate submission</button>
+      <button id="download" type="button" disabled>Download output JSON</button>
+    </div>
+    <p id="status" class="muted">Loading offline WebAssembly…</p>
+    <label for="output">Canonical output</label>
+    <textarea id="output" spellcheck="false" readonly></textarea>
+  </div>
+  <p class="muted">For automated workflows, use the Python client bundled inside every blind kit.</p>
+  <script type="module">
+    import init, { buildSubmission, buildTemplate, digestSubmission, validateSubmission } from './weekly_selector_wasm.js';
+
+    const manifestInput = document.querySelector('#manifest');
+    const submissionInput = document.querySelector('#submission');
+    const output = document.querySelector('#output');
+    const status = document.querySelector('#status');
+    const downloadButton = document.querySelector('#download');
+    let outputText = '';
+
+    function setStatus(message, error = false) {
+      status.textContent = message;
+      status.dataset.error = String(error);
+    }
+
+    async function textFrom(input, label) {
+      const file = input.files?.[0];
+      if (!file) throw new Error(`Select ${label} first.`);
+      return file.text();
+    }
+
+    function show(value, manifest) {
+      outputText = value;
+      output.value = value;
+      downloadButton.disabled = false;
+      const digest = digestSubmission(manifest, value);
+      setStatus(`Valid complete submission. SHA-256: ${digest}`);
+    }
+
+    try {
+      await init();
+      setStatus('Ready. Processing stays offline.');
+    } catch (error) {
+      setStatus(`Could not initialize WebAssembly: ${error.message}`, true);
+    }
+
+    document.querySelector('#template').addEventListener('click', async () => {
+      try {
+        const manifest = await textFrom(manifestInput, 'manifest.json');
+        const items = buildTemplate(manifest);
+        show(buildSubmission(manifest, crypto.randomUUID(), items), manifest);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    document.querySelector('#validate').addEventListener('click', async () => {
+      try {
+        const manifest = await textFrom(manifestInput, 'manifest.json');
+        const submission = await textFrom(submissionInput, 'a submission JSON');
+        show(validateSubmission(manifest, submission), manifest);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    downloadButton.addEventListener('click', () => {
+      const url = URL.createObjectURL(new Blob([`${outputText}\n`], { type: 'application/json' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'foldarium-selector-submission.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
