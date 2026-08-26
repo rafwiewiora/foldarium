@@ -30,7 +30,9 @@ class ProviderResult:
     run_id: str | None
     session_id: str | None
     usage: ProviderUsage
-    raw_envelope: Mapping[str, Any] = field(repr=False)
+    provider_config: Mapping[str, Any] = field(default_factory=dict)
+    raw_envelope: Mapping[str, Any] = field(repr=False, default_factory=dict)
+    raw_envelope_digest: str | None = None
 
 
 class WeeklyLlmProvider(Protocol):

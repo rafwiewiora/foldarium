@@ -13,10 +13,18 @@ from .weekly_selector import WeeklySelectorError, verify_selector_kit_zip
 from .weekly_llm_contract import sha256_hex
 
 MAX_KIT_ZIP_BYTES = 200_000_000
+MAX_UNCOMPRESSED_BYTES = 500_000_000
 
 
 class WeeklyLlmKitError(WeeklySelectorError):
     """Raised when kit extraction or workspace construction fails."""
+
+
+def _chmod_or_raise(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError as error:
+        raise WeeklyLlmKitError(f"unable to set permissions on {path}: {error}") from error
 
 
 def _safe_zip_member_name(name: str) -> str:
@@ -35,15 +43,20 @@ def extract_verified_kit(
 ) -> dict[str, Any]:
     if len(zip_bytes) > MAX_KIT_ZIP_BYTES:
         raise WeeklyLlmKitError(f"kit ZIP exceeds {MAX_KIT_ZIP_BYTES} bytes")
+    uncompressed_total = 0
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
         for info in archive.infolist():
             _safe_zip_member_name(info.filename)
+            if info.file_size < 0:
+                raise WeeklyLlmKitError(f"invalid uncompressed size for {info.filename}")
+            uncompressed_total += info.file_size
+            if uncompressed_total > MAX_UNCOMPRESSED_BYTES:
+                raise WeeklyLlmKitError(
+                    f"kit ZIP uncompressed payload exceeds {MAX_UNCOMPRESSED_BYTES} bytes"
+                )
     manifest = verify_selector_kit_zip(zip_bytes)
     output_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(output_dir, 0o700)
-    except OSError:
-        pass
+    _chmod_or_raise(output_dir, 0o700)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
         for info in archive.infolist():
             path = _safe_zip_member_name(info.filename)
@@ -60,10 +73,7 @@ def extract_verified_kit(
             if declared is not None and sha256_hex(content) != declared:
                 raise WeeklyLlmKitError(f"declared digest mismatch for {path}")
             target.write_bytes(content)
-            try:
-                os.chmod(target, 0o400)
-            except OSError:
-                pass
+            _chmod_or_raise(target, 0o400)
     return manifest
 
 
@@ -89,13 +99,11 @@ def build_item_workspace(
     if not item_root.is_dir():
         raise WeeklyLlmKitError(f"missing item directory for {item_id}")
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(evidence_dir, 0o700)
-    except OSError:
-        pass
+    _chmod_or_raise(evidence_dir, 0o700)
 
     candidate_evidence: list[dict[str, Any]] = []
-    image_paths: list[Path] = []
+    image_attachments: list[dict[str, Any]] = []
+    attachment_index = 0
     for choice in sorted(item["choices"], key=lambda row: row["choice_id"]):
         choice_id = choice["choice_id"]
         choice_dir = item_root / "choices" / choice_id
@@ -105,6 +113,7 @@ def build_item_workspace(
             choice_id=choice_id,
             cluster_id=choice["cluster_id"],
             is_rep=choice["is_rep"],
+            attachment_index=attachment_index,
             descriptors=choice["descriptors"],
             pose_bytes=(choice_dir / "pose.pdb").read_bytes(),
             protein_bytes=(choice_dir / "protein.pdb").read_bytes(),
@@ -115,23 +124,32 @@ def build_item_workspace(
         for filename, content in sorted(images.items()):
             image_path = choice_evidence_dir / filename
             image_path.write_bytes(content)
-            try:
-                os.chmod(image_path, 0o600)
-            except OSError:
-                pass
-            image_paths.append(image_path)
+            _chmod_or_raise(image_path, 0o600)
+            image_attachments.append(
+                {
+                    "attachment_index": attachment_index,
+                    "choice_id": choice_id,
+                    "filename": filename,
+                    "path": str(image_path),
+                    "sha256": sha256_hex(content),
+                }
+            )
+            attachment_index += 1
         candidate_evidence.append(evidence)
 
+    evidence_digest = sha256_hex({"candidate_evidence": candidate_evidence})
     return {
         "item_id": item_id,
         "target_path": item_root / "target.json",
         "candidate_evidence": candidate_evidence,
-        "image_paths": image_paths,
+        "candidate_evidence_digest": evidence_digest,
+        "image_attachments": image_attachments,
         "evidence_dir": evidence_dir,
     }
 
 
 __all__ = [
+    "MAX_UNCOMPRESSED_BYTES",
     "WeeklyLlmKitError",
     "build_item_workspace",
     "extract_verified_kit",

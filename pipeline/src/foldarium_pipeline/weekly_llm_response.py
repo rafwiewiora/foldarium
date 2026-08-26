@@ -83,7 +83,7 @@ def _normalize_mode(
     selection_kind = raw.get("selection_kind")
     confidence = raw.get("confidence")
     evidence = raw.get("evidence")
-    if not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence):
         raise WeeklyLlmResponseError(f"model_response.{mode}.confidence is invalid")
     if confidence < 0 or confidence > 1:
         raise WeeklyLlmResponseError(f"model_response.{mode}.confidence is out of range")

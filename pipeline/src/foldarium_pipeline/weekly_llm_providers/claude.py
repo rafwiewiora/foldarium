@@ -6,17 +6,32 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from . import ProviderResult, ProviderUsage
+from ..weekly_llm_config import claude_provider_config
+from ..weekly_llm_contract import sha256_hex
+from ..weekly_llm_provenance import canonical_private_json
 from ..weekly_selector_prompt import SELECTOR_MODEL_RESPONSE_SCHEMA, SELECTOR_SYSTEM_PROMPT
 
 _CLAUDE_MODEL_ALIAS = "opus"
+_DEFAULT_TIMEOUT_SECONDS = 600
 
 
 class ClaudeProviderError(RuntimeError):
     """Raised when Claude CLI preflight or scoring fails."""
+
+
+@dataclass(frozen=True)
+class ClaudeParseResult:
+    response: dict[str, Any]
+    usage: ProviderUsage
+    observed_ids: tuple[str, ...]
+    session_id: str | None
+    run_id: str | None
+    applied_effort: str | None
 
 
 def claude_cli_version() -> str:
@@ -69,9 +84,10 @@ def preflight_claude_auth() -> dict[str, Any]:
 def build_claude_command(
     *,
     prompt_text: str,
-    workspace_dir: str,
     mcp_config_path: str,
+    timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS,
 ) -> list[str]:
+    del timeout_seconds  # enforced by subprocess.run timeout, recorded in config
     executable = shutil.which("claude")
     if not executable:
         raise ClaudeProviderError("claude CLI is not installed")
@@ -91,52 +107,87 @@ def build_claude_command(
         mcp_config_path,
         "--system-prompt",
         SELECTOR_SYSTEM_PROMPT,
+        "--setting-sources",
+        "",
         "--tools",
         "",
         "--no-session-persistence",
-        "--add-dir",
-        workspace_dir,
         prompt_text,
     ]
 
 
-def parse_claude_json_output(payload: Mapping[str, Any]) -> tuple[dict[str, Any], ProviderUsage, tuple[str, ...], str | None, str | None]:
-    result_raw = payload.get("result")
-    if isinstance(result_raw, str):
-        try:
-            response = json.loads(result_raw)
-        except json.JSONDecodeError as error:
-            raise ClaudeProviderError("claude result is not valid JSON") from error
-    elif isinstance(result_raw, Mapping):
-        response = dict(result_raw)
+def parse_claude_json_output(payload: Mapping[str, Any]) -> ClaudeParseResult:
+    structured = payload.get("structured_output")
+    if isinstance(structured, Mapping):
+        response = dict(structured)
     else:
-        raise ClaudeProviderError("claude result is missing")
+        result_raw = payload.get("result")
+        if isinstance(result_raw, str):
+            try:
+                response = json.loads(result_raw)
+            except json.JSONDecodeError as error:
+                raise ClaudeProviderError("claude result is not valid JSON") from error
+        elif isinstance(result_raw, Mapping):
+            response = dict(result_raw)
+        else:
+            raise ClaudeProviderError("claude result is missing")
 
     model_usage = payload.get("modelUsage") or payload.get("usage") or {}
     observed_ids = _extract_observed_model_ids(model_usage, payload)
     applied_effort = None
-    effort_reporting = "not_exposed"
     if isinstance(payload.get("effort"), str):
         applied_effort = payload["effort"]
-        effort_reporting = "reported"
     elif isinstance(model_usage, Mapping) and isinstance(model_usage.get("effort"), str):
         applied_effort = model_usage["effort"]
-        effort_reporting = "reported"
 
     usage = ProviderUsage(
         input_tokens=_int_or_none(_lookup_usage(model_usage, "input_tokens", "inputTokens")),
         output_tokens=_int_or_none(_lookup_usage(model_usage, "output_tokens", "outputTokens")),
-        cache_read_tokens=_int_or_none(_lookup_usage(model_usage, "cache_read_tokens", "cacheReadTokens")),
+        cache_read_tokens=_int_or_none(
+            _lookup_usage(
+                model_usage,
+                "cache_read_tokens",
+                "cacheReadTokens",
+                "cacheReadInputTokens",
+            )
+        ),
         cache_creation_tokens=_int_or_none(
-            _lookup_usage(model_usage, "cache_creation_tokens", "cacheCreationTokens")
+            _lookup_usage(
+                model_usage,
+                "cache_creation_tokens",
+                "cacheCreationTokens",
+                "cacheCreationInputTokens",
+            )
         ),
         reasoning_tokens=_int_or_none(_lookup_usage(model_usage, "reasoning_tokens", "reasoningTokens")),
-        cost_usd=_float_or_none(payload.get("total_cost_usd") or payload.get("cost_usd")),
+        cost_usd=_extract_cost_usd(model_usage, payload),
         duration_ms=_int_or_none(payload.get("duration_ms") or payload.get("durationMs")),
     )
     session_id = payload.get("session_id") or payload.get("sessionId")
     run_id = payload.get("run_id") or payload.get("runId")
-    return response, usage, observed_ids, session_id, applied_effort if effort_reporting == "reported" else None
+    return ClaudeParseResult(
+        response=response,
+        usage=usage,
+        observed_ids=observed_ids,
+        session_id=session_id if isinstance(session_id, str) else None,
+        run_id=run_id if isinstance(run_id, str) else None,
+        applied_effort=applied_effort,
+    )
+
+
+def _extract_cost_usd(model_usage: Any, payload: Mapping[str, Any]) -> float | None:
+    total = _float_or_none(payload.get("total_cost_usd") or payload.get("cost_usd"))
+    if total is not None:
+        return total
+    if isinstance(model_usage, Mapping):
+        for value in model_usage.values():
+            if isinstance(value, Mapping):
+                nested = _float_or_none(
+                    value.get("costUSD") or value.get("cost_usd") or value.get("costUsd")
+                )
+                if nested is not None:
+                    return nested
+    return None
 
 
 def _extract_observed_model_ids(model_usage: Any, payload: Mapping[str, Any]) -> tuple[str, ...]:
@@ -180,9 +231,7 @@ def _lookup_usage(model_usage: Any, *keys: str) -> Any:
 
 
 def _int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         return None
     if isinstance(value, int):
         return value
@@ -192,7 +241,7 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _float_or_none(value: Any) -> float | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
         return float(value)
@@ -200,9 +249,22 @@ def _float_or_none(value: Any) -> float | None:
 
 
 class ClaudeProvider:
-    def __init__(self, *, dry_run: bool = False):
+    def __init__(self, *, dry_run: bool = False, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS):
         self.dry_run = dry_run
+        self.timeout_seconds = timeout_seconds
         self.engine_version = claude_cli_version()
+        self._provider_config = claude_provider_config(
+            engine_version=self.engine_version,
+            subprocess_timeout_seconds=self.timeout_seconds,
+            cli_flags={
+                "safe_mode": True,
+                "strict_mcp_config": True,
+                "setting_sources": [],
+                "tools": [],
+                "no_session_persistence": True,
+                "effort_omitted": True,
+            },
+        )
 
     def preflight(self) -> None:
         preflight_claude_auth()
@@ -215,16 +277,18 @@ class ClaudeProvider:
         image_paths: Sequence[str],
         workspace_dir: str,
     ) -> ProviderResult:
-        del item_id, image_paths  # Claude scoring uses text-only canonical prompt/evidence.
+        del item_id, image_paths
         mcp_config_path = str(Path(workspace_dir) / ".empty-mcp-config.json")
         Path(mcp_config_path).write_text("{}", encoding="utf-8")
         command = build_claude_command(
             prompt_text=prompt_text,
-            workspace_dir=workspace_dir,
             mcp_config_path=mcp_config_path,
+            timeout_seconds=self.timeout_seconds,
         )
         if "--effort" in command:
             raise ClaudeProviderError("default Claude effort must omit --effort")
+        if "--add-dir" in command:
+            raise ClaudeProviderError("claude command must not include --add-dir")
         if self.dry_run:
             raise ClaudeProviderError("dry-run Claude scoring is disabled; use fake provider")
         completed = subprocess.run(
@@ -233,6 +297,7 @@ class ClaudeProvider:
             capture_output=True,
             text=True,
             cwd=workspace_dir,
+            timeout=self.timeout_seconds,
         )
         if completed.returncode != 0:
             raise ClaudeProviderError(completed.stderr.strip() or "claude scoring failed")
@@ -240,24 +305,29 @@ class ClaudeProvider:
             envelope = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
             raise ClaudeProviderError("claude output is not valid JSON") from error
-        response, usage, observed_ids, session_id, applied_effort = parse_claude_json_output(envelope)
+        parsed = parse_claude_json_output(envelope)
+        if len(parsed.observed_ids) != 1:
+            raise ClaudeProviderError("claude run must observe exactly one model identifier")
         return ProviderResult(
-            response=response,
+            response=parsed.response,
             requested_id=_CLAUDE_MODEL_ALIAS,
-            observed_ids=observed_ids,
+            observed_ids=parsed.observed_ids,
             requested_effort="default",
-            applied_effort=applied_effort,
-            effort_reporting="reported" if applied_effort is not None else "not_exposed",
+            applied_effort=parsed.applied_effort,
+            effort_reporting="reported" if parsed.applied_effort is not None else "not_exposed",
             engine_name="claude-cli",
             engine_version=self.engine_version,
-            run_id=None,
-            session_id=session_id if isinstance(session_id, str) else None,
-            usage=usage,
+            run_id=parsed.run_id,
+            session_id=parsed.session_id,
+            usage=parsed.usage,
+            provider_config=self._provider_config,
             raw_envelope=envelope,
+            raw_envelope_digest=sha256_hex(canonical_private_json(envelope)),
         )
 
 
 __all__ = [
+    "ClaudeParseResult",
     "ClaudeProvider",
     "ClaudeProviderError",
     "build_claude_command",

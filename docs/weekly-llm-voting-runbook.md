@@ -322,17 +322,21 @@ python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
 
 python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --output-dir /secure/run/out \
-  --provider claude
+  --provider claude \
+  --network-allowlist /secure/reviewed/provider-allowlist.json \
+  --assert-provider-egress-enforced
 
 python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --output-dir /secure/run/out \
-  --provider cursor
+  --provider cursor \
+  --network-allowlist /secure/reviewed/provider-allowlist.json \
+  --assert-provider-egress-enforced
 ```
 
 Optional submission uses `FOLDARIUM_SELECTOR_BENCHMARK_URL` and
-`FOLDARIUM_SELECTOR_BENCHMARK_TOKEN`. Retries must reuse the same execution UUID
-and exact benchmark bytes. Deliberate reruns use a new UUID and set
-`--supersedes-execution-id` to the prior execution.
+`FOLDARIUM_SELECTOR_BENCHMARK_TOKEN` environment variables only. Retries must
+reuse the same execution UUID and exact benchmark bytes. Deliberate reruns use a
+new UUID and set `--supersedes-execution-id` to the prior execution.
 
 For Claude's first pass, request `default` effort by omitting the CLI effort
 flag. If the CLI does not report applied effort, record

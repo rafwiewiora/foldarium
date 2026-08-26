@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -13,7 +14,8 @@ from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .weekly_llm_config import METHOD_NAME, METHOD_VERSION, provenance_digests
+from .weekly_llm_blindness import build_provider_blindness_attestation, require_live_blindness_inputs
+from .weekly_llm_config import METHOD_NAME, METHOD_VERSION
 from .weekly_llm_contract import (
     BENCHMARK_SCHEMA_VERSION,
     build_blindness_attestation,
@@ -22,6 +24,13 @@ from .weekly_llm_contract import (
     validate_post_close_benchmark,
 )
 from .weekly_llm_kit import build_item_workspace, extract_verified_kit
+from .weekly_llm_provenance import (
+    build_input_manifest,
+    build_output_manifest,
+    build_runtime_manifest,
+    digest_manifest,
+    tools_sha256,
+)
 from .weekly_llm_providers import ProviderResult, WeeklyLlmProvider
 from .weekly_llm_response import model_response_to_submission_item, validate_model_response
 from .weekly_selector import (
@@ -50,6 +59,9 @@ class RunnerOptions:
     provider: WeeklyLlmProvider
     display_name: str
     provider_name: str
+    live_provider: bool = False
+    network_allowlist_path: Path | None = None
+    egress_enforcement_asserted: bool = False
     execution_id: str | None = None
     supersedes_execution_id: str | None = None
     submit_url: str | None = None
@@ -62,6 +74,7 @@ class RunnerResult:
     execution: dict[str, Any]
     execution_digest: str
     payload_digest: str
+    output_sha256: str
     private_dir: Path
     benchmark_path: Path
     submission_path: Path
@@ -83,63 +96,121 @@ def render_item_prompt(*, item_id: str, candidate_evidence: list[Mapping[str, An
     return prompt
 
 
-def _secure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+def _chmod_or_raise(path: Path, mode: int) -> None:
     try:
-        os.chmod(path, 0o700)
-    except OSError:
-        pass
+        os.chmod(path, mode)
+    except OSError as error:
+        raise WeeklyLlmRunnerError(f"unable to set permissions on {path}: {error}") from error
 
 
-def _secure_file(path: Path) -> None:
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+def _assert_secure_permissions(path: Path, expected_mode: int) -> None:
+    actual = stat.S_IMODE(os.stat(path).st_mode)
+    if actual != expected_mode:
+        raise WeeklyLlmRunnerError(f"{path} permissions are {oct(actual)}, expected {oct(expected_mode)}")
+
+
+def _prepare_execution_output_dir(base_dir: Path, execution_id: str) -> Path:
+    if base_dir.exists() and any(base_dir.iterdir()):
+        execution_dir = base_dir / execution_id
+    else:
+        execution_dir = base_dir
+    if execution_dir.exists() and any(execution_dir.iterdir()):
+        raise WeeklyLlmRunnerError(
+            f"execution output directory {execution_dir} must be empty before scoring"
+        )
+    execution_dir.mkdir(parents=True, exist_ok=True)
+    _chmod_or_raise(execution_dir, 0o700)
+    _assert_secure_permissions(execution_dir, 0o700)
+    return execution_dir
+
+
+def _validate_item_results_consistent(results: list[ProviderResult]) -> tuple[str, ...]:
+    if not results:
+        raise WeeklyLlmRunnerError("provider run produced no item results")
+    per_item_observed: list[tuple[str, ...]] = []
+    for index, result in enumerate(results):
+        if len(result.observed_ids) != 1:
+            raise WeeklyLlmRunnerError(
+                f"item result {index} must observe exactly one model identifier"
+            )
+        per_item_observed.append(result.observed_ids)
+    observed_union = {model_id for ids in per_item_observed for model_id in ids}
+    if len(observed_union) != 1:
+        raise WeeklyLlmRunnerError(
+            f"provider run must observe exactly one model identifier across items; saw {sorted(observed_union)}"
+        )
+    reference = results[0]
+    for index, result in enumerate(results[1:], start=1):
+        if result.requested_id != reference.requested_id:
+            raise WeeklyLlmRunnerError(f"item {index} requested_id mismatch")
+        if result.requested_effort != reference.requested_effort:
+            raise WeeklyLlmRunnerError(f"item {index} requested_effort mismatch")
+        if result.applied_effort != reference.applied_effort:
+            raise WeeklyLlmRunnerError(f"item {index} applied_effort mismatch")
+        if result.effort_reporting != reference.effort_reporting:
+            raise WeeklyLlmRunnerError(f"item {index} effort_reporting mismatch")
+        if result.engine_name != reference.engine_name or result.engine_version != reference.engine_version:
+            raise WeeklyLlmRunnerError(f"item {index} engine provenance mismatch")
+        if result.observed_ids != reference.observed_ids:
+            raise WeeklyLlmRunnerError(f"item {index} observed model mismatch")
+        if result.provider_config != reference.provider_config:
+            raise WeeklyLlmRunnerError(f"item {index} provider config mismatch")
+    return reference.observed_ids
 
 
 def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
+    if options.live_provider:
+        allowlist = require_live_blindness_inputs(
+            network_allowlist_path=options.network_allowlist_path,
+            egress_enforcement_asserted=options.egress_enforcement_asserted,
+        )
+        attestation = build_provider_blindness_attestation(allowlist=allowlist)
+    else:
+        attestation = build_blindness_attestation(network_policy="none")
+
     started_at = utc_now_iso()
     options.provider.preflight()
 
     zip_bytes = options.kit_path.read_bytes()
+    kit_zip_sha256 = sha256_hex(zip_bytes)
     execution_id = options.execution_id or str(uuid.uuid4())
-    _secure_dir(options.output_dir)
-    private_dir = options.output_dir / "private"
-    _secure_dir(private_dir)
+    output_dir = _prepare_execution_output_dir(options.output_dir, execution_id)
+    private_dir = output_dir / "private"
+    private_dir.mkdir(parents=True, exist_ok=True)
+    _chmod_or_raise(private_dir, 0o700)
+    _assert_secure_permissions(private_dir, 0o700)
 
     with tempfile.TemporaryDirectory(prefix="foldarium-kit-") as kit_tmp:
         kit_dir = Path(kit_tmp)
         manifest = extract_verified_kit(zip_bytes, output_dir=kit_dir)
         item_results: list[ProviderResult] = []
         submission_items: list[dict[str, Any]] = []
-        input_manifest_items: list[dict[str, str]] = []
+        input_manifest_items: list[dict[str, Any]] = []
+        runtime_manifest_items: list[dict[str, Any]] = []
+        output_manifest_items: list[dict[str, Any]] = []
 
         for item in sorted(manifest["items"], key=lambda row: row["item_id"]):
             item_id = item["item_id"]
             workspace = build_item_workspace(
                 kit_dir=kit_dir,
                 item=item,
-                evidence_dir=options.output_dir / "evidence" / item_id,
+                evidence_dir=output_dir / "evidence" / item_id,
             )
             prompt_text = render_item_prompt(
                 item_id=item_id,
                 candidate_evidence=workspace["candidate_evidence"],
             )
-            prompt_digest = sha256_hex({"item_id": item_id, "prompt": prompt_text})
-            input_manifest_items.append({"item_id": item_id, "prompt_sha256": prompt_digest})
+            prompt_bytes_sha256 = sha256_hex(prompt_text)
             item_workspace_dir = kit_dir / "items" / item_id
+            image_paths = [attachment["path"] for attachment in workspace["image_attachments"]]
             provider_result = options.provider.score_item(
                 item_id=item_id,
                 prompt_text=prompt_text,
-                image_paths=[str(path) for path in workspace["image_paths"]],
+                image_paths=image_paths,
                 workspace_dir=str(item_workspace_dir),
             )
             item_results.append(provider_result)
-            _write_private_json(
-                private_dir / f"{item_id}.raw.json",
-                provider_result.raw_envelope,
-            )
+            _write_private_json(private_dir / f"{item_id}.raw.json", provider_result.raw_envelope)
             allowed_cluster_ids = {choice["cluster_id"] for choice in item["choices"]}
             allowed_choice_ids = {choice["choice_id"] for choice in item["choices"]}
             validated = validate_model_response(
@@ -148,26 +219,76 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                 allowed_cluster_ids=allowed_cluster_ids,
                 allowed_choice_ids=allowed_choice_ids,
             )
+            validated_digest = sha256_hex(validated)
             submission_items.append(model_response_to_submission_item(validated))
-
-        observed_models = {model_id for result in item_results for model_id in result.observed_ids}
-        if len(observed_models) != 1:
-            raise WeeklyLlmRunnerError(
-                f"provider run must observe exactly one model identifier; saw {sorted(observed_models)}"
+            input_manifest_items.append(
+                {
+                    "item_id": item_id,
+                    "kit_zip_sha256": kit_zip_sha256,
+                    "candidate_evidence_digest": workspace["candidate_evidence_digest"],
+                    "rendered_prompt_sha256": prompt_bytes_sha256,
+                    "rendered_prompt_bytes": len(prompt_text.encode("utf-8")),
+                    "attachments": [
+                        {
+                            "attachment_index": attachment["attachment_index"],
+                            "choice_id": attachment["choice_id"],
+                            "filename": attachment["filename"],
+                            "sha256": attachment["sha256"],
+                        }
+                        for attachment in workspace["image_attachments"]
+                    ],
+                }
+            )
+            runtime_manifest_items.append(
+                {
+                    "item_id": item_id,
+                    "rendered_prompt_sha256": prompt_bytes_sha256,
+                    "candidate_evidence_digest": workspace["candidate_evidence_digest"],
+                    "validated_response_sha256": validated_digest,
+                    "raw_envelope_sha256": provider_result.raw_envelope_digest,
+                    "observed_model_id": provider_result.observed_ids[0],
+                    "run_id": provider_result.run_id,
+                    "session_id": provider_result.session_id,
+                    "usage": {
+                        "input_tokens": provider_result.usage.input_tokens,
+                        "output_tokens": provider_result.usage.output_tokens,
+                        "cache_read_tokens": provider_result.usage.cache_read_tokens,
+                        "cache_creation_tokens": provider_result.usage.cache_creation_tokens,
+                        "reasoning_tokens": provider_result.usage.reasoning_tokens,
+                        "cost_usd": provider_result.usage.cost_usd,
+                        "duration_ms": provider_result.usage.duration_ms,
+                    },
+                }
+            )
+            output_manifest_items.append(
+                {"item_id": item_id, "response_sha256": validated_digest}
             )
 
-        input_manifest = {
-            "schema_version": "foldarium.selector-input-manifest/v1",
-            "prompt_profile_id": selector_prompt_profile()["prompt_profile_id"],
-            "prompt_sha256": SELECTOR_PROMPT_SHA256,
-            "items": sorted(input_manifest_items, key=lambda row: row["item_id"]),
-        }
-        engine_version = item_results[0].engine_version
-        digests = provenance_digests(
-            provider=options.provider_name,
-            input_manifest=input_manifest,
-            engine_version=engine_version,
+        observed_ids = _validate_item_results_consistent(item_results)
+        first = item_results[0]
+        provider_config = dict(first.provider_config)
+        if options.live_provider and options.network_allowlist_path is not None:
+            allowlist = require_live_blindness_inputs(
+                network_allowlist_path=options.network_allowlist_path,
+                egress_enforcement_asserted=options.egress_enforcement_asserted,
+            )
+            provider_config = {
+                **provider_config,
+                "network_allowlist_sha256": sha256_hex(allowlist),
+            }
+
+        input_manifest = build_input_manifest(
+            prompt_profile_id=selector_prompt_profile()["prompt_profile_id"],
+            kit_zip_sha256=kit_zip_sha256,
+            items=input_manifest_items,
         )
+        runtime_manifest = build_runtime_manifest(items=runtime_manifest_items)
+        output_manifest = build_output_manifest(items=output_manifest_items)
+        config_sha256 = sha256_hex(provider_config)
+        runtime_sha256 = digest_manifest(runtime_manifest)
+        input_manifest_sha256 = digest_manifest(input_manifest)
+        output_sha256 = digest_manifest(output_manifest)
+
         payload = build_selector_submission(
             manifest,
             submission_id=execution_id,
@@ -175,9 +296,7 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
         )
         payload_digest = digest_selector_submission(payload)
         finished_at = utc_now_iso()
-        first = item_results[0]
         usage = _aggregate_usage(item_results, started_at=started_at, finished_at=finished_at)
-        attestation = build_blindness_attestation(network_policy="none")
         execution = {
             "schema_version": BENCHMARK_SCHEMA_VERSION,
             "execution_id": execution_id,
@@ -194,12 +313,12 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             "engine": {
                 "name": first.engine_name,
                 "version": first.engine_version,
-                "run_id": _single_or_none(result.run_id for result in item_results),
-                "session_id": _single_or_none(result.session_id for result in item_results),
+                "run_id": None,
+                "session_id": None,
             },
             "model": {
                 "requested_id": first.requested_id,
-                "observed_ids": sorted(observed_models),
+                "observed_ids": list(observed_ids),
                 "requested_effort": first.requested_effort,
                 "applied_effort": first.applied_effort,
                 "effort_reporting": first.effort_reporting,
@@ -207,7 +326,10 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             "provenance": {
                 "prompt_profile_id": selector_prompt_profile()["prompt_profile_id"],
                 "prompt_sha256": SELECTOR_PROMPT_SHA256,
-                **digests,
+                "input_manifest_sha256": input_manifest_sha256,
+                "tools_sha256": tools_sha256(),
+                "config_sha256": config_sha256,
+                "runtime_sha256": runtime_sha256,
             },
             "blindness_attestation": attestation,
             "blindness_attestation_sha256": sha256_hex(attestation),
@@ -215,21 +337,23 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             "started_at": started_at,
             "finished_at": finished_at,
             "reasoning_trace_retained": False,
-            "output_sha256": payload_digest,
+            "output_sha256": output_sha256,
             "payload": payload,
         }
         normalized = validate_post_close_benchmark(execution, kit=manifest)
         execution_digest = digest_post_close_benchmark(normalized, kit=manifest)
 
-        benchmark_path = options.output_dir / "benchmark.execution.json"
-        submission_path = options.output_dir / "submission.json"
-        public_path = options.output_dir / "benchmark.public.json"
-        manifest_path = options.output_dir / "input-manifest.json"
+        benchmark_path = output_dir / "benchmark.execution.json"
+        submission_path = output_dir / "submission.json"
+        public_path = output_dir / "benchmark.public.json"
         _write_json(benchmark_path, normalized)
         _write_json(submission_path, payload)
         _write_json(public_path, _public_benchmark(normalized))
-        _write_json(manifest_path, input_manifest)
+        _write_json(output_dir / "input-manifest.json", input_manifest)
         _write_json(private_dir / "input-manifest.json", input_manifest)
+        _write_json(private_dir / "runtime-manifest.json", runtime_manifest)
+        _write_json(private_dir / "output-manifest.json", output_manifest)
+        _write_json(private_dir / "provider-config.json", provider_config)
 
         submit_receipt = None
         if options.submit_url and options.submit_token and not options.dry_run_submit:
@@ -244,6 +368,7 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             execution=normalized,
             execution_digest=execution_digest,
             payload_digest=payload_digest,
+            output_sha256=output_sha256,
             private_dir=private_dir,
             benchmark_path=benchmark_path,
             submission_path=submission_path,
@@ -293,7 +418,7 @@ def _aggregate_usage(
     finished = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
     duration_ms = max(int((finished - started).total_seconds() * 1000), 0)
     cost_values = [
-        int(result.usage.cost_usd * 1_000_000)
+        result.usage.cost_usd
         for result in results
         if result.usage.cost_usd is not None
     ]
@@ -303,18 +428,9 @@ def _aggregate_usage(
         "cache_read_tokens": sum_int(lambda usage: usage.cache_read_tokens),
         "cache_creation_tokens": sum_int(lambda usage: usage.cache_creation_tokens),
         "reasoning_tokens": sum_int(lambda usage: usage.reasoning_tokens),
-        "cost_usd": (sum(cost_values) / 1_000_000) if cost_values else None,
+        "cost_usd": sum(cost_values) if cost_values else None,
         "duration_ms": duration_ms,
     }
-
-
-def _single_or_none(values) -> str | None:
-    normalized = {value for value in values if value}
-    if not normalized:
-        return None
-    if len(normalized) == 1:
-        return next(iter(normalized))
-    raise WeeklyLlmRunnerError("conflicting private runtime identifiers across item runs")
 
 
 def _public_benchmark(execution: Mapping[str, Any]) -> dict[str, Any]:
@@ -333,7 +449,8 @@ def _public_benchmark(execution: Mapping[str, Any]) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(canonical_json(payload) + "\n", encoding="utf-8")
-    _secure_file(path)
+    _chmod_or_raise(path, 0o600)
+    _assert_secure_permissions(path, 0o600)
 
 
 def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:

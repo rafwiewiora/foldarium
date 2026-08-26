@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping, Sequence
 
 from . import ProviderResult, ProviderUsage
+from ..weekly_llm_catalog import (
+    CatalogModel,
+    catalog_model_from_mapping,
+    resolve_sol_high_model,
+)
+from ..weekly_llm_config import cursor_provider_config
+from ..weekly_llm_contract import sha256_hex
+from ..weekly_llm_provenance import canonical_private_json
+from ..weekly_selector_prompt import SELECTOR_SYSTEM_PROMPT
 
 try:
     from cursor_sdk import Agent, AgentOptions, Cursor, LocalAgentOptions, SDKImage, UserMessage
-    from cursor_sdk.types import ModelParameterDefinition, ModelParameterValue, ModelSelection, ModelVariant, SDKModel
+    from cursor_sdk.types import ModelParameterValue, ModelSelection
 except ImportError:  # pragma: no cover - optional dependency
     Agent = None  # type: ignore[assignment,misc]
     AgentOptions = None  # type: ignore[assignment,misc]
@@ -18,15 +28,11 @@ except ImportError:  # pragma: no cover - optional dependency
     LocalAgentOptions = None  # type: ignore[assignment,misc]
     SDKImage = None  # type: ignore[assignment,misc]
     UserMessage = None  # type: ignore[assignment,misc]
-    ModelParameterDefinition = object  # type: ignore[assignment,misc]
-    ModelParameterValue = object  # type: ignore[assignment,misc]
-    ModelSelection = object  # type: ignore[assignment,misc]
-    ModelVariant = object  # type: ignore[assignment,misc]
-    SDKModel = object  # type: ignore[assignment,misc]
+    ModelParameterValue = None  # type: ignore[assignment,misc]
+    ModelSelection = None  # type: ignore[assignment,misc]
 
 CURSOR_SDK_PACKAGE = "cursor-sdk"
 CURSOR_SDK_VERSION = "1.0.28"
-SOL_DISPLAY_NEEDLE = "gpt-5.6 sol"
 HIGH_EFFORT_NEEDLE = "high"
 
 
@@ -47,49 +53,89 @@ def preflight_cursor_api_key() -> None:
         raise CursorProviderError("CURSOR_API_KEY must be set for Cursor scoring")
 
 
-def list_cursor_models(*, api_key: str | None = None) -> list[SDKModel]:
+def list_cursor_models(*, api_key: str | None = None) -> list[CatalogModel]:
     require_cursor_sdk()
     preflight_cursor_api_key()
     key = api_key or os.environ["CURSOR_API_KEY"].strip()
-    models = Cursor.models.list(api_key=key)
-    return list(models)
+    return [catalog_model_from_mapping(model) for model in Cursor.models.list(api_key=key)]
 
 
-def resolve_sol_high_model(models: Sequence[SDKModel]) -> tuple[str, list[ModelParameterValue]]:
-    candidates: list[SDKModel] = []
-    for model in models:
-        haystack = f"{model.id} {model.display_name}".lower()
-        if "gpt-5.6" in haystack and "sol" in haystack:
-            candidates.append(model)
-    if len(candidates) != 1:
-        raise CursorProviderError("exact accessible GPT-5.6 Sol model could not be resolved")
-    model = candidates[0]
-    params = _resolve_high_reasoning_parameters(model)
-    return model.id, params
+def serialize_sdk_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if is_dataclass(value):
+        return serialize_sdk_value(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): serialize_sdk_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [serialize_sdk_value(item) for item in value]
+    if callable(value):
+        return None
+    return str(value)
 
 
-def _resolve_high_reasoning_parameters(model: SDKModel) -> list[ModelParameterValue]:
-    for parameter in model.parameters:
-        haystack = f"{parameter.id} {parameter.display_name}".lower()
-        if "reason" in haystack or "effort" in haystack:
-            for value in parameter.values:
-                label = f"{value.value} {value.display_name}".lower()
-                if HIGH_EFFORT_NEEDLE in label:
-                    return [ModelParameterValue(id=parameter.id, value=value.value)]
-            high_values = [
-                value
-                for value in parameter.values
-                if HIGH_EFFORT_NEEDLE in f"{value.value} {value.display_name}".lower()
-            ]
-            if len(high_values) == 1:
-                value = high_values[0]
-                return [ModelParameterValue(id=parameter.id, value=value.value)]
-    for variant in model.variants:
-        if HIGH_EFFORT_NEEDLE in variant.display_name.lower() or any(
-            HIGH_EFFORT_NEEDLE in param.value.lower() for param in variant.params
-        ):
-            return list(variant.params)
-    raise CursorProviderError("exact high-reasoning parameter for GPT-5.6 Sol could not be resolved")
+def build_cursor_user_message(*, item_prompt_text: str) -> str:
+    return (
+        "SYSTEM PROMPT (canonical; Cursor SDK cannot set a proprietary system role):\n"
+        f"{SELECTOR_SYSTEM_PROMPT.strip()}\n\n"
+        "ITEM REQUEST:\n"
+        f"{item_prompt_text.strip()}"
+    )
+
+
+def _sdk_model_params(params: Sequence[Any]) -> list[Any]:
+    return [ModelParameterValue(id=param.id, value=param.value) for param in params]
+
+
+def _applied_effort_from_model(model: Any, selected_params: Sequence[Any]) -> str | None:
+    if model is None:
+        return None
+    selected = {param.id: param.value for param in selected_params}
+    params = getattr(model, "params", None) or []
+    for param in params:
+        param_id = getattr(param, "id", None)
+        value = getattr(param, "value", None)
+        if param_id in selected and isinstance(value, str) and value == selected[param_id]:
+            if HIGH_EFFORT_NEEDLE in value.lower():
+                return "high"
+    return None
+
+
+def _observed_model_ids(result: Any) -> tuple[str, ...]:
+    observed: set[str] = set()
+    if result.model is not None:
+        model_id = getattr(result.model, "id", None)
+        if isinstance(model_id, str) and model_id.strip():
+            observed.add(model_id.strip())
+    if len(observed) != 1:
+        raise CursorProviderError("cursor run must observe exactly one model identifier")
+    return tuple(sorted(observed))
+
+
+def _provider_usage(agent: Any, result: Any) -> ProviderUsage:
+    usage = result.usage
+    cost_usd = None
+    if hasattr(agent, "get_usage"):
+        try:
+            billed = agent.get_usage()
+            for attr in ("cost_usd", "total_cost_usd", "cost"):
+                value = getattr(billed, attr, None)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    cost_usd = float(value)
+                    break
+        except Exception:
+            cost_usd = None
+    if usage is None:
+        return ProviderUsage(duration_ms=result.duration_ms, cost_usd=cost_usd)
+    return ProviderUsage(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cache_read_tokens=getattr(usage, "cache_read_tokens", None),
+        cache_creation_tokens=getattr(usage, "cache_write_tokens", None),
+        reasoning_tokens=getattr(usage, "reasoning_tokens", None),
+        cost_usd=cost_usd,
+        duration_ms=result.duration_ms,
+    )
 
 
 class CursorProvider:
@@ -99,12 +145,18 @@ class CursorProvider:
         self.dry_run = dry_run
         self.engine_version = CURSOR_SDK_VERSION
         self._model_id: str | None = None
-        self._model_params: list[Any] | None = None
+        self._model_params: tuple[Any, ...] | None = None
+        self._provider_config: dict[str, Any] | None = None
 
     def preflight(self) -> None:
         preflight_cursor_api_key()
         models = list_cursor_models(api_key=self.api_key)
         self._model_id, self._model_params = resolve_sol_high_model(models)
+        self._provider_config = cursor_provider_config(
+            engine_version=self.engine_version,
+            model_id=self._model_id,
+            model_params=[{"id": param.id, "value": param.value} for param in self._model_params],
+        )
 
     def score_item(
         self,
@@ -115,95 +167,71 @@ class CursorProvider:
         workspace_dir: str,
     ) -> ProviderResult:
         del item_id
-        if self._model_id is None or self._model_params is None:
+        if self._model_id is None or self._model_params is None or self._provider_config is None:
             self.preflight()
         if self.dry_run:
             raise CursorProviderError("dry-run Cursor scoring is disabled; use fake provider")
         images = [SDKImage.from_file(path) for path in image_paths]
-        message = UserMessage(text=prompt_text, images=images)
-        result = Agent.prompt(
-            message,
+        message = UserMessage(text=build_cursor_user_message(item_prompt_text=prompt_text), images=images)
+        sdk_params = _sdk_model_params(self._model_params)
+        with Agent.create(
             AgentOptions(
                 api_key=self.api_key,
-                model=ModelSelection(id=self._model_id, params=self._model_params),
+                model=ModelSelection(id=self._model_id, params=sdk_params),
                 local=LocalAgentOptions(cwd=workspace_dir, setting_sources=[]),
                 tools=[],
-            ),
-        )
-        if result.status != "finished":
-            raise CursorProviderError(f"cursor run failed with status {result.status}")
-        try:
-            response = json.loads(result.result)
-        except json.JSONDecodeError as error:
-            raise CursorProviderError("cursor result is not valid JSON") from error
-        observed_ids = _observed_model_ids(result)
-        usage = _provider_usage(result)
-        applied_effort = _applied_effort(result)
-        return ProviderResult(
-            response=response,
-            requested_id=f"{self._model_id}-high",
-            observed_ids=observed_ids,
-            requested_effort="high",
-            applied_effort=applied_effort,
-            effort_reporting="reported" if applied_effort is not None else "not_exposed",
-            engine_name="cursor-sdk",
-            engine_version=self.engine_version,
-            run_id=result.id,
-            session_id=result.agent_id,
-            usage=usage,
-            raw_envelope={
-                "run_id": result.id,
+            )
+        ) as agent:
+            run = agent.send(message)
+            result = run.wait()
+            if result.status != "finished":
+                raise CursorProviderError(f"cursor run failed with status {result.status}")
+            try:
+                response = json.loads(result.result)
+            except json.JSONDecodeError as error:
+                raise CursorProviderError("cursor result is not valid JSON") from error
+            observed_ids = _observed_model_ids(result)
+            applied_effort = _applied_effort_from_model(result.model, self._model_params)
+            usage = _provider_usage(agent, result)
+            billed_usage = None
+            if hasattr(agent, "get_usage"):
+                try:
+                    billed_usage = agent.get_usage()
+                except Exception:
+                    billed_usage = None
+            envelope = {
                 "agent_id": result.agent_id,
+                "run_id": result.id,
                 "status": result.status,
-                "model": result.model.model_dump() if hasattr(result.model, "model_dump") else result.model,
-                "usage": result.usage.model_dump() if result.usage and hasattr(result.usage, "model_dump") else result.usage,
-            },
-        )
-
-
-def _observed_model_ids(result: Any) -> tuple[str, ...]:
-    observed: set[str] = set()
-    if result.model is not None:
-        model_id = getattr(result.model, "id", None) or getattr(result.model, "model", None)
-        if isinstance(model_id, str) and model_id.strip():
-            observed.add(model_id.strip())
-    if len(observed) != 1:
-        raise CursorProviderError("cursor run must observe exactly one model identifier")
-    return tuple(sorted(observed))
-
-
-def _provider_usage(result: Any) -> ProviderUsage:
-    usage = result.usage
-    if usage is None:
-        return ProviderUsage(duration_ms=result.duration_ms)
-    return ProviderUsage(
-        input_tokens=getattr(usage, "input_tokens", None),
-        output_tokens=getattr(usage, "output_tokens", None),
-        cache_read_tokens=getattr(usage, "cache_read_tokens", None),
-        cache_creation_tokens=getattr(usage, "cache_write_tokens", None),
-        reasoning_tokens=getattr(usage, "reasoning_tokens", None),
-        cost_usd=None,
-        duration_ms=result.duration_ms,
-    )
-
-
-def _applied_effort(result: Any) -> str | None:
-    model = result.model
-    if model is None:
-        return None
-    params = getattr(model, "params", None) or []
-    for param in params:
-        value = getattr(param, "value", None)
-        if isinstance(value, str) and HIGH_EFFORT_NEEDLE in value.lower():
-            return "high"
-    return "high"
+                "model": serialize_sdk_value(result.model),
+                "usage": serialize_sdk_value(result.usage),
+                "billed_usage": serialize_sdk_value(billed_usage),
+            }
+            return ProviderResult(
+                response=response,
+                requested_id=self._model_id,
+                observed_ids=observed_ids,
+                requested_effort="high",
+                applied_effort=applied_effort,
+                effort_reporting="reported" if applied_effort is not None else "not_exposed",
+                engine_name="cursor-sdk",
+                engine_version=self.engine_version,
+                run_id=result.id,
+                session_id=result.agent_id,
+                usage=usage,
+                provider_config=self._provider_config or {},
+                raw_envelope=envelope,
+                raw_envelope_digest=sha256_hex(canonical_private_json(envelope)),
+            )
 
 
 __all__ = [
     "CURSOR_SDK_VERSION",
     "CursorProvider",
     "CursorProviderError",
+    "build_cursor_user_message",
     "list_cursor_models",
     "preflight_cursor_api_key",
     "resolve_sol_high_model",
+    "serialize_sdk_value",
 ]

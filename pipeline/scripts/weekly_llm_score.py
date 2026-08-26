@@ -29,18 +29,28 @@ def _build_provider(args: argparse.Namespace):
         fixture_path = args.fake_fixture
         if fixture_path is None:
             raise SystemExit("fake provider requires --fake-fixture")
-        return FakeProvider(fixture_path=fixture_path), "fake", args.display_name or "Fake Provider"
+        return FakeProvider(fixture_path=fixture_path), "fake", args.display_name or "Fake Provider", False
     if args.provider == "claude":
-        return ClaudeProvider(dry_run=args.dry_run_provider), "anthropic", args.display_name or "Claude Opus"
+        return (
+            ClaudeProvider(dry_run=args.dry_run_provider),
+            "anthropic",
+            args.display_name or "Claude Opus",
+            True,
+        )
     if args.provider == "cursor":
-        return CursorProvider(dry_run=args.dry_run_provider), "cursor", args.display_name or "GPT-5.6 Sol"
+        return (
+            CursorProvider(dry_run=args.dry_run_provider),
+            "cursor",
+            args.display_name or "GPT-5.6 Sol",
+            True,
+        )
     raise SystemExit(f"unsupported provider: {args.provider}")
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    provider, provider_name, display_name = _build_provider(args)
-    submit_token = args.submit_token or os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_TOKEN")
-    submit_url = args.submit_url
+    provider, provider_name, display_name, live_provider = _build_provider(args)
+    submit_token = os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_TOKEN")
+    submit_url = args.submit_url or os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_URL")
     dry_run_submit = args.artifact_only or not submit_url or not submit_token
     result = run_weekly_llm_score(
         RunnerOptions(
@@ -49,6 +59,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             provider=provider,
             display_name=display_name,
             provider_name=provider_name,
+            live_provider=live_provider,
+            network_allowlist_path=args.network_allowlist,
+            egress_enforcement_asserted=args.assert_provider_egress_enforced,
             execution_id=args.execution_id,
             supersedes_execution_id=args.supersedes_execution_id,
             submit_url=submit_url,
@@ -63,6 +76,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "execution_id": result.execution["execution_id"],
                 "execution_digest": result.execution_digest,
                 "payload_digest": result.payload_digest,
+                "output_sha256": result.output_sha256,
                 "benchmark_path": str(result.benchmark_path),
                 "submission_path": str(result.submission_path),
                 "private_dir": str(result.private_dir),
@@ -96,7 +110,7 @@ def _cmd_list_cursor_models(_args: argparse.Namespace) -> int:
                     "id": parameter.id,
                     "display_name": parameter.display_name,
                     "values": [
-                        {"id": value.id, "display_name": value.display_name}
+                        {"value": value.value, "display_name": value.display_name}
                         for value in parameter.values
                     ],
                 }
@@ -143,19 +157,24 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--execution-id", default=None)
     run_parser.add_argument("--supersedes-execution-id", default=None)
     run_parser.add_argument(
-        "--submit-url",
-        default=os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_URL"),
-        help="optional benchmark endpoint URL",
+        "--network-allowlist",
+        type=Path,
+        help="reviewed provider-only network allowlist JSON for live providers",
     )
     run_parser.add_argument(
-        "--submit-token",
+        "--assert-provider-egress-enforced",
+        action="store_true",
+        help="operator attestation that provider-only egress enforcement is active",
+    )
+    run_parser.add_argument(
+        "--submit-url",
         default=None,
-        help="benchmark ingest token (or set FOLDARIUM_SELECTOR_BENCHMARK_TOKEN)",
+        help="optional benchmark endpoint URL (default: FOLDARIUM_SELECTOR_BENCHMARK_URL env)",
     )
     run_parser.add_argument(
         "--artifact-only",
         action="store_true",
-        help="never submit to network (default unless URL and token are set)",
+        help="never submit to network (default unless URL and env token are set)",
     )
     run_parser.set_defaults(handler=_cmd_run)
 

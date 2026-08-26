@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -429,6 +430,10 @@ def _normalize_usage(raw: Any) -> dict[str, Any | None]:
         if value is None:
             normalized[key] = None
             continue
+        if isinstance(value, bool):
+            raise WeeklyLlmContractError(f"benchmark usage.{key} must be null or non-negative")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise WeeklyLlmContractError(f"benchmark usage.{key} must be null or non-negative")
         if not isinstance(value, (int, float)) or value < 0:
             raise WeeklyLlmContractError(f"benchmark usage.{key} must be null or non-negative")
         if key != "cost_usd" and not isinstance(value, int):
