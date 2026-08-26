@@ -1023,6 +1023,7 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         coordinator = SupabaseCoordinator(
             "https://project.supabase.co", "service-role-key", "results", opener=opener
         )
+        self.assertEqual(coordinator.current_weekly_quiz_round(), current)
         self.assertEqual(
             coordinator.current_weekly_quiz_round("wwpdb-2026-08-08"), current
         )

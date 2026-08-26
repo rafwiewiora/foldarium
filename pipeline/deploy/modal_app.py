@@ -1203,10 +1203,10 @@ if modal is not None:
     ) -> dict[str, Any]:
         """Evaluate one exact blind round and optionally publish it atomically.
 
-        Scheduled calls derive the current round from the most recent UTC
-        Saturday and therefore use the classic PDB target IDs stored in that
-        round's private index. ``publish`` is an explicit per-call override;
-        when omitted, the deployment must set the mutation gate to ``1``.
+        Scheduled calls follow the environment's actual current round and use
+        the classic PDB target IDs stored in that round's private index.
+        ``publish`` is an explicit per-call override; when omitted, the
+        deployment must set the mutation gate to ``1``.
         """
 
         import tempfile
@@ -1224,9 +1224,7 @@ if modal is not None:
         coordinator = SupabaseCoordinator.from_env()
         selected_round_id = round_id
         if selected_round_id is None:
-            selected_round_id = coordinator.current_weekly_quiz_round(
-                _default_weekly_campaign_id()
-            )["round_id"]
+            selected_round_id = coordinator.current_weekly_quiz_round()["round_id"]
         try:
             round_record, private_index_content = (
                 coordinator.weekly_quiz_reveal_inputs(selected_round_id)
@@ -1238,6 +1236,31 @@ if modal is not None:
             raise WednesdayRevealNotReady(
                 f"weekly reveal inputs are not ready for {selected_round_id}"
             ) from exc
+
+        closes_at = round_record.get("closes_at")
+        if isinstance(closes_at, str):
+            try:
+                parsed_close = datetime.fromisoformat(closes_at.replace("Z", "+00:00"))
+            except ValueError:
+                parsed_close = None
+            if (
+                parsed_close is not None
+                and parsed_close.tzinfo is not None
+                and datetime.now(timezone.utc) < parsed_close
+            ):
+                outcome = {
+                    "status": "voting-open",
+                    "round_id": selected_round_id,
+                    "closes_at": closes_at,
+                    "mode": "publish" if mutation_enabled else "dry-run",
+                    "mutation_enabled": mutation_enabled,
+                }
+                print(
+                    "foldarium.wednesday_reveal "
+                    + json.dumps(outcome, sort_keys=True),
+                    flush=True,
+                )
+                return outcome
 
         def prediction_resolver(choice: Mapping[str, Any]) -> dict[str, Any]:
             return coordinator.download_predicted_complex(

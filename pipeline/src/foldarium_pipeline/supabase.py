@@ -715,17 +715,19 @@ class SupabaseCoordinator(SupabasePublisher):
         return row
 
     def current_weekly_quiz_round(
-        self, campaign_id: str, *, environment: str = "production"
+        self, campaign_id: str | None = None, *, environment: str = "production"
     ) -> dict[str, Any]:
-        """Return the one current public round and bind it to an expected campaign.
+        """Return the one current public round, optionally bound to a campaign.
 
         A Saturday campaign can acquire an immutable replacement round after a
         publication defect is found.  The public RPC already resolves that
-        choice by ``opens_at``; this wrapper prevents a scheduled Wednesday
-        evaluator from silently crossing into another campaign.
+        choice by ``opens_at``. Callers resolving a known campaign can retain
+        the explicit guard, while scheduled lifecycle jobs should follow the
+        environment's actual current round across campaign rollovers.
         """
 
-        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        if campaign_id is not None:
+            campaign_id = _safe_identifier(campaign_id, "campaign_id")
         environment = _weekly_quiz_environment(environment)
         rows = self._rpc(
             "get_current_weekly_quiz_round", {"p_environment": environment}
@@ -737,7 +739,7 @@ class SupabaseCoordinator(SupabasePublisher):
             )
         row = dict(rows[0])
         row["round_id"] = _safe_identifier(row.get("round_id"), "round_id")
-        if row.get("campaign_id") != campaign_id:
+        if campaign_id is not None and row.get("campaign_id") != campaign_id:
             raise SupabasePublicationError(
                 "current weekly quiz round does not belong to the expected campaign"
             )

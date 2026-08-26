@@ -436,13 +436,15 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
             "wwpdb-2026-08-08",
         )
 
-    def test_scheduled_tick_resolves_latest_immutable_campaign_round(self) -> None:
+    def test_scheduled_tick_follows_current_round_across_campaign_rollover(self) -> None:
         module = self.deployment_module()
 
         class Coordinator:
-            def current_weekly_quiz_round(self, campaign_id):
-                self.campaign_id = campaign_id
-                return {"round_id": "weekly-2026-08-08-v2"}
+            def current_weekly_quiz_round(self):
+                return {
+                    "round_id": "weekly-2026-08-08-v2",
+                    "campaign_id": "wwpdb-2026-08-01",
+                }
 
             def weekly_quiz_reveal_inputs(self, round_id):
                 self.round_id = round_id
@@ -468,16 +470,43 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         ), patch(
             "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal",
             side_effect=reveal_service,
-        ), patch.object(
-            module,
-            "_default_weekly_campaign_id",
-            return_value="wwpdb-2026-08-08",
         ):
             report = raw_function(None, False)
 
-        self.assertEqual(coordinator.campaign_id, "wwpdb-2026-08-08")
         self.assertEqual(coordinator.round_id, "weekly-2026-08-08-v2")
         self.assertEqual(report["round_id"], "weekly-2026-08-08-v2")
+
+    def test_open_round_is_a_normal_scheduled_noop(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            def current_weekly_quiz_round(self):
+                return {"round_id": "weekly-open"}
+
+            def weekly_quiz_reveal_inputs(self, round_id):
+                return {
+                    "round_id": round_id,
+                    "closes_at": "2099-08-23T23:59:59Z",
+                }, b"private-index"
+
+            def download_predicted_complex(self, run_id, sample_id):
+                raise AssertionError("open round must not resolve predictions")
+
+        raw_function = module.wednesday_reveal_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch(
+            "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal"
+        ) as reveal_service:
+            report = raw_function(None, False)
+
+        reveal_service.assert_not_called()
+        self.assertEqual(report["status"], "voting-open")
+        self.assertEqual(report["round_id"], "weekly-open")
+        self.assertEqual(report["closes_at"], "2099-08-23T23:59:59Z")
+        self.assertEqual(report["mode"], "dry-run")
+        self.assertFalse(report["mutation_enabled"])
 
     def test_schedule_and_cpu_image_have_bounded_retries_and_evaluation_stack(self) -> None:
         module = self.deployment_module()
