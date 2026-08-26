@@ -73,7 +73,11 @@ WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 DEFAULT_ARTIFACT_DOWNLOAD_WORKERS = 8
 DEFAULT_TARGET_ALIGNMENT_WORKERS = 1
 MAX_TARGET_ALIGNMENT_WORKERS = 8
-DEFAULT_PUBLIC_UPLOAD_WORKERS = 8
+# Supabase Storage intermittently rejects the scheduler's large publication
+# burst at eight concurrent requests. Public objects are content-addressed and
+# publication is not latency-sensitive, so the reliable default is serial.
+# Callers may still opt into bounded concurrency for controlled backfills.
+DEFAULT_PUBLIC_UPLOAD_WORKERS = 1
 MAX_PUBLIC_UPLOAD_WORKERS = 8
 
 

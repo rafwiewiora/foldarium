@@ -1328,7 +1328,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 downloader=lambda uri, **_: downloads[uri],
             )
             sequential_private = FakeCoordinator("private")
-            sequential_public = FakeCoordinator("quiz-public")
+            sequential_public = TrackingPublicCoordinator("quiz-public")
             sequential_summary = publish_staged_weekly_quiz(
                 temporary,
                 private_coordinator=sequential_private,
@@ -1337,7 +1337,6 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 closes_at="2026-08-12T00:00:00Z",
                 open_round=True,
                 round_environment="preview",
-                public_upload_workers=1,
             )
 
             parallel_private = FakeCoordinator("private")
@@ -1353,6 +1352,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 public_upload_workers=2,
             )
 
+        self.assertEqual(sequential_public.maximum_active_uploads, 1)
         self.assertGreater(parallel_public.maximum_active_uploads, 1)
         self.assertLessEqual(parallel_public.maximum_active_uploads, 2)
         self.assertEqual(
