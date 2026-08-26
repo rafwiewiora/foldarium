@@ -15,7 +15,7 @@ as $$
   select case
     when jsonb_typeof(p_attestation) is distinct from 'object' then false
     else coalesce(
-      jsonb_object_length(p_attestation) = 8
+      (select count(*) from jsonb_object_keys(p_attestation)) = 8
       and p_attestation ?& array[
         'schema_version',
         'workspace_policy',
