@@ -143,6 +143,36 @@ class RetrospectiveArchiveSchemaTests(unittest.TestCase):
         self.assertIn("identity.participant_kind = 'llm'", source_function)
         self.assertNotIn("weekly-2026-08-08-beta-v4", source_function)
 
+    def test_legacy_anonymous_fallback_is_exactly_scoped_and_private(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        migration = (
+            repository
+            / "supabase"
+            / "migrations"
+            / "20260826180000_allow_legacy_anonymous_retrospective.sql"
+        ).read_text(encoding="utf-8").lower()
+        normalized = " ".join(migration.split())
+
+        self.assertIn(
+            "p_round_id = 'weekly-2026-08-08-beta-v5-global-tm-29'",
+            normalized,
+        )
+        self.assertIn("then 'anonymous'", normalized)
+        self.assertIn("validation.maximum_display_name_count <= 1", normalized)
+        self.assertIn(
+            "or p_round_id = 'weekly-2026-08-08-beta-v5-global-tm-29'",
+            normalized,
+        )
+        self.assertNotIn("weekly-2026-08-08-beta-v4", normalized)
+        self.assertNotIn("grant ", normalized)
+        for role in ("public", "anon", "authenticated", "service_role"):
+            self.assertIn(
+                "revoke all on function "
+                "private.foldarium_expected_weekly_retrospective_source(text) "
+                f"from {role}",
+                normalized,
+            )
+
     def test_catalog_is_separate_append_only_and_service_only(self) -> None:
         normalized = " ".join(self.migration().split())
         self.assertIn(

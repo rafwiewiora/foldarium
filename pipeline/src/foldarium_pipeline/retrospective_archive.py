@@ -35,6 +35,8 @@ RETROSPECTIVE_PUBLIC_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v1"
 RETROSPECTIVE_ADMIN_FORMAT_VERSION = "foldarium.weekly-retrospective-admin/v1"
 RETROSPECTIVE_MEDIA_TYPE = "application/json"
 MIN_PUBLIC_HUMAN_COHORT = 3
+LEGACY_ANONYMOUS_ROUND_ID = "weekly-2026-08-08-beta-v5-global-tm-29"
+LEGACY_ANONYMOUS_DISPLAY_NAME = "Anonymous"
 
 APPROVED_AUTOMATED_IDENTITIES = frozenset(
     {
@@ -288,10 +290,16 @@ def build_retrospective_source_snapshot(
     for participant in sorted(participant_links):
         automated_identity = automation_by_participant.get(participant)
         names = current_names.get(participant, set())
-        if automated_identity is None and len(names) != 1:
-            raise RetrospectiveArchiveError(
-                "human participant must have one unambiguous pseudonym"
-            )
+        human_display_name = None
+        if automated_identity is None:
+            if len(names) == 1:
+                human_display_name = next(iter(names))
+            elif not names and round_id == LEGACY_ANONYMOUS_ROUND_ID:
+                human_display_name = LEGACY_ANONYMOUS_DISPLAY_NAME
+            else:
+                raise RetrospectiveArchiveError(
+                    "human participant must have one unambiguous pseudonym"
+                )
         if automated_identity is not None:
             if automated_identity in active_automated_identities:
                 raise RetrospectiveArchiveError(
@@ -305,9 +313,7 @@ def build_retrospective_source_snapshot(
                     "automated" if automated_identity is not None else "human"
                 ),
                 "automated_identity": automated_identity,
-                "display_name": (
-                    None if automated_identity is not None else next(iter(names))
-                ),
+                "display_name": human_display_name,
                 "current_session_count": current_session_counts.get(participant, 0),
             }
         )

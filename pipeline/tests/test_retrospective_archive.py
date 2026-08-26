@@ -227,6 +227,56 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         self.assertEqual(human_vote["selection_kind"], "exact")
         self.assertEqual(claude_vote["selection_kind"], "cluster")
 
+    def test_known_legacy_round_uses_anonymous_for_missing_human_session(self) -> None:
+        rows = source_rows()
+        rows["current_sessions"] = [
+            row
+            for row in rows["current_sessions"]
+            if row["user_id"] != HUMAN_ID
+        ]
+
+        snapshot = build_retrospective_source_snapshot(ROUND_ID, **rows)
+        human = next(
+            participant
+            for participant in snapshot["participants"]
+            if participant["participant_link"] == HUMAN_ID
+        )
+
+        self.assertEqual(human["display_name"], "Anonymous")
+        self.assertEqual(human["current_session_count"], 0)
+
+    def test_future_round_still_rejects_missing_human_session(self) -> None:
+        future_round_id = "weekly-2026-08-22"
+        rows = source_rows()
+        for collection in ("votes", "vote_attempts", "current_sessions"):
+            for row in rows[collection]:
+                row["round_id"] = future_round_id
+        rows["current_sessions"] = [
+            row
+            for row in rows["current_sessions"]
+            if row["user_id"] != HUMAN_ID
+        ]
+
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "one unambiguous pseudonym"
+        ):
+            build_retrospective_source_snapshot(future_round_id, **rows)
+
+    def test_known_legacy_round_still_rejects_ambiguous_human_name(self) -> None:
+        rows = source_rows()
+        rows["current_sessions"].append(
+            {
+                "round_id": ROUND_ID,
+                "user_id": HUMAN_ID,
+                "display_name": "Another Name",
+            }
+        )
+
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "one unambiguous pseudonym"
+        ):
+            build_retrospective_source_snapshot(ROUND_ID, **rows)
+
     def test_source_snapshot_requires_exact_code_approved_registry_rows(self) -> None:
         for mutation, expected in (
             (
