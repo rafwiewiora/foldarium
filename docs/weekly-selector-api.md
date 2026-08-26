@@ -93,27 +93,70 @@ container bytes.
 
 ```json
 {
-  "schema_version": "foldarium.weekly-selector-token-request/v2",
   "round_id": "weekly-2026-09-05",
   "environment": "preview",
   "display_name": "Claude Opus",
+  "method_name": "fold-ranker",
+  "method_version": "2.0.0",
   "provider": "anthropic",
-  "model": "claude-opus",
+  "model_name": "claude-opus",
   "model_version": "exact-provider-version",
   "prompt_sha256": "…64 lowercase hex…",
-  "tool_sha256": "…64 lowercase hex…",
-  "config_sha256": "…64 lowercase hex…"
+  "tools_sha256": "…64 lowercase hex…",
+  "config_sha256": "…64 lowercase hex…",
+  "blindness_attestation": {
+    "schema_version": "foldarium.selector-blindness-attestation/v1",
+    "workspace_policy": "verified-kit-only",
+    "network_policy": "provider-api-only",
+    "network_allowlist_sha256": "…64 lowercase hex…",
+    "browser_enabled": false,
+    "web_search_enabled": false,
+    "external_retrieval_enabled": false,
+    "shared_cache_enabled": false
+  }
 }
 ```
 
-Provider, model, version, and all three digests are required. Digests refer to
-frozen artifacts:
+Every top-level and nested key shown above is required, and unknown keys are
+rejected. Provider, model, version, and all three existing method digests remain
+required. Those digests refer to frozen artifacts:
 
 - `prompt_sha256`: exact prompt bytes, including system/developer text and
   templates supplied by the operator;
-- `tool_sha256`: canonical tool declarations plus any executable/helper bundle
+- `tools_sha256`: canonical tool declarations plus any executable/helper bundle
   available to the model; and
 - `config_sha256`: canonical JSON for inference parameters and runtime settings.
+
+The nested blindness attestation is a claim about the inference workspace, not
+the browser or CLI used to request the token. `workspace_policy` is exactly
+`verified-kit-only`. `network_policy` is exactly `none` or
+`provider-api-only`. The allowlist is represented for audit as a sorted,
+duplicate-free JSON array of reviewed network-control allowlist strings, and:
+
+```text
+network_allowlist_sha256 = SHA256(canonical_json(network_allowlist))
+```
+
+For `network_policy: "none"`, the allowlist must be `[]` and its required digest
+is `4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`.
+For `provider-api-only`, the digest must not be the canonical empty-list digest;
+it identifies the non-empty reviewed provider/auth allowlist enforced outside
+the model workspace. Browser access, web search,
+external retrieval, and shared caches must each be the JSON boolean `false`;
+`true`, strings such as `"false"`, omissions, and additional capabilities fail
+closed.
+
+The API validates and normalizes the object, then computes:
+
+```text
+blindness_attestation_sha256 =
+  SHA256(canonical_json(normalized_blindness_attestation))
+```
+
+It passes both the full object and digest to the issuance RPC. The database
+revalidates the exact object shape, policies, disabled capabilities, empty
+allowlist rule, and canonical digest before storage. The attestation digest is
+part of identity uniqueness; prompt/tools/config hashes are unchanged.
 
 The server verifies that the requested environment equals the trusted
 deployment environment and that the round is the prepared next/open round. It
@@ -122,9 +165,9 @@ cryptographically random token. The raw token is returned exactly once:
 
 ```json
 {
-  "schema_version": "foldarium.weekly-selector-token/v2",
   "token": "one-time-plaintext-secret",
   "token_type": "Bearer",
+  "token_id": "0f94f059-b192-4c35-b9c0-f6520800cf07",
   "environment": "preview",
   "round_id": "weekly-2026-09-05",
   "expires_at": "2026-09-09T00:00:00Z"
@@ -280,7 +323,9 @@ pre-close revision per identity/round.
 The response reports exact and cluster scoring separately, with per-item
 `cluster`, `exact`, and `none` counts/names in the corresponding mode. It may
 include the deterministic Smina participant only when its complete provenance
-and input checks pass. It must not expose user IDs, token data, unrevealed
+and input checks pass. Selector identity metadata includes the normalized
+blindness attestation and its verified canonical digest after reveal. It must
+not expose user IDs, token data, unrevealed
 rounds, private pipeline identifiers, prompt contents, reasoning traces, or
 superseded ballots.
 

@@ -8,6 +8,8 @@ import {
   verifySelectorToken,
 } from '../api/weekly-selector.js';
 import {
+  BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+  EMPTY_NETWORK_ALLOWLIST_SHA256,
   SUBMISSION_SCHEMA_VERSION,
   canonicalJson,
 } from '../lib/weekly-selector-contract.js';
@@ -89,6 +91,21 @@ function validTokenRequest(overrides = {}) {
     prompt_sha256: 'c'.repeat(64),
     tools_sha256: 'd'.repeat(64),
     config_sha256: 'e'.repeat(64),
+    blindness_attestation: validBlindnessAttestation(),
+    ...overrides,
+  };
+}
+
+function validBlindnessAttestation(overrides = {}) {
+  return {
+    schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+    workspace_policy: 'verified-kit-only',
+    network_policy: 'none',
+    network_allowlist_sha256: EMPTY_NETWORK_ALLOWLIST_SHA256,
+    browser_enabled: false,
+    web_search_enabled: false,
+    external_retrieval_enabled: false,
+    shared_cache_enabled: false,
     ...overrides,
   };
 }
@@ -197,6 +214,18 @@ test('serves static API documentation without database credentials', async () =>
   assert.equal(response.body.complete_only, true);
   assert.equal(response.body.schema_version, 'foldarium.weekly-selector-api/v2');
   assert.equal(response.body.canonical_json_required, true);
+  assert.equal(
+    response.body.blindness_attestation_schema_version,
+    BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+  );
+  assert.equal(
+    response.body.token_request.blindness_attestation.empty_network_allowlist_sha256,
+    EMPTY_NETWORK_ALLOWLIST_SHA256,
+  );
+  assert.deepEqual(
+    response.body.token_request.exact_keys.at(-1),
+    'blindness_attestation',
+  );
   assert.equal(response.body.endpoints.submit.path, '/api/weekly-selector/submissions');
   assert.equal(response.body.decision_modes.clustered[0].selection_kind, 'cluster');
   assert.equal(response.body.decision_modes.unclustered[0].selection_kind, 'exact');
@@ -284,6 +313,13 @@ test('issues a round-scoped expiring v2 token without exposing persisted hashes'
         assert.equal(body.p_prompt_sha256, 'c'.repeat(64));
         assert.equal(body.p_tools_sha256, 'd'.repeat(64));
         assert.equal(body.p_config_sha256, 'e'.repeat(64));
+        assert.deepEqual(body.p_blindness_attestation, validBlindnessAttestation());
+        assert.equal(
+          body.p_blindness_attestation_sha256,
+          createHash('sha256')
+            .update(canonicalJson(validBlindnessAttestation()))
+            .digest('hex'),
+        );
         return [{
           token_id: '22222222-2222-4222-8222-222222222222',
           expires_at: round.closes_at,
@@ -308,6 +344,41 @@ test('issues a round-scoped expiring v2 token without exposing persisted hashes'
   assert.equal(response.body.expires_at, round.closes_at);
   assert.equal(response.body.provider, 'example-provider');
   assert.doesNotMatch(response.text, /sb_secret_production|browser-jwt|[0-9a-f]{64}/);
+});
+
+test('token issuance fails closed before RPC for invalid blindness capabilities', async () => {
+  const fetchImpl = recordingFetch([
+    {
+      match: url => url.includes('/auth/v1/user'),
+      respond: () => { throw new Error('authentication must not be called'); },
+    },
+    {
+      match: url => url.includes('/rpc/issue_weekly_selector_token_v2'),
+      respond: () => { throw new Error('issuance RPC must not be called'); },
+    },
+  ]);
+  const invalidAttestations = [
+    validBlindnessAttestation({ browser_enabled: true }),
+    validBlindnessAttestation({ unknown_capability: false }),
+    validBlindnessAttestation({ network_policy: 'open' }),
+    validBlindnessAttestation({ network_allowlist_sha256: 'f'.repeat(64) }),
+  ];
+  for (const blindnessAttestation of invalidAttestations) {
+    const response = await invoke(makeHandler({ fetchImpl }), {
+      method: 'POST',
+      url: 'https://foldarium.test/api/weekly-selector/tokens',
+      headers: {
+        authorization: 'Bearer browser-jwt',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(validTokenRequest({
+        blindness_attestation: blindnessAttestation,
+      })),
+    });
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.body, { error: 'Invalid token request' });
+  }
+  assert.equal(fetchImpl.calls.length, 0);
 });
 
 test('revokes only an authenticated owner token in the deployment environment', async () => {

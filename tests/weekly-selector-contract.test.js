@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BLINDNESS_ATTESTATION_SCHEMA_VERSION,
   ContractError,
+  EMPTY_NETWORK_ALLOWLIST_SHA256,
   KIT_SCHEMA_VERSION,
   SUBMISSION_SCHEMA_VERSION,
   canonicalJson,
@@ -10,6 +12,7 @@ import {
   normalizeMethodField,
   sha256Hex,
   validateCompleteSubmission,
+  validateBlindnessAttestation,
   validateKitDescriptor,
   validateTokenRequest,
 } from '../lib/weekly-selector-contract.js';
@@ -102,6 +105,21 @@ function validTokenRequest(overrides = {}) {
     prompt_sha256: 'c'.repeat(64),
     tools_sha256: 'd'.repeat(64),
     config_sha256: 'e'.repeat(64),
+    blindness_attestation: validBlindnessAttestation(),
+    ...overrides,
+  };
+}
+
+function validBlindnessAttestation(overrides = {}) {
+  return {
+    schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+    workspace_policy: 'verified-kit-only',
+    network_policy: 'none',
+    network_allowlist_sha256: EMPTY_NETWORK_ALLOWLIST_SHA256,
+    browser_enabled: false,
+    web_search_enabled: false,
+    external_retrieval_enabled: false,
+    shared_cache_enabled: false,
     ...overrides,
   };
 }
@@ -316,6 +334,7 @@ test('validates the extended model identity and explicit token scope', () => {
   assert.equal(normalized.display_name, 'Ada Lovelace');
   assert.equal(normalized.provider, 'example-provider');
   assert.equal(normalized.prompt_sha256, 'c'.repeat(64));
+  assert.deepEqual(normalized.blindness_attestation, validBlindnessAttestation());
   assert.throws(
     () => validateTokenRequest(validTokenRequest({ environment: 'production' }), {
       environment: 'preview',
@@ -331,6 +350,63 @@ test('validates the extended model identity and explicit token scope', () => {
   const missingProvider = validTokenRequest();
   delete missingProvider.provider;
   assert.throws(() => validateTokenRequest(missingProvider), /missing required key/);
+});
+
+test('blindness attestation rejects unknown keys and enabled capabilities', () => {
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({ extra: false })),
+    /unknown key/,
+  );
+  for (const capability of [
+    'browser_enabled',
+    'web_search_enabled',
+    'external_retrieval_enabled',
+    'shared_cache_enabled',
+  ]) {
+    assert.throws(
+      () => validateBlindnessAttestation(validBlindnessAttestation({
+        [capability]: true,
+      })),
+      new RegExp(`${capability} must be false`),
+    );
+  }
+});
+
+test('blindness attestation rejects invalid policies and allowlist hashes', () => {
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({
+      workspace_policy: 'workspace-read-only',
+    })),
+    /workspace_policy/,
+  );
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({
+      network_policy: 'open',
+    })),
+    /network_policy/,
+  );
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({
+      network_allowlist_sha256: 'BAD',
+    })),
+    /lowercase SHA-256/,
+  );
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({
+      network_allowlist_sha256: 'f'.repeat(64),
+    })),
+    /canonical empty allowlist/,
+  );
+  assert.throws(
+    () => validateBlindnessAttestation(validBlindnessAttestation({
+      network_policy: 'provider-api-only',
+    })),
+    /requires a non-empty allowlist digest/,
+  );
+  assert.doesNotThrow(() => validateBlindnessAttestation(validBlindnessAttestation({
+    network_policy: 'provider-api-only',
+    network_allowlist_sha256: 'f'.repeat(64),
+  })));
 });
 
 test('normalizes display and model identity fields', () => {

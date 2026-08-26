@@ -32,6 +32,8 @@ Create an append-only run record before work starts. It must contain:
 - item and choice counts;
 - provider, model, and exact version;
 - prompt, tool, and canonical config SHA-256 values;
+- the full structured blindness attestation, canonical attestation SHA-256, and
+  the reviewed network allowlist artifact/digest;
 - token ID (never the raw token), expiry, and revocation state;
 - submission UUID, revision, payload digest, and receipt;
 - operator/reviewer identities and approvals;
@@ -116,7 +118,7 @@ Compute and review:
 
 ```text
 prompt_sha256 = SHA256(exact prompt bytes)
-tool_sha256   = SHA256(canonical tool manifest or frozen tool bundle)
+tools_sha256  = SHA256(canonical tool manifest or frozen tool bundle)
 config_sha256 = SHA256(canonical JSON inference configuration)
 ```
 
@@ -132,6 +134,23 @@ Use a new workspace containing only the verified kit and frozen method
 artifacts. Clear or disable shared retrieval caches. Prefer no network access
 for inference; if the provider API requires network access, allowlist only the
 provider endpoint and required authentication service.
+
+Before inference, construct
+`foldarium.selector-blindness-attestation/v1` with
+`workspace_policy: "verified-kit-only"` and either:
+
+- `network_policy: "none"` with
+  `network_allowlist_sha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"`
+  (the SHA-256 of canonical JSON `[]`); or
+- `network_policy: "provider-api-only"` with the SHA-256 of the canonical
+  non-empty, sorted, duplicate-free JSON array used by the reviewed
+  provider/auth network control.
+
+Set `browser_enabled`, `web_search_enabled`, `external_retrieval_enabled`, and
+`shared_cache_enabled` to the JSON boolean `false`. Preserve the exact
+attestation and allowlist artifact read-only. If any capability is needed or
+the enforced network boundary cannot be matched to the attestation, abort; do
+not weaken, omit, or encode a capability as a string.
 
 The model and its tools must not:
 
@@ -153,7 +172,8 @@ After method artifacts are frozen:
 
 1. Authenticate as the intended account with a Supabase access token.
 2. Request a Selector token using the exact environment, round ID, display name,
-   provider/model/version, and prompt/tool/config digests.
+   provider/model/version, prompt/tool/config digests, and complete structured
+   blindness attestation.
 3. Verify the response repeats the intended round/environment and that
    `expires_at` is after the planned submission but no later than permitted
    policy.
@@ -346,6 +366,8 @@ Abort the affected complete run immediately if any of the following occurs.
 - provider/model/version is missing, mutable, or changes mid-run;
 - prompt/tool/config bytes differ from their registered digest;
 - an unregistered tool, retrieval source, cache, or operator hint is used;
+- the stored blindness attestation or its canonical digest differs from the
+  reviewed inference workspace/network control;
 - reference/reveal data, external answer lookup, or prior vote/result leakage is
   possible;
 - a raw token or credential appears in logs or an unapproved location; or

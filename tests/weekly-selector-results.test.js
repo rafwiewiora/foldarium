@@ -96,6 +96,16 @@ function decisions({
 }
 
 function identity(overrides = {}) {
+  const blindnessAttestation = {
+    schema_version: 'foldarium.selector-blindness-attestation/v1',
+    workspace_policy: 'verified-kit-only',
+    network_policy: 'none',
+    network_allowlist_sha256: '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+    browser_enabled: false,
+    web_search_enabled: false,
+    external_retrieval_enabled: false,
+    shared_cache_enabled: false,
+  };
   return {
     display_name: 'Ada',
     method_name: 'rules',
@@ -106,6 +116,8 @@ function identity(overrides = {}) {
     prompt_sha256: HASH('a'),
     tools_sha256: HASH('b'),
     config_sha256: HASH('c'),
+    blindness_attestation: blindnessAttestation,
+    blindness_attestation_sha256: manifestSha256(blindnessAttestation),
     ...overrides,
   };
 }
@@ -258,6 +270,11 @@ test('results expose dual-track overall ranks and labeled per-question counts wi
   assert.equal(ada.clustered.correct, 1);
   assert.equal(ada.unclustered.correct, 2);
   assert.equal(ada.unclustered.rank, 1);
+  assert.equal(ada.identity.blindness_attestation.network_policy, 'none');
+  assert.equal(
+    ada.identity.blindness_attestation_sha256,
+    manifestSha256(ada.identity.blindness_attestation),
+  );
 
   const item = result.questions.find(question => question.item_id === 'ITEM01');
   assert.deepEqual(
@@ -297,6 +314,8 @@ test('normalization publishes only approved identity metadata', () => {
     prompt_sha256: HASH('a'),
     tools_sha256: HASH('b'),
     config_sha256: HASH('c'),
+    blindness_attestation: identity().blindness_attestation,
+    blindness_attestation_sha256: identity().blindness_attestation_sha256,
     user_id: '11111111-1111-4111-8111-111111111111',
     identity_id: '22222222-2222-4222-8222-222222222222',
     token_hash: HASH('d'),
@@ -304,6 +323,35 @@ test('normalization publishes only approved identity metadata', () => {
   }], ROUND_ID);
   assert.deepEqual(normalized, [{ identity: identity(), items: decisions() }]);
   assert.doesNotMatch(JSON.stringify(normalized), /11111111|token_hash|submission_id/);
+});
+
+test('normalization rejects incomplete or inconsistent blindness provenance', () => {
+  const row = {
+    round_id: ROUND_ID,
+    environment: 'preview',
+    payload: { schema_version: 'foldarium.selector-submission/v2', items: decisions() },
+    ...identity(),
+  };
+  const missingDigest = structuredClone(row);
+  delete missingDigest.blindness_attestation_sha256;
+  assert.throws(
+    () => normalizeLatestSubmissionRows([missingDigest], ROUND_ID),
+    /blindness attestation is incomplete/,
+  );
+  const missingAttestation = structuredClone(row);
+  delete missingAttestation.blindness_attestation;
+  delete missingAttestation.blindness_attestation_sha256;
+  assert.throws(
+    () => normalizeLatestSubmissionRows([missingAttestation], ROUND_ID),
+    /blindness attestation is missing/,
+  );
+  assert.throws(
+    () => normalizeLatestSubmissionRows([{
+      ...row,
+      blindness_attestation_sha256: HASH('f'),
+    }], ROUND_ID),
+    /attestation digest is invalid/,
+  );
 });
 
 test('reveal verification checks status, bindings, and actual manifest digests', () => {

@@ -27,6 +27,12 @@ test('v2 identity and token storage binds complete model and round identity', ()
   assert.match(sql, /prompt_sha256 text not null/);
   assert.match(sql, /tools_sha256 text not null/);
   assert.match(sql, /config_sha256 text not null/);
+  assert.match(sql, /blindness_attestation jsonb not null/);
+  assert.match(sql, /blindness_attestation_sha256 text not null/);
+  assert.match(
+    sql,
+    /prompt_sha256, tools_sha256, config_sha256, blindness_attestation_sha256/,
+  );
   assert.match(sql, /environment text not null check \(environment in \('production', 'preview', 'development'\)\)/);
   assert.match(sql, /round_id text not null references public\.weekly_quiz_rounds/);
   assert.match(sql, /token_hash text not null check \(token_hash ~ '\^\[0-9a-f\]\{64\}\$'\)/);
@@ -37,6 +43,47 @@ test('v2 identity and token storage binds complete model and round identity', ()
   assert.match(sql, /create or replace function public\.revoke_weekly_selector_token_v2/);
   assert.match(sql, /set revoked_at = coalesce\(token\.revoked_at, clock_timestamp\(\)\)/);
   assert.doesNotMatch(sql, /\braw_token\s+text/);
+});
+
+test('v2 stores and constrains canonical blindness and network provenance', () => {
+  assert.match(
+    sql,
+    /create or replace function private\.weekly_selector_blindness_attestation_is_valid_v2/,
+  );
+  assert.match(sql, /jsonb_object_length\(p_attestation\) = 8/);
+  assert.match(sql, /foldarium\.selector-blindness-attestation\/v1/);
+  assert.match(sql, /workspace_policy.*verified-kit-only/);
+  assert.match(sql, /network_policy.*\('none', 'provider-api-only'\)/);
+  assert.match(
+    sql,
+    /4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945/,
+  );
+  assert.match(
+    sql,
+    /network_policy' <> 'provider-api-only'.*network_allowlist_sha256'.*<> '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'/,
+  );
+  for (const capability of [
+    'browser_enabled',
+    'web_search_enabled',
+    'external_retrieval_enabled',
+    'shared_cache_enabled',
+  ]) {
+    assert.match(sql, new RegExp(`${capability}' = 'false'::jsonb`));
+  }
+  assert.match(
+    sql,
+    /extensions\.digest\( convert_to\(private\.weekly_selector_canonical_json\(p_attestation\), 'utf8'\), 'sha256' \)/,
+  );
+  assert.match(sql, /p_blindness_attestation jsonb/);
+  assert.match(sql, /p_blindness_attestation_sha256 text/);
+  assert.match(
+    sql,
+    /p_blindness_attestation, p_blindness_attestation_sha256, private\.foldarium_identity_hmac/,
+  );
+  assert.match(
+    sql,
+    /identity\.blindness_attestation, identity\.blindness_attestation_sha256/,
+  );
 });
 
 test('v2 validates canonical complete dual decisions against exact item scope', () => {

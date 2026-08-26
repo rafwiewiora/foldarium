@@ -3163,6 +3163,8 @@ function readSelectorIdentityFields() {
     promptSha256: $('#selector-prompt-sha256')?.value.trim() || '',
     toolsSha256: $('#selector-tools-sha256')?.value.trim() || '',
     configSha256: $('#selector-config-sha256')?.value.trim() || '',
+    networkPolicy: $('#selector-network-policy')?.value || '',
+    networkAllowlistSha256: $('#selector-network-allowlist-sha256')?.value.trim() || '',
   };
 }
 
@@ -3289,6 +3291,22 @@ async function createSelectorApiToken() {
     setProgrammaticVotingStatus('Enter lowercase SHA-256 digests for the prompt, tools, and config.');
     return;
   }
+  const emptyAllowlistSha256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945';
+  if (
+    !['none', 'provider-api-only'].includes(identity.networkPolicy)
+    || !digest.test(identity.networkAllowlistSha256)
+    || (
+      identity.networkPolicy === 'none'
+      && identity.networkAllowlistSha256 !== emptyAllowlistSha256
+    )
+    || (
+      identity.networkPolicy === 'provider-api-only'
+      && identity.networkAllowlistSha256 === emptyAllowlistSha256
+    )
+  ) {
+    setProgrammaticVotingStatus('Select the inference network policy and enter its canonical allowlist SHA-256.');
+    return;
+  }
   if (SELECTOR_ROUND_DESCRIPTOR?.public_status !== 'open') {
     setProgrammaticVotingStatus('Dual-mode v2 submissions are not open.');
     return;
@@ -3316,6 +3334,16 @@ async function createSelectorApiToken() {
         prompt_sha256: identity.promptSha256,
         tools_sha256: identity.toolsSha256,
         config_sha256: identity.configSha256,
+        blindness_attestation: {
+          schema_version: 'foldarium.selector-blindness-attestation/v1',
+          workspace_policy: 'verified-kit-only',
+          network_policy: identity.networkPolicy,
+          network_allowlist_sha256: identity.networkAllowlistSha256,
+          browser_enabled: false,
+          web_search_enabled: false,
+          external_retrieval_enabled: false,
+          shared_cache_enabled: false,
+        },
       }),
     });
     const payload = await response.json().catch(() => ({}));

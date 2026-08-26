@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const HASH = character => character.repeat(64);
+const EMPTY_ALLOWLIST_SHA256 = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945';
 
 function block(source, signature) {
   const start = source.indexOf(signature);
@@ -60,6 +61,8 @@ test('weekly intro documents explicit dual-mode v2 and exposes provenance inputs
     'selector-prompt-sha256',
     'selector-tools-sha256',
     'selector-config-sha256',
+    'selector-network-policy',
+    'selector-network-allowlist-sha256',
     'selector-create-token',
     'selector-copy-token',
     'selector-submission-file',
@@ -100,6 +103,8 @@ test('token issuance sends the round-bound v2 identity and provenance contract',
       promptSha256: HASH('a'),
       toolsSha256: HASH('b'),
       configSha256: HASH('c'),
+      networkPolicy: 'none',
+      networkAllowlistSha256: EMPTY_ALLOWLIST_SHA256,
     }),
     getBrowserSupabaseAccessToken: async () => 'browser-token',
     setProgrammaticVotingStatus: message => statuses.push(message),
@@ -132,6 +137,16 @@ test('token issuance sends the round-bound v2 identity and provenance contract',
   assert.equal(body.model_name, 'rules');
   assert.equal(body.model_version, '2');
   assert.equal(body.tools_sha256, HASH('b'));
+  assert.deepEqual(body.blindness_attestation, {
+    schema_version: 'foldarium.selector-blindness-attestation/v1',
+    workspace_policy: 'verified-kit-only',
+    network_policy: 'none',
+    network_allowlist_sha256: EMPTY_ALLOWLIST_SHA256,
+    browser_enabled: false,
+    web_search_enabled: false,
+    external_retrieval_enabled: false,
+    shared_cache_enabled: false,
+  });
   assert.equal(requests[0].options.headers.Authorization, 'Bearer browser-token');
   assert.equal(sandbox.SELECTOR_API_TOKEN, 'selector-token');
   assert.match(statuses.at(-1), /will not be shown again/);

@@ -3,6 +3,62 @@
 
 begin;
 
+create or replace function private.weekly_selector_blindness_attestation_is_valid_v2(
+  p_attestation jsonb,
+  p_attestation_sha256 text
+)
+returns boolean
+language sql
+immutable
+set search_path = pg_catalog, private, extensions
+as $$
+  select case
+    when jsonb_typeof(p_attestation) is distinct from 'object' then false
+    else coalesce(
+      jsonb_object_length(p_attestation) = 8
+      and p_attestation ?& array[
+        'schema_version',
+        'workspace_policy',
+        'network_policy',
+        'network_allowlist_sha256',
+        'browser_enabled',
+        'web_search_enabled',
+        'external_retrieval_enabled',
+        'shared_cache_enabled'
+      ]
+      and p_attestation ->> 'schema_version'
+            = 'foldarium.selector-blindness-attestation/v1'
+      and p_attestation ->> 'workspace_policy' = 'verified-kit-only'
+      and p_attestation ->> 'network_policy' in ('none', 'provider-api-only')
+      and jsonb_typeof(p_attestation -> 'network_allowlist_sha256') = 'string'
+      and p_attestation ->> 'network_allowlist_sha256' ~ '^[0-9a-f]{64}$'
+      and (
+        p_attestation ->> 'network_policy' <> 'none'
+        or p_attestation ->> 'network_allowlist_sha256'
+             = '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
+      )
+      and (
+        p_attestation ->> 'network_policy' <> 'provider-api-only'
+        or p_attestation ->> 'network_allowlist_sha256'
+             <> '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
+      )
+      and p_attestation -> 'browser_enabled' = 'false'::jsonb
+      and p_attestation -> 'web_search_enabled' = 'false'::jsonb
+      and p_attestation -> 'external_retrieval_enabled' = 'false'::jsonb
+      and p_attestation -> 'shared_cache_enabled' = 'false'::jsonb
+      and p_attestation_sha256 ~ '^[0-9a-f]{64}$'
+      and p_attestation_sha256 = encode(
+        extensions.digest(
+          convert_to(private.weekly_selector_canonical_json(p_attestation), 'UTF8'),
+          'sha256'
+        ),
+        'hex'
+      ),
+      false
+    )
+  end
+$$;
+
 create table if not exists public.weekly_selector_identities_v2 (
   identity_id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -15,13 +71,23 @@ create table if not exists public.weekly_selector_identities_v2 (
   prompt_sha256 text not null check (prompt_sha256 ~ '^[0-9a-f]{64}$'),
   tools_sha256 text not null check (tools_sha256 ~ '^[0-9a-f]{64}$'),
   config_sha256 text not null check (config_sha256 ~ '^[0-9a-f]{64}$'),
+  blindness_attestation jsonb not null,
+  blindness_attestation_sha256 text not null
+    check (blindness_attestation_sha256 ~ '^[0-9a-f]{64}$'),
   participant_hash text not null check (participant_hash ~ '^[0-9a-f]{64}$'),
   display_name_hash text not null check (display_name_hash ~ '^[0-9a-f]{64}$'),
   created_at timestamptz not null default clock_timestamp(),
   unique (
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
-    prompt_sha256, tools_sha256, config_sha256
+    prompt_sha256, tools_sha256, config_sha256,
+    blindness_attestation_sha256
+  ),
+  check (
+    private.weekly_selector_blindness_attestation_is_valid_v2(
+      blindness_attestation,
+      blindness_attestation_sha256
+    )
   ),
   check (
     display_name = regexp_replace(btrim(display_name), '[[:space:]]+', ' ', 'g')
@@ -376,6 +442,8 @@ create or replace function public.issue_weekly_selector_token_v2(
   p_prompt_sha256 text,
   p_tools_sha256 text,
   p_config_sha256 text,
+  p_blindness_attestation jsonb,
+  p_blindness_attestation_sha256 text,
   p_token_hash text
 )
 returns table (
@@ -412,7 +480,11 @@ begin
      or p_token_hash !~ '^[0-9a-f]{64}$'
      or p_prompt_sha256 !~ '^[0-9a-f]{64}$'
      or p_tools_sha256 !~ '^[0-9a-f]{64}$'
-     or p_config_sha256 !~ '^[0-9a-f]{64}$' then
+     or p_config_sha256 !~ '^[0-9a-f]{64}$'
+     or not private.weekly_selector_blindness_attestation_is_valid_v2(
+       p_blindness_attestation,
+       p_blindness_attestation_sha256
+     ) then
     raise exception 'invalid selector v2 token issuance request'
       using errcode = '22023';
   end if;
@@ -449,12 +521,14 @@ begin
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
     prompt_sha256, tools_sha256, config_sha256,
+    blindness_attestation, blindness_attestation_sha256,
     participant_hash, display_name_hash
   )
   values (
     v_user_id, v_display_name, v_method_name, v_method_version,
     v_provider, v_model_name, v_model_version,
     p_prompt_sha256, p_tools_sha256, p_config_sha256,
+    p_blindness_attestation, p_blindness_attestation_sha256,
     private.foldarium_identity_hmac('participant', v_user_id::text),
     private.foldarium_identity_hmac(
       'display-name', v_user_id::text || ':' || lower(v_display_name)
@@ -463,7 +537,8 @@ begin
   on conflict (
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
-    prompt_sha256, tools_sha256, config_sha256
+    prompt_sha256, tools_sha256, config_sha256,
+    blindness_attestation_sha256
   )
   do update set display_name = excluded.display_name
   returning weekly_selector_identities_v2.identity_id into v_identity_id;
@@ -789,7 +864,9 @@ returns table (
   model_version text,
   prompt_sha256 text,
   tools_sha256 text,
-  config_sha256 text
+  config_sha256 text,
+  blindness_attestation jsonb,
+  blindness_attestation_sha256 text
 )
 language sql
 stable
@@ -808,7 +885,9 @@ as $$
     identity.model_version,
     identity.prompt_sha256,
     identity.tools_sha256,
-    identity.config_sha256
+    identity.config_sha256,
+    identity.blindness_attestation,
+    identity.blindness_attestation_sha256
   from public.weekly_selector_submissions_latest_v2 as latest
   join public.weekly_selector_submission_revisions_v2 as revision
     on revision.submission_id = latest.submission_id
@@ -838,6 +917,9 @@ revoke all on table public.weekly_selector_identities_v2 from public;
 revoke all on table public.weekly_selector_tokens_v2 from public;
 revoke all on table public.weekly_selector_submission_revisions_v2 from public;
 revoke all on table public.weekly_selector_submissions_latest_v2 from public;
+revoke all on function private.weekly_selector_blindness_attestation_is_valid_v2(
+  jsonb, text
+) from public;
 revoke all on function private.weekly_selector_reject_revision_mutation_v2() from public;
 revoke all on function private.weekly_selector_validate_complete_payload_v2(
   jsonb, uuid, text, text, text, text, jsonb, integer
@@ -845,7 +927,8 @@ revoke all on function private.weekly_selector_validate_complete_payload_v2(
 
 revoke all on function public.get_weekly_selector_round_v2(text, text) from public;
 revoke all on function public.issue_weekly_selector_token_v2(
-  text, text, text, text, text, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, text, text,
+  jsonb, text, text
 ) from public;
 revoke all on function public.revoke_weekly_selector_token_v2(uuid, text) from public;
 revoke all on function public.submit_weekly_selector_complete_v2(
@@ -884,7 +967,8 @@ begin
       text, text
     ) to authenticated;
     grant execute on function public.issue_weekly_selector_token_v2(
-      text, text, text, text, text, text, text, text, text, text, text, text
+      text, text, text, text, text, text, text, text, text, text, text,
+      jsonb, text, text
     ) to authenticated;
     grant execute on function public.revoke_weekly_selector_token_v2(
       uuid, text
@@ -913,7 +997,8 @@ begin
       text, text
     ) to service_role;
     grant execute on function public.issue_weekly_selector_token_v2(
-      text, text, text, text, text, text, text, text, text, text, text, text
+      text, text, text, text, text, text, text, text, text, text, text,
+      jsonb, text, text
     ) to service_role;
     grant execute on function public.revoke_weekly_selector_token_v2(
       uuid, text
@@ -936,8 +1021,9 @@ comment on table public.weekly_selector_tokens_v2 is
 comment on table public.weekly_selector_submission_revisions_v2 is
   'Append-only canonical complete-batch v2 revisions accepted strictly before round close.';
 comment on function public.issue_weekly_selector_token_v2(
-  text, text, text, text, text, text, text, text, text, text, text, text
+  text, text, text, text, text, text, text, text, text, text, text,
+  jsonb, text, text
 ) is
-  'Issues an expiring round/environment-bound v2 token for a fully identified model configuration.';
+  'Issues an expiring round/environment-bound v2 token for a fully identified model configuration and strict blindness attestation.';
 
 commit;

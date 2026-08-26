@@ -510,6 +510,16 @@
       <label>Config SHA-256
         <input id="selector-config-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}"/>
       </label>
+      <label>Inference network policy
+        <select id="selector-network-policy">
+          <option value="none">No network</option>
+          <option value="provider-api-only">Provider API only</option>
+        </select>
+      </label>
+      <label>Canonical network allowlist SHA-256
+        <input id="selector-network-allowlist-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}" value="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"/>
+      </label>
+      <p class="hint">Token creation attests that inference uses only the verified kit, with browser, web search, external retrieval, and shared caches disabled. The default digest is SHA-256 of the canonical empty allowlist <code>[]</code>.</p>
       <div class="selector-token-row">
         <input id="selector-api-token" type="password" readonly autocomplete="off" placeholder="Create a round-bound v2 token" aria-label="Selector API token"/>
         <button class="ghost" id="selector-create-token" type="button" disabled>Create v2 token</button>

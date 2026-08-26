@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
+  BLINDNESS_ATTESTATION_SCHEMA_VERSION,
   ContractError,
+  EMPTY_NETWORK_ALLOWLIST_SHA256,
   ID_RE,
   KIT_SCHEMA_VERSION,
   MAX_REQUEST_BODY_BYTES,
@@ -163,8 +165,47 @@ export function selectorApiDocumentation() {
   return {
     schema_version: 'foldarium.weekly-selector-api/v2',
     submission_schema_version: SUBMISSION_SCHEMA_VERSION,
+    blindness_attestation_schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
     complete_only: true,
     canonical_json_required: true,
+    token_request: {
+      exact_keys: [
+        'environment',
+        'round_id',
+        'display_name',
+        'method_name',
+        'method_version',
+        'provider',
+        'model_name',
+        'model_version',
+        'prompt_sha256',
+        'tools_sha256',
+        'config_sha256',
+        'blindness_attestation',
+      ],
+      blindness_attestation: {
+        exact_keys: [
+          'schema_version',
+          'workspace_policy',
+          'network_policy',
+          'network_allowlist_sha256',
+          'browser_enabled',
+          'web_search_enabled',
+          'external_retrieval_enabled',
+          'shared_cache_enabled',
+        ],
+        schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+        workspace_policy: 'verified-kit-only',
+        network_policy: ['none', 'provider-api-only'],
+        empty_network_allowlist_sha256: EMPTY_NETWORK_ALLOWLIST_SHA256,
+        required_disabled_capabilities: [
+          'browser_enabled',
+          'web_search_enabled',
+          'external_retrieval_enabled',
+          'shared_cache_enabled',
+        ],
+      },
+    },
     decision_modes: {
       clustered: [
         { selection_kind: 'cluster', required_identity: 'cluster_id' },
@@ -316,7 +357,7 @@ async function handleIssueToken({ config, fetchImpl, request, response }) {
     });
   } catch (error) {
     if (!(error instanceof ContractError)) throw error;
-    return sendJson(response, 400, { error: 'Invalid selector identity' });
+    return sendJson(response, 400, { error: 'Invalid token request' });
   }
 
   const user = await supabaseFetch(fetchImpl, config, '/auth/v1/user', {
@@ -328,6 +369,7 @@ async function handleIssueToken({ config, fetchImpl, request, response }) {
 
   const rawToken = randomBytes(32).toString('base64url');
   const tokenHash = sha256Hex(rawToken);
+  const blindnessAttestationSha256 = sha256Hex(tokenRequest.blindness_attestation);
 
   const tokenRows = await supabaseFetch(
     fetchImpl,
@@ -347,6 +389,8 @@ async function handleIssueToken({ config, fetchImpl, request, response }) {
         p_prompt_sha256: tokenRequest.prompt_sha256,
         p_tools_sha256: tokenRequest.tools_sha256,
         p_config_sha256: tokenRequest.config_sha256,
+        p_blindness_attestation: tokenRequest.blindness_attestation,
+        p_blindness_attestation_sha256: blindnessAttestationSha256,
         p_token_hash: tokenHash,
       },
       bearerToken: accessToken,
