@@ -23,6 +23,11 @@ test('benchmark migration is append-only and physically separate from ballots', 
 
 test('registration requires service role, closed-unrevealed state, and exact bindings', () => {
   assert.match(sql, /auth\.role\(\) is distinct from 'service_role'/);
+  assert.match(
+    sql,
+    /select count\(\*\) from jsonb_object_keys\( case when jsonb_typeof\(p_execution\) = 'object' then p_execution else '\{\}'::jsonb end \) \) <> 23/,
+  );
+  assert.doesNotMatch(sql, /jsonb_object_length/);
   assert.match(sql, /clock_timestamp\(\) < v_round\.closes_at/);
   assert.match(sql, /v_round\.reveal_manifest is not null/);
   assert.match(sql, /v_round\.revealed_at is not null/);

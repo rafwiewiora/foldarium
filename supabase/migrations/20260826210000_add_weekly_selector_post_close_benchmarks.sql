@@ -115,7 +115,15 @@ begin
       using errcode = '42501';
   end if;
   if jsonb_typeof(p_execution) is distinct from 'object'
-     or jsonb_object_length(p_execution) <> 23
+     or (
+       select count(*)
+       from jsonb_object_keys(
+         case
+           when jsonb_typeof(p_execution) = 'object' then p_execution
+           else '{}'::jsonb
+         end
+       )
+     ) <> 23
      or (p_execution ->> 'schema_version')
         <> 'foldarium.selector-post-close-benchmark/v1'
      or (p_execution ->> 'run_class') <> 'post_close_benchmark'

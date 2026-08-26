@@ -55,7 +55,8 @@ test('v2 stores and constrains canonical blindness and network provenance', () =
     sql,
     /create or replace function private\.weekly_selector_blindness_attestation_is_valid_v2/,
   );
-  assert.match(sql, /jsonb_object_length\(p_attestation\) = 8/);
+  assert.match(sql, /select count\(\*\) from jsonb_object_keys\(p_attestation\).* = 8/);
+  assert.doesNotMatch(sql, /jsonb_object_length/);
   assert.match(sql, /foldarium\.selector-blindness-attestation\/v1/);
   assert.match(sql, /workspace_policy.*verified-kit-only/);
   assert.match(sql, /network_policy.*\('none', 'provider-api-only'\)/);
