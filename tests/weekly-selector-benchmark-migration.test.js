@@ -67,4 +67,3 @@ test('public projection is reveal-gated and strips runtime identifiers and usage
     /grant (?:select|insert|update|delete)[^;]+weekly_selector_post_close_benchmarks_v1 to anon/,
   );
 });
-

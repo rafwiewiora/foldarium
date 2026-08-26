@@ -194,4 +194,3 @@ test('receipt exposes only immutable benchmark classification and digests', () =
   assert.equal(receipt.idempotent, true);
   assert.doesNotMatch(JSON.stringify(receipt), /secret|"payload":|usage|session/);
 });
-

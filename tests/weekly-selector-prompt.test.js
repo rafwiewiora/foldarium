@@ -40,4 +40,3 @@ test('prompt requires independent blind decisions and strict observable output',
     ['schema_version', 'item_id', 'clustered', 'unclustered'],
   );
 });
-
