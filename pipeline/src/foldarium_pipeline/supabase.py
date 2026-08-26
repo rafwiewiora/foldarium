@@ -16,7 +16,7 @@ import json
 import os
 import re
 from copy import deepcopy
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
@@ -655,6 +655,182 @@ class SupabaseCoordinator(SupabasePublisher):
         if len(rows) > 1:
             raise SupabasePublicationError(
                 "weekly campaign preflight returned duplicate campaign rows"
+            )
+        return bool(rows)
+
+    def latest_prior_prerelease_snapshot(
+        self, release_date: str
+    ) -> dict[str, Any] | None:
+        """Return the authoritative source hashes from the newest earlier week."""
+
+        if not isinstance(release_date, str):
+            raise SupabasePublicationError("prerelease release_date must be an ISO date")
+        try:
+            requested_date = date.fromisoformat(release_date)
+        except ValueError as exc:
+            raise SupabasePublicationError(
+                "prerelease release_date must be an ISO date"
+            ) from exc
+        query = urlencode(
+            {
+                "select": (
+                    "snapshot_id,campaign_id,release_date,files,metadata,created_at"
+                ),
+                "release_date": f"lt.{release_date}",
+                "order": "release_date.desc,created_at.desc",
+                "limit": "1",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/prerelease_snapshots?{query}",
+            "prior prerelease snapshot query",
+        )
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise SupabasePublicationError(
+                "prior prerelease snapshot query returned multiple rows"
+            )
+        row = rows[0]
+        snapshot_id = _safe_identifier(row.get("snapshot_id"), "snapshot_id")
+        campaign_id = _safe_identifier(row.get("campaign_id"), "campaign_id")
+        stored_release_date = row.get("release_date")
+        if not isinstance(stored_release_date, str):
+            raise SupabasePublicationError(
+                "prior prerelease snapshot has an invalid release_date"
+            )
+        try:
+            prior_date = date.fromisoformat(stored_release_date)
+        except ValueError as exc:
+            raise SupabasePublicationError(
+                "prior prerelease snapshot has an invalid release_date"
+            ) from exc
+        if prior_date >= requested_date:
+            raise SupabasePublicationError(
+                "prior prerelease snapshot is not strictly earlier than the requested week"
+            )
+        files = _json_object(row.get("files"), "prior prerelease snapshot files")
+        metadata = _json_object(
+            row.get("metadata"), "prior prerelease snapshot metadata"
+        )
+        result: dict[str, Any] = {
+            "snapshot_id": snapshot_id,
+            "campaign_id": campaign_id,
+            "release_date": stored_release_date,
+            "created_at": row.get("created_at"),
+        }
+        for source_name, metadata_prefix in (
+            ("wwpdb_sequence", "sequence"),
+            ("wwpdb_nonpolymer", "nonpolymer"),
+        ):
+            descriptor = _json_object(
+                files.get(source_name),
+                f"prior prerelease snapshot files.{source_name}",
+            )
+            digest = descriptor.get("sha256")
+            metadata_digest = metadata.get(f"{metadata_prefix}_sha256")
+            if (
+                not isinstance(digest, str)
+                or not _SHA256.fullmatch(digest)
+                or metadata_digest != digest
+            ):
+                raise SupabasePublicationError(
+                    f"prior prerelease snapshot has inconsistent {metadata_prefix} SHA-256"
+                )
+            rows_value = metadata.get(f"{metadata_prefix}_rows")
+            if (
+                isinstance(rows_value, bool)
+                or not isinstance(rows_value, int)
+                or rows_value < 1
+            ):
+                raise SupabasePublicationError(
+                    f"prior prerelease snapshot has invalid {metadata_prefix} row count"
+                )
+            result[f"{metadata_prefix}_sha256"] = digest
+            result[f"{metadata_prefix}_rows"] = rows_value
+        return result
+
+    def campaign_prediction_run_statuses(
+        self, campaign_id: str
+    ) -> list[dict[str, Any]]:
+        """Return every prediction-run state for one exact campaign."""
+
+        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        target_query = urlencode(
+            {
+                "select": "target_id",
+                "campaign_id": f"eq.{campaign_id}",
+                "order": "target_id.asc",
+            }
+        )
+        campaign_targets = self._get_json_rows(
+            f"/rest/v1/targets?{target_query}", "campaign run target query"
+        )
+        if not campaign_targets:
+            return []
+        target_ids = [
+            _safe_identifier(row.get("target_id"), "campaign run target_id")
+            for row in campaign_targets
+        ]
+        run_query = urlencode(
+            {
+                "select": (
+                    "run_id,target_id,method,status,attempt_count,max_attempts,"
+                    "error_code,task_payload,result"
+                ),
+                "target_id": "in.(" + ",".join(target_ids) + ")",
+                "order": "target_id.asc,method.asc,run_id.asc",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/prediction_runs?{run_query}", "campaign run status query"
+        )
+        seen: set[str] = set()
+        for row in rows:
+            run_id = _safe_identifier(row.get("run_id"), "campaign run_id")
+            if run_id in seen:
+                raise SupabasePublicationError(
+                    "campaign run status query returned duplicate run rows"
+                )
+            seen.add(run_id)
+            if row.get("target_id") not in target_ids:
+                raise SupabasePublicationError(
+                    "campaign run status query crossed the campaign boundary"
+                )
+            if row.get("status") not in {
+                "pending",
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+            }:
+                raise SupabasePublicationError(
+                    f"campaign run {run_id} has an invalid status"
+                )
+            _json_object(row.get("task_payload"), "campaign run task_payload")
+            if row.get("result") is not None:
+                _json_object(row.get("result"), "campaign run result")
+        return rows
+
+    def weekly_quiz_round_exists(self, round_id: str) -> bool:
+        """Return whether one exact immutable weekly round already exists."""
+
+        round_id = _safe_identifier(round_id, "round_id")
+        query = urlencode(
+            {
+                "select": "round_id",
+                "round_id": f"eq.{round_id}",
+                "limit": "2",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            "weekly quiz round existence query",
+        )
+        if len(rows) > 1:
+            raise SupabasePublicationError(
+                "weekly quiz round existence query returned duplicate rows"
             )
         return bool(rows)
 

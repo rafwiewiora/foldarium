@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -25,7 +26,7 @@ import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -175,12 +176,66 @@ PREDICTION_MAX_CONTAINERS = _bounded_prediction_concurrency()
 # Saturday intake follows the lifecycle documented at the repository root. The
 # cron belongs to this adapter, not to the provider-neutral pipeline core. CAMEO
 # publication can lag the nominal 03:00 UTC boundary, so the deployed poller
-# checks every 15 minutes through 06:45. Once a campaign exists in Supabase the
+# checks every 15 minutes through 12:45. Once a campaign exists in Supabase the
 # hook exits before touching the public feeds or spawning any work.
-WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "*/15 3-6 * * 6")
+WEEKLY_CRON_UTC = os.environ.get("FOLDARIUM_WEEKLY_CRON", "*/15 3-12 * * 6")
 WEEKLY_HOOK_ENV = "FOLDARIUM_WEEKLY_HOOK"
 PUBLIC_QUIZ_BUCKET_ENV = "FOLDARIUM_PUBLIC_QUIZ_BUCKET"
 WEEKLY_CRON_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEEKLY_CRON") == "1"
+NEXTWEEKLY_CRON_UTC = os.environ.get(
+    "FOLDARIUM_NEXTWEEKLY_CRON", "5 * * * 6,0,1"
+)
+NEXTWEEKLY_CRON_ENABLED = (
+    os.environ.get("FOLDARIUM_ENABLE_NEXTWEEKLY_CRON") == "1"
+)
+NEXTWEEKLY_ENVIRONMENT = os.environ.get(
+    "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT", "preview"
+)
+NEXTWEEKLY_INCLUDE_POSE_METRICS = (
+    os.environ.get("FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS") == "1"
+)
+NEXTWEEKLY_ROUND_VERSION = "v2"
+NEXTWEEKLY_RETRY_BATCH_SIZE = 10
+NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS = 40 * 60 * 60
+NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS = 30 * 60
+NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS = 75 * 60
+NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS = (
+    NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+)
+NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS = 5 * 60
+# Modal's published per-second accelerator + reviewed host allocations.  The
+# dollar ceiling is the original 40-hour L4 command ceiling expressed in USD;
+# larger-card retries must satisfy both this and the command-second ceiling.
+NEXTWEEKLY_L4_RATE_USD_PER_SECOND = 0.00030992
+NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND = 0.00075884
+NEXTWEEKLY_GPU_COST_BUDGET_USD = 44.62848
+NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS = {
+    "l4": NEXTWEEKLY_L4_RATE_USD_PER_SECOND,
+    "a100-40gb": NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND,
+}
+# These three legacy rows were reviewed against bounded Modal logs on
+# 2026-08-15.  They are deliberately code-pinned so a generic legacy
+# output_validation_failed or timeout can never become scheduler-retryable.
+NEXTWEEKLY_REVIEWED_LEGACY_RETRIES = {
+    "run_fe3f5b2f13d64c508aa61f39": {
+        "target_id": "31ZN",
+        "method": "boltz2",
+        "source_error_code": "output_validation_failed",
+        "retry_kind": "gpu_out_of_memory",
+    },
+    "run_ebb8012256ebff410610bbd3": {
+        "target_id": "9S7U",
+        "method": "openfold3",
+        "source_error_code": "output_validation_failed",
+        "retry_kind": "gpu_out_of_memory",
+    },
+    "run_62f75d944367889691bfc897": {
+        "target_id": "32QB",
+        "method": "openfold3",
+        "source_error_code": "timeout",
+        "retry_kind": "msa_generation_timeout",
+    },
+}
 WEDNESDAY_REVEAL_CRON_UTC = os.environ.get(
     "FOLDARIUM_WEDNESDAY_REVEAL_CRON", "5 0-5 * * 3"
 )
@@ -193,10 +248,24 @@ WEEKLY_RETROSPECTIVE_ENABLED = (
     os.environ.get("FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE") == "1"
 )
 WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC = os.environ.get(
-    "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON", "45 0 * * 3"
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON", "45 0-5 * * 3"
 )
 WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED = (
     os.environ.get("FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION") == "1"
+)
+WEEKLY_PRODUCTION_CRON_UTC = os.environ.get(
+    "FOLDARIUM_WEEKLY_PRODUCTION_CRON", "15 * * * 6,0,1"
+)
+WEEKLY_PRODUCTION_ENABLED = (
+    os.environ.get("FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION") == "1"
+)
+WEEKLY_PRODUCTION_OPEN_ENV = "FOLDARIUM_WEEKLY_PRODUCTION_OPEN"
+WEEKLY_PRODUCTION_ROUND_SUFFIX = os.environ.get(
+    "FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX", "beta-v1"
+)
+WEEKLY_REGISTER_SELECTOR_KIT_ENV = "FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT"
+REQUIRED_RETROSPECTIVE_MIGRATION = (
+    "20260826190000_require_retrospective_vote_scope.sql"
 )
 # Six hourly Wednesday ticks cover a delayed coordinate release without an
 # unbounded poller. Each tick receives two short infrastructure retries; a
@@ -219,6 +288,10 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_WEEKLY_GPU_CLASS",
         PUBLIC_QUIZ_BUCKET_ENV,
         "FOLDARIUM_PREDICTION_MAX_CONTAINERS",
+        "FOLDARIUM_ENABLE_NEXTWEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT",
+        "FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS",
         "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL",
         "FOLDARIUM_WEDNESDAY_REVEAL_CRON",
         WEDNESDAY_REVEAL_PUBLISH_ENV,
@@ -226,6 +299,11 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON",
         "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION",
         "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON",
+        "FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION",
+        "FOLDARIUM_WEEKLY_PRODUCTION_CRON",
+        WEEKLY_PRODUCTION_OPEN_ENV,
+        "FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX",
+        WEEKLY_REGISTER_SELECTOR_KIT_ENV,
         DEPLOYMENT_CONFIG_SHA256_ENV,
     )
     if key in os.environ
@@ -390,6 +468,612 @@ def _wednesday_publish_enabled(explicit: bool | None) -> bool:
     return configured == "1"
 
 
+def _weekly_production_window(
+    release_date: str | date | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Return the immutable production identity for one Saturday campaign."""
+
+    preview = _nextweekly_window(release_date, now=now)
+    suffix = WEEKLY_PRODUCTION_ROUND_SUFFIX.strip()
+    if not suffix or "/" in suffix or " " in suffix:
+        raise ValueError("FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX is invalid")
+    return {
+        **preview,
+        "preview_round_id": preview["round_id"],
+        "round_id": f"weekly-{preview['release_date']}-{suffix}",
+        "environment": "production",
+    }
+
+
+def _weekly_quiz_public_private_coordinators() -> tuple[Any, Any]:
+    """Return private and public coordinators using the reviewed bucket split."""
+
+    from foldarium_pipeline.supabase import SupabaseConfigurationError, SupabaseCoordinator
+
+    private = SupabaseCoordinator.from_env()
+    try:
+        public_bucket = _weekly_public_bucket()
+    except ValueError as exc:
+        raise SupabaseConfigurationError(
+            f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+        ) from exc
+    public_environment = dict(os.environ)
+    public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+    public = SupabaseCoordinator.from_env(public_environment)
+    if public.storage_bucket == private.storage_bucket:
+        raise SupabaseConfigurationError(
+            "public quiz bucket must differ from the private prediction bucket"
+        )
+    return private, public
+
+
+def _attempt_production_selector_kit_registration(
+    round_id: str,
+    *,
+    private_coordinator: Any,
+    public_coordinator: Any,
+) -> dict[str, Any]:
+    """Register one production selector kit and surface retryable failures."""
+
+    try:
+        from foldarium_pipeline.weekly_quiz import backfill_selector_kit_for_round
+    except ImportError:
+        return {
+            "status": "skipped-module-unavailable",
+            "retryable": False,
+        }
+
+    try:
+        round_row = private_coordinator.weekly_quiz_round(round_id)
+        result = backfill_selector_kit_for_round(
+            round_row,
+            public_coordinator=public_coordinator,
+            private_coordinator=private_coordinator,
+            register_catalog=True,
+        )
+    except Exception as exc:
+        return {
+            "status": f"failed:{type(exc).__name__}",
+            "retryable": True,
+            "error": str(exc),
+        }
+    return {
+        "status": "registered",
+        "retryable": False,
+        "kit_sha256": result.get("kit_sha256"),
+        "registered": result.get("registered"),
+    }
+
+
+def _production_selector_kit_status(
+    *,
+    open_round: bool,
+    register_selector_kit: bool,
+    selector_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize selector-kit fields for one production promotion tick."""
+
+    if not register_selector_kit:
+        return {
+            "selector_kit_status": "not-requested",
+            "selector_kit_retryable": False,
+        }
+    if not open_round:
+        return {
+            "selector_kit_status": "pending-open-gate",
+            "selector_kit_retryable": False,
+        }
+    if selector_result is None:
+        return {
+            "selector_kit_status": "not-requested",
+            "selector_kit_retryable": False,
+        }
+    return {
+        "selector_kit_status": selector_result["status"],
+        "selector_kit_retryable": bool(selector_result.get("retryable")),
+        **(
+            {"selector_kit_error": selector_result["error"]}
+            if selector_result.get("error")
+            else {}
+        ),
+        **(
+            {"selector_kit_sha256": selector_result["kit_sha256"]}
+            if selector_result.get("kit_sha256")
+            else {}
+        ),
+    }
+
+
+def _production_tick_status(
+    *,
+    production_exists: bool,
+    preview_exists: bool,
+    open_round: bool,
+    selector_kit_retryable: bool,
+    selector_kit_status: str,
+    just_promoted: bool,
+) -> str:
+    if not production_exists:
+        if not preview_exists:
+            return "waiting-for-preview"
+        return "production-opened" if open_round else "production-staged"
+    if selector_kit_status == "skipped-module-unavailable":
+        return "production-ready-selector-kit-skipped"
+    if selector_kit_retryable:
+        return "production-ready-selector-kit-retryable"
+    if just_promoted:
+        return "production-opened" if open_round else "production-staged"
+    return "production-ready"
+
+
+def _lifecycle_deployment_report() -> dict[str, Any]:
+    """Return the non-secret deployment gates visible to preflight callers."""
+
+    return {
+        "app_name": APP_NAME,
+        "config_sha256": os.environ.get(DEPLOYMENT_CONFIG_SHA256_ENV),
+        "weekly": {
+            "enabled": WEEKLY_CRON_ENABLED,
+            "cron": WEEKLY_CRON_UTC,
+            "hook": os.environ.get(WEEKLY_HOOK_ENV),
+            "register": os.environ.get("FOLDARIUM_WEEKLY_REGISTER") == "1",
+            "submit": os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") == "1",
+            "max_targets": os.environ.get("FOLDARIUM_WEEKLY_MAX_TARGETS"),
+            "gpu_class": os.environ.get("FOLDARIUM_WEEKLY_GPU_CLASS"),
+            "public_quiz_bucket": os.environ.get(PUBLIC_QUIZ_BUCKET_ENV),
+            "prediction_max_containers": PREDICTION_MAX_CONTAINERS,
+        },
+        "nextweekly": {
+            "enabled": NEXTWEEKLY_CRON_ENABLED,
+            "cron": NEXTWEEKLY_CRON_UTC,
+            "environment": NEXTWEEKLY_ENVIRONMENT,
+            "include_pose_metrics": NEXTWEEKLY_INCLUDE_POSE_METRICS,
+            "round_version": NEXTWEEKLY_ROUND_VERSION,
+        },
+        "weekly_production": {
+            "enabled": WEEKLY_PRODUCTION_ENABLED,
+            "cron": WEEKLY_PRODUCTION_CRON_UTC,
+            "open": os.environ.get(WEEKLY_PRODUCTION_OPEN_ENV) == "1",
+            "round_suffix": WEEKLY_PRODUCTION_ROUND_SUFFIX,
+            "register_selector_kit": (
+                os.environ.get(WEEKLY_REGISTER_SELECTOR_KIT_ENV) == "1"
+            ),
+        },
+        "wednesday_reveal": {
+            "enabled": WEDNESDAY_REVEAL_ENABLED,
+            "cron": WEDNESDAY_REVEAL_CRON_UTC,
+            "publish": _wednesday_publish_enabled(None),
+        },
+        "weekly_retrospective": {
+            "enabled": WEEKLY_RETROSPECTIVE_ENABLED,
+            "cron": WEEKLY_RETROSPECTIVE_CRON_UTC,
+        },
+        "weekly_retrospective_publication": {
+            "enabled": WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED,
+            "cron": WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
+        },
+        "required_migrations_before_publication": [REQUIRED_RETROSPECTIVE_MIGRATION],
+    }
+
+
+def _nextweekly_window(
+    release_date: str | date | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Return the immutable Preview identity/window for one Saturday intake."""
+
+    if release_date is None:
+        current = datetime.now(timezone.utc) if now is None else now
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise ValueError("now must be a timezone-aware datetime")
+        current_date = current.astimezone(timezone.utc).date()
+        selected = current_date - timedelta(days=(current_date.weekday() - 5) % 7)
+    elif isinstance(release_date, date):
+        selected = release_date
+    elif isinstance(release_date, str):
+        try:
+            selected = date.fromisoformat(release_date)
+        except ValueError as exc:
+            raise ValueError("release_date must be an ISO date") from exc
+    else:
+        raise TypeError("release_date must be an ISO date, date, or null")
+    if selected.weekday() != 5:
+        raise ValueError("nextweekly release_date must be a Saturday")
+    opens = datetime.combine(selected, time(hour=3), tzinfo=timezone.utc)
+    closes = datetime.combine(
+        selected + timedelta(days=4), time.min, tzinfo=timezone.utc
+    )
+
+    def utc(value: datetime) -> str:
+        return value.isoformat().replace("+00:00", "Z")
+
+    return {
+        "release_date": selected.isoformat(),
+        "campaign_id": f"wwpdb-{selected.isoformat()}",
+        "round_id": (
+            f"preview-weekly-{selected.isoformat()}-nextweekly-"
+            f"{NEXTWEEKLY_ROUND_VERSION}"
+        ),
+        "opens_at": utc(opens),
+        "closes_at": utc(closes),
+    }
+
+
+def _nextweekly_run_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize exact run state and identify only safe automatic retries."""
+
+    counts = {
+        status: 0
+        for status in ("pending", "queued", "running", "succeeded", "failed", "cancelled")
+    }
+    method_counts: dict[str, dict[str, int]] = {}
+    active_run_ids: list[str] = []
+    retry_candidates: list[dict[str, Any]] = []
+    authorized_retry_pending_run_ids: list[str] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise TypeError(f"campaign run statuses[{index}] must be an object")
+        run_id = row.get("run_id")
+        method = row.get("method")
+        status = row.get("status")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("campaign run status has no run_id")
+        if not isinstance(method, str) or not method:
+            raise ValueError(f"campaign run {run_id} has no method")
+        if status not in counts:
+            raise ValueError(f"campaign run {run_id} has invalid status {status!r}")
+        counts[status] += 1
+        method_counts.setdefault(method, {}).setdefault(status, 0)
+        method_counts[method][status] += 1
+        if status in {"pending", "queued", "running"}:
+            active_run_ids.append(run_id)
+        if (
+            status == "failed"
+            and row.get("attempt_count") == 1
+            and row.get("max_attempts") == 2
+        ):
+            # Authorization is durable before Modal spawn acknowledgement.  A
+            # later tick must never assemble around an authorized-but-unclaimed
+            # retry; break-glass resubmission remains an operator action.
+            authorized_retry_pending_run_ids.append(run_id)
+        if not (
+            status == "failed"
+            and row.get("attempt_count") == 1
+            and row.get("max_attempts") == 1
+        ):
+            continue
+        task_payload = row.get("task_payload")
+        resources = (
+            task_payload.get("resources")
+            if isinstance(task_payload, Mapping)
+            else None
+        )
+        config = (
+            task_payload.get("config")
+            if isinstance(task_payload, Mapping)
+            else None
+        )
+        if (
+            not isinstance(resources, Mapping)
+            or resources.get("gpu_class") != "l4"
+            or resources.get("timeout_seconds") != 1800
+        ):
+            continue
+        retry_kind: str | None = None
+        reviewed_legacy = False
+        error_code = row.get("error_code")
+        if error_code == "gpu_out_of_memory":
+            retry_kind = "gpu_out_of_memory"
+        elif (
+            error_code == "msa_generation_timeout"
+            and isinstance(row.get("result"), Mapping)
+            and row["result"].get("failure_stage") == "msa_generation"
+            and isinstance(config, Mapping)
+            and config.get("msa_mode") == "server"
+        ):
+            retry_kind = "msa_generation_timeout"
+        elif method == "boltz2" and error_code == "msa_preprocessing_failed":
+            retry_kind = "msa_preprocessing_failed"
+        else:
+            reviewed = NEXTWEEKLY_REVIEWED_LEGACY_RETRIES.get(run_id)
+            if (
+                isinstance(reviewed, Mapping)
+                and reviewed.get("target_id") == row.get("target_id")
+                and reviewed.get("method") == method
+                and reviewed.get("source_error_code") == error_code
+            ):
+                retry_kind = str(reviewed["retry_kind"])
+                reviewed_legacy = True
+        if retry_kind is None:
+            continue
+        if retry_kind == "gpu_out_of_memory":
+            retry_gpu_class = "a100-40gb"
+            retry_timeout_seconds = NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+        elif retry_kind == "msa_generation_timeout":
+            retry_gpu_class = "l4"
+            retry_timeout_seconds = NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+        else:
+            retry_gpu_class = "l4"
+            retry_timeout_seconds = NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+        retry_candidates.append(
+            {
+                "run_id": run_id,
+                "target_id": row.get("target_id"),
+                "method": method,
+                "source_error_code": error_code,
+                "retry_kind": retry_kind,
+                "retry_gpu_class": retry_gpu_class,
+                "retry_timeout_seconds": retry_timeout_seconds,
+                "reviewed_legacy": reviewed_legacy,
+            }
+        )
+    retry_candidates.sort(key=lambda item: item["run_id"])
+    return {
+        "run_count": len(rows),
+        "status_counts": counts,
+        "method_status_counts": {
+            method: dict(sorted(statuses.items()))
+            for method, statuses in sorted(method_counts.items())
+        },
+        "active_run_ids": sorted(active_run_ids),
+        "retryable_run_ids": [item["run_id"] for item in retry_candidates],
+        "retry_candidates": retry_candidates,
+        "authorized_retry_pending_run_ids": sorted(
+            authorized_retry_pending_run_ids
+        ),
+    }
+
+
+def _nextweekly_retry_budget(
+    rows: list[Mapping[str, Any]],
+    retry_candidates: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Return a fail-closed campaign-wide automatic-retry authorization budget.
+
+    A terminal attempt-1 row still contains that original attempt's exact command
+    duration. Once a retry is authorized, however, the row can later contain only
+    the retry result and does not durably store the retry tier.  Therefore every
+    ``max_attempts=2`` row reserves the maximum supported retry command duration
+    and the larger of the supported retry costs.  This deliberately overcounts
+    old L4 MSA retries but prevents a later tick from recovering spent authority.
+    """
+
+    invalid_run_ids: list[str] = []
+    exact_original_seconds: list[float] = []
+    exact_original_cost_usd: list[float] = []
+    authorized_retry_count = 0
+    for index, row in enumerate(rows):
+        run_id = row.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            run_id = f"invalid-row-{index}"
+        status = row.get("status")
+        attempt_count = row.get("attempt_count")
+        max_attempts = row.get("max_attempts")
+        if (
+            status not in {"succeeded", "failed", "cancelled"}
+            or isinstance(attempt_count, bool)
+            or not isinstance(attempt_count, int)
+            or isinstance(max_attempts, bool)
+            or not isinstance(max_attempts, int)
+            or attempt_count < 1
+            or max_attempts not in {1, 2}
+            or attempt_count > max_attempts
+        ):
+            invalid_run_ids.append(run_id)
+            continue
+        if max_attempts == 2:
+            task_payload = row.get("task_payload")
+            resources = (
+                task_payload.get("resources")
+                if isinstance(task_payload, Mapping)
+                else None
+            )
+            timeout_seconds = (
+                resources.get("timeout_seconds")
+                if isinstance(resources, Mapping)
+                else None
+            )
+            gpu_class = (
+                resources.get("gpu_class")
+                if isinstance(resources, Mapping)
+                else None
+            )
+            if (
+                isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, int)
+                or not 1
+                <= timeout_seconds
+                <= NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+                or gpu_class not in NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS
+            ):
+                invalid_run_ids.append(run_id)
+                continue
+            authorized_retry_count += 1
+            # The prior attempt duration is no longer reliable after retry result
+            # publication. Reserve the full original task command.
+            exact_original_seconds.append(float(timeout_seconds))
+            exact_original_cost_usd.append(
+                timeout_seconds * NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS[gpu_class]
+            )
+            continue
+        result = row.get("result")
+        duration_seconds = (
+            result.get("duration_seconds") if isinstance(result, Mapping) else None
+        )
+        if (
+            isinstance(duration_seconds, bool)
+            or not isinstance(duration_seconds, (int, float))
+            or not math.isfinite(float(duration_seconds))
+            or duration_seconds < 0
+        ):
+            invalid_run_ids.append(run_id)
+            continue
+        exact_original_seconds.append(float(duration_seconds))
+        task_payload = row.get("task_payload")
+        resources = (
+            task_payload.get("resources")
+            if isinstance(task_payload, Mapping)
+            else None
+        )
+        gpu_class = (
+            resources.get("gpu_class") if isinstance(resources, Mapping) else None
+        )
+        if gpu_class not in NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS:
+            invalid_run_ids.append(run_id)
+            exact_original_seconds.pop()
+            continue
+        exact_original_cost_usd.append(
+            float(duration_seconds) * NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS[gpu_class]
+        )
+
+    original_consumed_seconds = math.fsum(exact_original_seconds)
+    retry_reserved_seconds = (
+        authorized_retry_count * NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS
+    )
+    original_consumed_cost_usd = math.fsum(exact_original_cost_usd)
+    maximum_retry_cost_usd = max(
+        NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+        * NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND,
+        NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+        * NEXTWEEKLY_L4_RATE_USD_PER_SECOND,
+    )
+    retry_reserved_cost_usd = authorized_retry_count * maximum_retry_cost_usd
+    consumed_or_reserved_seconds = original_consumed_seconds + retry_reserved_seconds
+    consumed_or_reserved_cost_usd = (
+        original_consumed_cost_usd + retry_reserved_cost_usd
+    )
+    remaining_seconds = max(
+        0.0,
+        NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS - consumed_or_reserved_seconds,
+    )
+    remaining_cost_usd = max(
+        0.0, NEXTWEEKLY_GPU_COST_BUDGET_USD - consumed_or_reserved_cost_usd
+    )
+    authorized_candidate_run_ids: list[str] = []
+    candidate_seconds = 0
+    candidate_cost_usd = 0.0
+    if not invalid_run_ids:
+        for candidate in retry_candidates:
+            run_id = candidate.get("run_id")
+            retry_timeout = candidate.get("retry_timeout_seconds")
+            retry_gpu_class = candidate.get("retry_gpu_class")
+            if (
+                not isinstance(run_id, str)
+                or not run_id
+                or isinstance(retry_timeout, bool)
+                or not isinstance(retry_timeout, int)
+                or retry_timeout not in {
+                    NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS,
+                    NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS,
+                }
+                or retry_gpu_class not in NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS
+            ):
+                invalid_run_ids.append(
+                    run_id if isinstance(run_id, str) and run_id else "invalid-candidate"
+                )
+                authorized_candidate_run_ids = []
+                break
+            cost = retry_timeout * NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS[retry_gpu_class]
+            if (
+                candidate_seconds + retry_timeout > remaining_seconds
+                or candidate_cost_usd + cost > remaining_cost_usd
+                or len(authorized_candidate_run_ids) >= NEXTWEEKLY_RETRY_BATCH_SIZE
+            ):
+                continue
+            authorized_candidate_run_ids.append(run_id)
+            candidate_seconds += retry_timeout
+            candidate_cost_usd += cost
+    remaining_retry_slots = len(authorized_candidate_run_ids)
+    if invalid_run_ids:
+        status = "invalid-run-accounting"
+        remaining_retry_slots = 0
+        authorized_candidate_run_ids = []
+    elif remaining_retry_slots < 1:
+        status = "exhausted"
+    else:
+        status = "available"
+    return {
+        "status": status,
+        "authorization_ready": status == "available",
+        "command_budget_seconds": NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS,
+        "cost_budget_usd": NEXTWEEKLY_GPU_COST_BUDGET_USD,
+        "maximum_retry_reservation_seconds": (
+            NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS
+        ),
+        "maximum_retry_reservation_cost_usd": maximum_retry_cost_usd,
+        "original_consumed_seconds": original_consumed_seconds,
+        "original_consumed_cost_usd": original_consumed_cost_usd,
+        "authorized_retry_count": authorized_retry_count,
+        "retry_reserved_seconds": retry_reserved_seconds,
+        "retry_reserved_cost_usd": retry_reserved_cost_usd,
+        "consumed_or_reserved_seconds": consumed_or_reserved_seconds,
+        "consumed_or_reserved_cost_usd": consumed_or_reserved_cost_usd,
+        "remaining_seconds": remaining_seconds,
+        "remaining_cost_usd": remaining_cost_usd,
+        "remaining_retry_slots": remaining_retry_slots,
+        "authorized_candidate_run_ids": authorized_candidate_run_ids,
+        "candidate_reserved_seconds": candidate_seconds,
+        "candidate_reserved_cost_usd": candidate_cost_usd,
+        "invalid_run_ids": sorted(invalid_run_ids),
+    }
+
+
+def _retry_execution_task(
+    task_payload: Mapping[str, Any], retry_request: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return a validated execution-only resource override for one retry."""
+
+    from foldarium_pipeline.contracts import validate_prediction_task
+
+    task = validate_prediction_task(task_payload)
+    run_id = retry_request.get("run_id")
+    retry_kind = retry_request.get("retry_kind")
+    expected = {
+        "gpu_out_of_memory": (
+            "a100-40gb",
+            NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS,
+        ),
+        "msa_generation_timeout": (
+            "l4",
+            NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS,
+        ),
+        "msa_preprocessing_failed": (
+            "l4",
+            NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS,
+        ),
+    }.get(retry_kind)
+    if expected is None:
+        raise ValueError("unsupported retry kind")
+    if (
+        task["task_id"] != run_id
+        or task["target"]["target_id"] != retry_request.get("target_id")
+        or task["method"] != retry_request.get("method")
+        or task["resources"].get("gpu_class") != "l4"
+        or task["resources"].get("timeout_seconds") != 1800
+        or retry_request.get("retry_gpu_class") != expected[0]
+        or retry_request.get("retry_timeout_seconds") != expected[1]
+        or not isinstance(retry_request.get("reviewed_legacy"), bool)
+    ):
+        raise ValueError("retry request does not match its immutable task or policy")
+    retry_task = deepcopy(task)
+    retry_task["resources"] = {
+        **task["resources"],
+        "gpu_class": expected[0],
+        "timeout_seconds": expected[1],
+        "retry_policy": {
+            "retry_kind": retry_kind,
+            "source_error_code": retry_request.get("source_error_code"),
+            "reviewed_legacy": retry_request["reviewed_legacy"],
+            "original_gpu_class": "l4",
+            "original_timeout_seconds": 1800,
+        },
+    }
+    return validate_prediction_task(retry_task)
+
+
 if modal is not None:
     # Modal re-imports this module inside every container to find the function
     # it should run. At that point the local checkout does not exist, so local
@@ -493,34 +1177,44 @@ if modal is not None:
     def deployment_config() -> dict[str, Any]:
         """Return only non-secret deployment gates for post-deploy verification."""
 
-        return {
-            "app_name": APP_NAME,
-            "config_sha256": os.environ.get(DEPLOYMENT_CONFIG_SHA256_ENV),
-            "weekly": {
-                "enabled": WEEKLY_CRON_ENABLED,
-                "cron": WEEKLY_CRON_UTC,
-                "hook": os.environ.get(WEEKLY_HOOK_ENV),
-                "register": os.environ.get("FOLDARIUM_WEEKLY_REGISTER") == "1",
-                "submit": os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") == "1",
-                "max_targets": os.environ.get("FOLDARIUM_WEEKLY_MAX_TARGETS"),
-                "gpu_class": os.environ.get("FOLDARIUM_WEEKLY_GPU_CLASS"),
-                "public_quiz_bucket": os.environ.get(PUBLIC_QUIZ_BUCKET_ENV),
-                "prediction_max_containers": PREDICTION_MAX_CONTAINERS,
-            },
-            "wednesday_reveal": {
-                "enabled": WEDNESDAY_REVEAL_ENABLED,
-                "cron": WEDNESDAY_REVEAL_CRON_UTC,
-                "publish": _wednesday_publish_enabled(None),
-            },
-            "weekly_retrospective": {
-                "enabled": WEEKLY_RETROSPECTIVE_ENABLED,
-                "cron": WEEKLY_RETROSPECTIVE_CRON_UTC,
-            },
-            "weekly_retrospective_publication": {
-                "enabled": WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED,
-                "cron": WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
-            },
-        }
+        report = _lifecycle_deployment_report()
+        report["nextweekly"].update(
+            {
+                "automatic_retry_error_codes": [
+                    "gpu_out_of_memory",
+                    "msa_generation_timeout",
+                    "msa_preprocessing_failed",
+                ],
+                "retry_batch_size": NEXTWEEKLY_RETRY_BATCH_SIZE,
+                "gpu_command_budget_seconds": NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS,
+                "gpu_cost_budget_usd": NEXTWEEKLY_GPU_COST_BUDGET_USD,
+                "oom_retry": {
+                    "from_gpu_class": "l4",
+                    "to_gpu_class": "a100-40gb",
+                    "command_timeout_seconds": (
+                        NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+                    ),
+                    "outer_timeout_seconds": (
+                        NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+                        + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+                    ),
+                },
+                "msa_timeout_retry": {
+                    "gpu_class": "l4",
+                    "command_timeout_seconds": (
+                        NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+                    ),
+                    "outer_timeout_seconds": (
+                        NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+                        + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+                    ),
+                },
+                "maximum_retry_reservation_seconds": (
+                    NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS
+                ),
+            }
+        )
+        return report
 
     @app.function(
         image=openfold3_image,
@@ -779,6 +1473,160 @@ if modal is not None:
                 if unsubmitted_ids
                 else None
             ),
+        }
+
+    @app.function(
+        image=openfold3_image,
+        cpu=4.0,
+        memory=16384,
+        gpu="L4",
+        timeout=(
+            NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+            + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+        ),
+        max_containers=1,
+        volumes={OPENFOLD_CACHE_ROOT: openfold_cache},
+        secrets=[control_plane_secret],
+    )
+    def run_openfold3_retry(task_json: str | dict[str, Any]) -> dict[str, Any]:
+        canonical_json = _normalise_task_json(task_json)
+        if _method_name(canonical_json) != "openfold3":
+            raise ValueError("the OpenFold3 retry worker accepts only OpenFold3 tasks")
+        openfold_cache.reload()
+        result = _execute(canonical_json)
+        openfold_cache.commit()
+        return result
+
+    @app.function(
+        image=boltz2_image,
+        cpu=4.0,
+        memory=16384,
+        gpu="L4",
+        timeout=(
+            NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+            + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+        ),
+        max_containers=1,
+        volumes={BOLTZ_CACHE_ROOT: boltz_cache},
+        secrets=[control_plane_secret],
+    )
+    def run_boltz2_retry(task_json: str | dict[str, Any]) -> dict[str, Any]:
+        canonical_json = _normalise_task_json(task_json)
+        if _method_name(canonical_json) != "boltz2":
+            raise ValueError("the Boltz-2 retry worker accepts only Boltz-2 tasks")
+        boltz_cache.reload()
+        result = _execute(canonical_json)
+        boltz_cache.commit()
+        return result
+
+    def _retry_function(retry_request: Mapping[str, Any]):
+        method = retry_request.get("method")
+        retry_kind = retry_request.get("retry_kind")
+        function = (
+            run_openfold3_retry
+            if method == "openfold3"
+            else run_boltz2_retry if method == "boltz2" else None
+        )
+        if function is None:
+            raise ValueError("unsupported retry method")
+        if retry_kind == "gpu_out_of_memory":
+            cpu, memory = MODAL_HOST_BY_CLASS["a100-40gb"]
+            return function.with_options(
+                gpu=MODAL_GPU_BY_CLASS["a100-40gb"],
+                cpu=cpu,
+                memory=memory,
+                timeout=(
+                    NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+                    + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+                ),
+                max_containers=1,
+            )
+        if retry_kind == "msa_generation_timeout":
+            return function.with_options(
+                timeout=(
+                    NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+                    + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+                ),
+                max_containers=1,
+            )
+        if retry_kind == "msa_preprocessing_failed":
+            return function.with_options(
+                timeout=(
+                    NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+                    + NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS
+                ),
+                max_containers=1,
+            )
+        raise ValueError("unsupported retry kind")
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def retry_prediction_runs(
+        retry_requests: list[dict[str, Any]],
+        resubmit_already_authorized: bool = False,
+    ) -> dict[str, Any]:
+        """Authorize and spawn an exact, resource-bounded retry batch."""
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        authorization = SupabaseCoordinator.from_env().authorize_prediction_retries(
+            retry_requests,
+            resubmit_already_authorized=resubmit_already_authorized,
+        )
+        task_payloads = authorization.pop("task_payloads")
+        request_by_id = {
+            request["run_id"]: request
+            for request in authorization["retry_requests"]
+        }
+        submissions: list[dict[str, Any]] = []
+        submission_errors: list[dict[str, str]] = []
+        for run_id in authorization["approved_submission_run_ids"]:
+            request = request_by_id[run_id]
+            try:
+                retry_task = _retry_execution_task(task_payloads[run_id], request)
+                canonical_json = _normalise_task_json(retry_task)
+                call_id = _retry_function(request).spawn(canonical_json).object_id
+            except Exception as exc:
+                submission_errors.append(
+                    {
+                        "run_id": run_id,
+                        "error_type": type(exc).__name__,
+                        "error": "Modal did not acknowledge the retry spawn",
+                    }
+                )
+                continue
+            submissions.append(
+                {
+                    "run_id": run_id,
+                    "modal_call_id": call_id,
+                    "retry_kind": request["retry_kind"],
+                    "gpu_class": request["retry_gpu_class"],
+                    "timeout_seconds": request["retry_timeout_seconds"],
+                }
+            )
+        if submission_errors and submissions:
+            status = "partially-submitted"
+        elif submission_errors:
+            status = "submission-failed"
+        elif submissions:
+            status = "submitted"
+        else:
+            status = "not-resubmitted"
+        return {
+            **authorization,
+            "submission_status": status,
+            "submissions": submissions,
+            "submission_errors": submission_errors,
+            "submitted_run_ids": [item["run_id"] for item in submissions],
+            "authorized_not_submitted_run_ids": [
+                item["run_id"] for item in submission_errors
+            ],
         }
 
     @app.function(
@@ -1316,12 +2164,7 @@ if modal is not None:
         round_id: str,
         publish: bool | None = None,
     ) -> dict[str, Any]:
-        """Materialize one allow-listed pre-close evaluation in private storage.
-
-        This manual function requires an explicit ``--no-publish``.  It has no
-        reveal callback, no schedule, and no code path that updates a weekly
-        round or its voting window.
-        """
+        """Materialize one allow-listed pre-close evaluation in private storage."""
 
         if publish is not False:
             raise RuntimeError(
@@ -1361,6 +2204,152 @@ if modal is not None:
             flush=True,
         )
         return {**result, "mode": "private-no-publish", "mutation_enabled": False}
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=1024,
+        schedule=(
+            modal.Cron(WEEKLY_PRODUCTION_CRON_UTC)
+            if WEEKLY_PRODUCTION_ENABLED
+            else None
+        ),
+        secrets=[control_plane_secret],
+        timeout=15 * 60,
+        max_containers=1,
+    )
+    def weekly_production_promotion_tick(
+        release_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Promote one immutable Preview round into production without fabricating votes.
+
+        Repeated ticks are idempotent: an existing production round short-circuits
+        before any manifest mutation. Opening and selector-kit registration remain
+        separately gated so a deployment can stage manifests first.
+        """
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        window = _weekly_production_window(release_date)
+        private, public = _weekly_quiz_public_private_coordinators()
+        open_round = os.environ.get(WEEKLY_PRODUCTION_OPEN_ENV) == "1"
+        register_selector_kit = (
+            os.environ.get(WEEKLY_REGISTER_SELECTOR_KIT_ENV) == "1"
+        )
+        production_exists = private.weekly_quiz_round_exists(window["round_id"])
+        preview_exists = private.weekly_quiz_round_exists(window["preview_round_id"])
+        selector_result = None
+        promoted = None
+        just_promoted = False
+        if production_exists:
+            if open_round and register_selector_kit:
+                selector_result = _attempt_production_selector_kit_registration(
+                    window["round_id"],
+                    private_coordinator=private,
+                    public_coordinator=public,
+                )
+        elif preview_exists:
+            promoted = promote_weekly_quiz_round.remote(
+                window["preview_round_id"],
+                window["round_id"],
+                window["opens_at"],
+                window["closes_at"],
+                "preview",
+                window["environment"],
+                True,
+                open_round,
+            )
+            just_promoted = True
+            if open_round and register_selector_kit:
+                selector_result = _attempt_production_selector_kit_registration(
+                    window["round_id"],
+                    private_coordinator=private,
+                    public_coordinator=public,
+                )
+        selector_fields = _production_selector_kit_status(
+            open_round=open_round,
+            register_selector_kit=register_selector_kit,
+            selector_result=selector_result,
+        )
+        outcome = {
+            **window,
+            "status": _production_tick_status(
+                production_exists=production_exists or just_promoted,
+                preview_exists=preview_exists,
+                open_round=open_round,
+                selector_kit_retryable=selector_fields["selector_kit_retryable"],
+                selector_kit_status=selector_fields["selector_kit_status"],
+                just_promoted=just_promoted,
+            ),
+            "open_round": open_round,
+            "register_selector_kit": register_selector_kit,
+            **selector_fields,
+        }
+        if promoted is not None:
+            outcome["promotion"] = promoted
+        print(
+            "foldarium.weekly_production "
+            + json.dumps(
+                {key: value for key, value in outcome.items() if key != "promotion"},
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return outcome
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=2 * 60,
+        max_containers=1,
+    )
+    def weekly_lifecycle_preflight(
+        release_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a read-only lifecycle status report for operator review."""
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        coordinator = SupabaseCoordinator.from_env()
+        preview = _nextweekly_window(release_date)
+        production = _weekly_production_window(release_date)
+        current_round = None
+        current_round_error = None
+        try:
+            current_round = coordinator.current_weekly_quiz_round()["round_id"]
+        except Exception as exc:
+            current_round_error = type(exc).__name__
+        report = {
+            "deployment": _lifecycle_deployment_report(),
+            "preview": {
+                **preview,
+                "exists": coordinator.weekly_quiz_round_exists(preview["round_id"]),
+            },
+            "production": {
+                **production,
+                "exists": coordinator.weekly_quiz_round_exists(production["round_id"]),
+            },
+            "campaign_registered": coordinator.weekly_campaign_exists(
+                preview["campaign_id"]
+            ),
+            "current_production_round_id": current_round,
+            "current_production_round_error": current_round_error,
+            "required_migrations_before_publication": [
+                REQUIRED_RETROSPECTIVE_MIGRATION
+            ],
+            "selector_kit_module_available": importlib.util.find_spec(
+                "foldarium_pipeline.weekly_selector"
+            )
+            is not None,
+        }
+        print(
+            "foldarium.weekly_lifecycle_preflight "
+            + json.dumps(report, sort_keys=True),
+            flush=True,
+        )
+        return report
 
     @app.function(
         image=quiz_assembly_image,
@@ -1453,11 +2442,7 @@ if modal is not None:
     def weekly_retrospective_publication_tick(
         round_id: str | None = None,
     ) -> dict[str, Any]:
-        """Publish one exact round or backfill all missing revealed rounds.
-
-        The schedule is absent by default. Unlike private evaluation generation,
-        a scan is global: it is not restricted to the newest Saturday campaign.
-        """
+        """Publish one exact round or backfill all missing revealed rounds."""
 
         from foldarium_pipeline.retrospective_archive import (
             publish_missing_retrospectives,
@@ -1681,6 +2666,151 @@ if modal is not None:
             **report,
         }
         print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
+        return outcome
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=1024,
+        schedule=(
+            modal.Cron(NEXTWEEKLY_CRON_UTC)
+            if NEXTWEEKLY_CRON_ENABLED
+            else None
+        ),
+        secrets=[control_plane_secret],
+        timeout=75 * 60,
+        max_containers=1,
+    )
+    def nextweekly_tick(release_date: str | None = None) -> dict[str, Any]:
+        """Advance one Saturday campaign into an immutable Preview round.
+
+        This scheduler never writes a production round. It waits for every GPU
+        run to become terminal, permits one explicitly classified and dual-budgeted
+        OOM or MSA retry, and then invokes the existing fail-closed CPU assembler.
+        Repeated ticks are idempotent because the exact Preview round identity is
+        checked before any retry or assembly.
+        """
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        identity = _nextweekly_window(release_date)
+        if NEXTWEEKLY_ENVIRONMENT != "preview":
+            raise RuntimeError(
+                "automatic nextweekly publication is restricted to preview"
+            )
+        coordinator = SupabaseCoordinator.from_env()
+        if coordinator.weekly_quiz_round_exists(identity["round_id"]):
+            outcome = {
+                **identity,
+                "status": "preview-ready",
+                "environment": NEXTWEEKLY_ENVIRONMENT,
+            }
+        elif not coordinator.weekly_campaign_exists(identity["campaign_id"]):
+            outcome = {
+                **identity,
+                "status": "waiting-for-campaign",
+                "environment": NEXTWEEKLY_ENVIRONMENT,
+            }
+        else:
+            rows = coordinator.campaign_prediction_run_statuses(
+                identity["campaign_id"]
+            )
+            report = _nextweekly_run_report(rows)
+            if not rows:
+                outcome = {
+                    **identity,
+                    **report,
+                    "status": "waiting-for-runs",
+                    "environment": NEXTWEEKLY_ENVIRONMENT,
+                }
+            elif report["active_run_ids"]:
+                outcome = {
+                    **identity,
+                    **report,
+                    "status": "waiting-for-predictions",
+                    "environment": NEXTWEEKLY_ENVIRONMENT,
+                }
+            elif report["authorized_retry_pending_run_ids"]:
+                outcome = {
+                    **identity,
+                    **report,
+                    "status": "waiting-for-authorized-retries",
+                    "environment": NEXTWEEKLY_ENVIRONMENT,
+                }
+            else:
+                retry_budget = (
+                    _nextweekly_retry_budget(rows, report["retry_candidates"])
+                    if report["retry_candidates"]
+                    else None
+                )
+                retry_ids = (
+                    retry_budget["authorized_candidate_run_ids"]
+                    if retry_budget is not None
+                    and retry_budget["authorization_ready"]
+                    else []
+                )
+                if retry_ids:
+                    retry_id_set = set(retry_ids)
+                    retry_requests = [
+                        candidate
+                        for candidate in report["retry_candidates"]
+                        if candidate["run_id"] in retry_id_set
+                    ]
+                    retry = retry_prediction_runs.remote(
+                        retry_requests, False
+                    )
+                    outcome = {
+                        **identity,
+                        **report,
+                        "status": "prediction-retries-submitted",
+                        "environment": NEXTWEEKLY_ENVIRONMENT,
+                        "automatic_retry_budget": retry_budget,
+                        "retry_run_ids": retry_ids,
+                        "retry_requests": retry_requests,
+                        "retry_submission_status": retry.get("submission_status"),
+                        "retry_modal_call_ids": [
+                            row.get("modal_call_id")
+                            for row in retry.get("submissions", [])
+                            if isinstance(row, Mapping)
+                        ],
+                    }
+                else:
+                    # Retry authorization is optional. A missing/invalid duration
+                    # or exhausted budget skips metered work and lets the existing
+                    # fail-closed assembler omit incomplete method pairs.
+                    assembled = assemble_weekly_quiz_round.remote(
+                        identity["campaign_id"],
+                        identity["round_id"],
+                        identity["opens_at"],
+                        identity["closes_at"],
+                        True,
+                        NEXTWEEKLY_INCLUDE_POSE_METRICS,
+                        True,
+                        NEXTWEEKLY_ENVIRONMENT,
+                        _weekly_public_bucket(),
+                        "",
+                        None,
+                    )
+                    outcome = {
+                        **identity,
+                        **report,
+                        "status": "preview-opened",
+                        "environment": NEXTWEEKLY_ENVIRONMENT,
+                        "assembly": assembled,
+                    }
+                    if retry_budget is not None:
+                        outcome["automatic_retry_budget"] = retry_budget
+                        outcome["automatic_retry_status"] = "skipped"
+        log_outcome = {
+            key: value
+            for key, value in outcome.items()
+            if key not in {"active_run_ids", "retryable_run_ids", "assembly"}
+        }
+        print(
+            "foldarium.nextweekly "
+            + json.dumps(log_outcome, sort_keys=True),
+            flush=True,
+        )
         return outcome
 
     @app.local_entrypoint()

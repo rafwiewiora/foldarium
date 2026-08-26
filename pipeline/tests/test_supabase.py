@@ -1162,6 +1162,85 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                 self.assertEqual(len(opener.calls), 1)
                 self.assertIn("campaign_id=eq.wwpdb-2026-08-08", opener.calls[0][0].full_url)
 
+    def test_campaign_run_statuses_are_exact_and_read_only(self) -> None:
+        run = {
+            "run_id": "run-status-1",
+            "target_id": "target-1",
+            "method": "boltz2",
+            "status": "failed",
+            "attempt_count": 1,
+            "max_attempts": 1,
+            "error_code": "msa_preprocessing_failed",
+            "task_payload": {"task_id": "run-status-1"},
+            "result": {"duration_seconds": 12.5},
+        }
+
+        class StatusOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("campaign status lookup must be read-only")
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/targets?" in url:
+                    return FakeResponse(b'[{"target_id":"target-1"}]')
+                if "/prediction_runs?" in url:
+                    return FakeResponse(json.dumps([run]).encode())
+                raise AssertionError(url)
+
+        opener = StatusOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        self.assertEqual(
+            coordinator.campaign_prediction_run_statuses("wwpdb-2026-08-15"),
+            [run],
+        )
+        self.assertEqual(len(opener.calls), 2)
+
+    def test_exact_weekly_round_existence_is_read_only_and_duplicate_safe(self) -> None:
+        class RoundExistsOpener(RecordingOpener):
+            def __init__(self, body: bytes) -> None:
+                super().__init__()
+                self.body = body
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("round existence lookup must be read-only")
+                return FakeResponse(self.body)
+
+        for body, expected in (
+            (b"[]", False),
+            (b'[{"round_id":"preview-weekly-2026-08-15-nextweekly-v1"}]', True),
+        ):
+            with self.subTest(expected=expected):
+                opener = RoundExistsOpener(body)
+                coordinator = SupabaseCoordinator(
+                    "https://project.supabase.co",
+                    "service-role-key",
+                    "results",
+                    opener=opener,
+                )
+                self.assertEqual(
+                    coordinator.weekly_quiz_round_exists(
+                        "preview-weekly-2026-08-15-nextweekly-v1"
+                    ),
+                    expected,
+                )
+                self.assertEqual(len(opener.calls), 1)
+
+        duplicate = RoundExistsOpener(
+            b'[{"round_id":"round-a"},{"round_id":"round-a"}]'
+        )
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=duplicate,
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "duplicate rows"):
+            coordinator.weekly_quiz_round_exists("round-a")
+
     def test_tampered_plan_is_rejected_before_upload(self) -> None:
         opener = RecordingOpener()
         coordinator = SupabaseCoordinator(

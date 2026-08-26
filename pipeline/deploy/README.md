@@ -233,7 +233,8 @@ The Modal schedule is absent unless
 `FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION=1` is present at deploy time;
 it is intentionally absent from the standing reviewed production profile.
 `FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON` defaults to
-`45 0 * * 3`. With an exact `round_id`, the function processes only that round.
+`45 0-5 * * 3`, giving six hourly attempts during the Wednesday window rather
+than a single pre-reveal tick. With an exact `round_id`, the function processes only that round.
 Without one, it calls the service-only missing-publication scan and backfills
 every eligible revealed production round in reveal order; it never derives the
 newest campaign.
@@ -304,14 +305,25 @@ after a successful reveal return `already-revealed` without rescoring.
 
 The standing `molspace-main` profile explicitly pins publication to `0` so its
 scheduled Wednesday attempts are dry runs. Do not change that standing profile
-to publish; use a separately reviewed explicit manual call when publication is
+to publish; use a separately reviewed explicit call when publication is
 authorized.
 
-The same profile retains `FOLDARIUM_WEEKLY_MAX_TARGETS=2`, the last explicitly
-reviewed production spend cap, plus L4 and five containers per prediction
-method. Two targets is a safety setting, not the intended permanent weekly
-volume. Increasing it requires a separate product/spend decision and reviewed
-profile commit before deployment.
+The reviewed profile preserves the live 40-target Saturday intake cap and the
+`*/15 3-12 * * 6` intake window. Preview assembly (`nextweekly_tick`) and
+production promotion remain separately scheduled and idempotent. Production
+opening and selector-kit registration are gated off by default
+(`FOLDARIUM_WEEKLY_PRODUCTION_OPEN=0`, `FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT=0`).
+
+Before enabling retrospective publication, review and apply
+`supabase/migrations/20260826190000_require_retrospective_vote_scope.sql`.
+The publication schedule defaults to six hourly Wednesday attempts
+(`45 0-5 * * 3`) rather than a single pre-reveal tick.
+
+Use the read-only preflight before activation:
+
+```bash
+modal run --env main pipeline/deploy/modal_app.py::weekly_lifecycle_preflight
+```
 
 Keep the laptop's default Modal profile on `foldariumtest`. The separately
 configured `molspace-production` profile is for Brian's final deployment only;

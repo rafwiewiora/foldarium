@@ -129,6 +129,796 @@ spec.loader.exec_module(module)
         self.assertIn("direct deployment is disabled", completed.stderr)
 
 
+class NextweeklyAutomationTests(unittest.TestCase):
+    @staticmethod
+    def deployment_module():
+        return TransientMsaRetrySubmissionTests.deployment_module()
+
+    def test_window_is_bound_to_the_most_recent_utc_saturday(self) -> None:
+        module = self.deployment_module()
+        window = module._nextweekly_window(
+            now=datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
+        )
+        self.assertEqual(window["release_date"], "2026-08-15")
+        self.assertEqual(window["campaign_id"], "wwpdb-2026-08-15")
+        self.assertEqual(
+            window["round_id"], "preview-weekly-2026-08-15-nextweekly-v2"
+        )
+        self.assertEqual(window["opens_at"], "2026-08-15T03:00:00Z")
+        self.assertEqual(window["closes_at"], "2026-08-19T00:00:00Z")
+
+    def test_run_report_never_auto_retries_generic_legacy_failures(self) -> None:
+        module = self.deployment_module()
+        report = module._nextweekly_run_report(
+            [
+                {
+                    "run_id": "run-msa",
+                    "target_id": "target-msa",
+                    "method": "boltz2",
+                    "status": "failed",
+                    "attempt_count": 1,
+                    "max_attempts": 1,
+                    "error_code": "msa_preprocessing_failed",
+                    "task_payload": {
+                        "resources": {
+                            "gpu_class": "l4",
+                            "timeout_seconds": 1800,
+                        },
+                        "config": {"msa_mode": "server"},
+                    },
+                    "result": {"duration_seconds": 10.0},
+                },
+                {
+                    "run_id": "run-generic",
+                    "method": "boltz2",
+                    "status": "failed",
+                    "attempt_count": 1,
+                    "max_attempts": 1,
+                    "error_code": "output_validation_failed",
+                },
+                {
+                    "run_id": "run-oom",
+                    "method": "openfold3",
+                    "status": "failed",
+                    "attempt_count": 1,
+                    "max_attempts": 1,
+                    "error_code": "gpu_out_of_memory",
+                },
+            ]
+        )
+        self.assertEqual(report["retryable_run_ids"], ["run-msa"])
+        self.assertEqual(report["status_counts"]["failed"], 3)
+
+    def test_run_report_exact_legacy_map_matches_authorizer_and_near_misses_fail(self) -> None:
+        module = self.deployment_module()
+        from foldarium_pipeline.supabase import REVIEWED_LEGACY_PREDICTION_RETRIES
+
+        self.assertEqual(
+            module.NEXTWEEKLY_REVIEWED_LEGACY_RETRIES,
+            REVIEWED_LEGACY_PREDICTION_RETRIES,
+        )
+        specs = [
+            (
+                "run_ebb8012256ebff410610bbd3",
+                "9S7U",
+                "openfold3",
+                "output_validation_failed",
+                "gpu_out_of_memory",
+                "a100-40gb",
+                1800,
+            ),
+            (
+                "run_fe3f5b2f13d64c508aa61f39",
+                "31ZN",
+                "boltz2",
+                "output_validation_failed",
+                "gpu_out_of_memory",
+                "a100-40gb",
+                1800,
+            ),
+            (
+                "run_62f75d944367889691bfc897",
+                "32QB",
+                "openfold3",
+                "timeout",
+                "msa_generation_timeout",
+                "l4",
+                4500,
+            ),
+        ]
+        rows = [
+            {
+                "run_id": run_id,
+                "target_id": target_id,
+                "method": method,
+                "status": "failed",
+                "attempt_count": 1,
+                "max_attempts": 1,
+                "error_code": source_error,
+                "task_payload": {
+                    "resources": {"gpu_class": "l4", "timeout_seconds": 1800},
+                    "config": {"msa_mode": "server"},
+                },
+                "result": {"duration_seconds": 10.0},
+            }
+            for run_id, target_id, method, source_error, *_ in specs
+        ]
+        report = module._nextweekly_run_report(rows)
+        self.assertEqual(
+            [
+                (
+                    item["run_id"],
+                    item["retry_kind"],
+                    item["retry_gpu_class"],
+                    item["retry_timeout_seconds"],
+                    item["reviewed_legacy"],
+                )
+                for item in report["retry_candidates"]
+            ],
+            [
+                (run_id, retry_kind, gpu, timeout, True)
+                for run_id, _target, _method, _source, retry_kind, gpu, timeout in sorted(
+                    specs
+                )
+            ],
+        )
+        for row_index, field, wrong in (
+            (0, "target_id", "wrong-target"),
+            (0, "method", "boltz2"),
+            (0, "error_code", "wrong-code"),
+            (1, "target_id", "wrong-target"),
+            (1, "method", "openfold3"),
+            (1, "error_code", "wrong-code"),
+            (2, "target_id", "wrong-target"),
+            (2, "method", "boltz2"),
+            (2, "error_code", "wrong-code"),
+        ):
+            mutated = deepcopy(rows)
+            mutated[row_index][field] = wrong
+            rejected = module._nextweekly_run_report(mutated)
+            self.assertNotIn(
+                rows[row_index]["run_id"], rejected["retryable_run_ids"]
+            )
+
+        wrong_timeout = deepcopy(rows)
+        wrong_timeout[0]["task_payload"]["resources"]["timeout_seconds"] = 1700
+        self.assertNotIn(
+            rows[0]["run_id"],
+            module._nextweekly_run_report(wrong_timeout)["retryable_run_ids"],
+        )
+
+    @staticmethod
+    def _terminal_rows(
+        *, duration_seconds: float = 1700.0, retryable_count: int = 0
+    ) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for target_index in range(40):
+            for method in ("boltz2", "openfold3"):
+                retryable = method == "boltz2" and target_index < retryable_count
+                rows.append(
+                    {
+                        "run_id": f"run-{target_index:02d}-{method}",
+                        "method": method,
+                        "status": "failed" if retryable else "succeeded",
+                        "attempt_count": 1,
+                        "max_attempts": 1,
+                        "error_code": (
+                            "msa_preprocessing_failed" if retryable else None
+                        ),
+                        "task_payload": {
+                            "resources": {
+                                "gpu_class": "l4",
+                                "timeout_seconds": 1800,
+                            },
+                            "config": {"msa_mode": "server"},
+                        },
+                        "result": {"duration_seconds": duration_seconds},
+                    }
+                )
+        return rows
+
+    @staticmethod
+    def _retry_candidates(count: int, *, kind: str = "msa_preprocessing_failed"):
+        return [
+            {
+                "run_id": f"candidate-{index}",
+                "retry_kind": kind,
+                "retry_gpu_class": (
+                    "a100-40gb" if kind == "gpu_out_of_memory" else "l4"
+                ),
+                "retry_timeout_seconds": (
+                    4500 if kind == "msa_generation_timeout" else 1800
+                ),
+            }
+            for index in range(count)
+        ]
+
+    def test_retry_budget_uses_exact_terminal_durations(self) -> None:
+        module = self.deployment_module()
+        budget = module._nextweekly_retry_budget(
+            self._terminal_rows(), self._retry_candidates(6)
+        )
+        self.assertEqual(budget["status"], "available")
+        self.assertEqual(budget["original_consumed_seconds"], 136000.0)
+        self.assertEqual(budget["authorized_retry_count"], 0)
+        self.assertEqual(budget["retry_reserved_seconds"], 0)
+        self.assertEqual(budget["remaining_seconds"], 8000.0)
+        self.assertEqual(budget["remaining_retry_slots"], 4)
+
+    def test_retry_budget_fails_closed_on_missing_duration(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows()
+        rows[17]["result"] = None
+        budget = module._nextweekly_retry_budget(rows, self._retry_candidates(1))
+        self.assertEqual(budget["status"], "invalid-run-accounting")
+        self.assertFalse(budget["authorization_ready"])
+        self.assertEqual(budget["remaining_retry_slots"], 0)
+        self.assertEqual(budget["invalid_run_ids"], [rows[17]["run_id"]])
+
+    def test_retry_budget_treats_authorized_rows_as_two_full_commands(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows(duration_seconds=1000.0)
+        for row in rows[:20:2]:  # Ten Boltz rows already authorized once.
+            row["max_attempts"] = 2
+            row["attempt_count"] = 2
+            row["result"] = {"duration_seconds": 12.0}
+        budget = module._nextweekly_retry_budget(rows, self._retry_candidates(10))
+        self.assertEqual(budget["authorized_retry_count"], 10)
+        self.assertEqual(budget["original_consumed_seconds"], 88000.0)
+        self.assertEqual(budget["retry_reserved_seconds"], 45000)
+        self.assertEqual(budget["consumed_or_reserved_seconds"], 133000.0)
+        self.assertEqual(budget["remaining_retry_slots"], 6)
+
+    def test_retry_budget_does_not_recover_reserved_slots_on_later_tick(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows(duration_seconds=1700.0)
+        for row in rows[:8:2]:  # The prior tick authorized its four available slots.
+            row["max_attempts"] = 2
+            row["attempt_count"] = 2
+            row["result"] = {"duration_seconds": 1.0}
+        budget = module._nextweekly_retry_budget(rows, self._retry_candidates(4))
+        self.assertEqual(budget["authorized_retry_count"], 4)
+        self.assertEqual(budget["consumed_or_reserved_seconds"], 154400.0)
+        self.assertEqual(budget["status"], "exhausted")
+        self.assertEqual(budget["remaining_retry_slots"], 0)
+
+    def test_retry_budget_is_exhausted_at_40_command_hours(self) -> None:
+        module = self.deployment_module()
+        budget = module._nextweekly_retry_budget(
+            self._terminal_rows(duration_seconds=1800.0),
+            self._retry_candidates(1),
+        )
+        self.assertEqual(budget["status"], "exhausted")
+        self.assertFalse(budget["authorization_ready"])
+        self.assertEqual(budget["remaining_seconds"], 0.0)
+        self.assertEqual(budget["remaining_retry_slots"], 0)
+
+    def test_retry_budget_enforces_weighted_gpu_cost_not_only_seconds(self) -> None:
+        module = self.deployment_module()
+        self.assertEqual(module.NEXTWEEKLY_L4_RATE_USD_PER_SECOND, 0.00030992)
+        self.assertEqual(
+            module.NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND, 0.00075884
+        )
+        # Leave $0.80 of command authority. That is enough raw time and money
+        # for one L4/1800 retry, but not an A100-40GB/1800 retry.
+        remaining_cost = 0.80
+        duration = (
+            module.NEXTWEEKLY_GPU_COST_BUDGET_USD - remaining_cost
+        ) / (80 * module.NEXTWEEKLY_L4_RATE_USD_PER_SECOND)
+        candidates = [
+            self._retry_candidates(1, kind="gpu_out_of_memory")[0],
+            {
+                **self._retry_candidates(1)[0],
+                "run_id": "candidate-l4",
+            },
+        ]
+        budget = module._nextweekly_retry_budget(
+            self._terminal_rows(duration_seconds=duration), candidates
+        )
+        self.assertGreater(budget["remaining_seconds"], 1800)
+        self.assertLess(
+            budget["remaining_cost_usd"],
+            1800 * module.NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND,
+        )
+        self.assertEqual(
+            budget["authorized_candidate_run_ids"], ["candidate-l4"]
+        )
+
+    def test_retry_execution_task_preserves_identity_and_records_resources(self) -> None:
+        module = self.deployment_module()
+        from foldarium_pipeline.contracts import SCHEMA_VERSION, make_prediction_task
+
+        task = make_prediction_task(
+            campaign_id="wwpdb-2026-08-15",
+            target={
+                "schema_version": SCHEMA_VERSION,
+                "target_id": "31ZN",
+                "entities": [
+                    {
+                        "type": "protein",
+                        "chain_ids": ["A"],
+                        "sequence": "ACDEFGHIK",
+                    },
+                    {
+                        "type": "ligand",
+                        "chain_ids": ["L"],
+                        "smiles": "CCO",
+                    },
+                ],
+            },
+            method="boltz2",
+            method_version="2.2.1",
+            container_image="registry.example/foldarium/boltz@sha256:" + "a" * 64,
+            config={"msa_mode": "server"},
+            output_uri_prefix="s3://foldarium/predictions",
+            resources={"gpu_class": "l4", "timeout_seconds": 1800},
+        )
+        original = deepcopy(task)
+        request = {
+            "run_id": task["task_id"],
+            "target_id": "31ZN",
+            "method": "boltz2",
+            "source_error_code": "output_validation_failed",
+            "retry_kind": "gpu_out_of_memory",
+            "retry_gpu_class": "a100-40gb",
+            "retry_timeout_seconds": 1800,
+            "reviewed_legacy": True,
+        }
+        retry_task = module._retry_execution_task(task, request)
+        self.assertEqual(task, original)
+        self.assertEqual(retry_task["task_id"], task["task_id"])
+        for field in (
+            "target",
+            "method",
+            "method_version",
+            "container_image",
+            "config",
+            "output_uri_prefix",
+        ):
+            self.assertEqual(retry_task[field], task[field])
+        self.assertEqual(retry_task["resources"]["gpu_class"], "a100-40gb")
+        self.assertEqual(retry_task["resources"]["timeout_seconds"], 1800)
+        self.assertEqual(
+            retry_task["resources"]["retry_policy"],
+            {
+                "retry_kind": "gpu_out_of_memory",
+                "source_error_code": "output_validation_failed",
+                "reviewed_legacy": True,
+                "original_gpu_class": "l4",
+                "original_timeout_seconds": 1800,
+            },
+        )
+
+    def test_retry_function_routes_gpu_and_outer_timeout(self) -> None:
+        module = self.deployment_module()
+
+        class FakeFunction:
+            def __init__(self):
+                self.options = []
+
+            def with_options(self, **kwargs):
+                self.options.append(kwargs)
+                return self
+
+        openfold = FakeFunction()
+        boltz = FakeFunction()
+        with patch.object(module, "run_openfold3_retry", openfold), patch.object(
+            module, "run_boltz2_retry", boltz
+        ):
+            self.assertIs(
+                module._retry_function(
+                    {"method": "openfold3", "retry_kind": "gpu_out_of_memory"}
+                ),
+                openfold,
+            )
+            self.assertIs(
+                module._retry_function(
+                    {"method": "boltz2", "retry_kind": "msa_generation_timeout"}
+                ),
+                boltz,
+            )
+        self.assertEqual(openfold.options[0]["gpu"], "A100-40GB")
+        self.assertEqual(openfold.options[0]["cpu"], 8.0)
+        self.assertEqual(openfold.options[0]["memory"], 32768)
+        self.assertEqual(openfold.options[0]["timeout"], 2100)
+        self.assertEqual(openfold.options[0]["max_containers"], 1)
+        self.assertEqual(boltz.options[0]["timeout"], 4800)
+        self.assertEqual(boltz.options[0]["max_containers"], 1)
+
+    def test_execute_lease_outlives_normal_and_long_retry_containers(self) -> None:
+        module = self.deployment_module()
+        from foldarium_pipeline.contracts import SCHEMA_VERSION, make_prediction_task
+
+        base = make_prediction_task(
+            campaign_id="wwpdb-2026-08-15",
+            target={
+                "schema_version": SCHEMA_VERSION,
+                "target_id": "lease-test",
+                "entities": [
+                    {
+                        "type": "protein",
+                        "chain_ids": ["A"],
+                        "sequence": "ACDEFGHIK",
+                    },
+                    {
+                        "type": "ligand",
+                        "chain_ids": ["L"],
+                        "smiles": "CCO",
+                    },
+                ],
+            },
+            method="openfold3",
+            method_version="0.4.4",
+            container_image="registry.example/foldarium/of3@sha256:" + "a" * 64,
+            config={"msa_mode": "server"},
+            output_uri_prefix="s3://foldarium/predictions",
+            resources={"gpu_class": "l4", "timeout_seconds": 1800},
+        )
+        long_retry = deepcopy(base)
+        long_retry["resources"] = {
+            "gpu_class": "l4",
+            "timeout_seconds": 4500,
+            "retry_policy": {
+                "retry_kind": "msa_generation_timeout",
+                "source_error_code": "timeout",
+                "reviewed_legacy": True,
+                "original_gpu_class": "l4",
+                "original_timeout_seconds": 1800,
+            },
+        }
+
+        class Publisher:
+            def __init__(self):
+                self.claims = []
+
+            def claim_run(self, run_id, worker_id, lease_seconds):
+                self.claims.append((run_id, lease_seconds))
+                return True
+
+            def publish_result(self, result, output_root, worker_id):
+                return {"status": "published"}
+
+        publisher = Publisher()
+        result = {
+            "status": "succeeded",
+            "task_id": base["task_id"],
+            "samples": [],
+        }
+        with patch(
+            "foldarium_pipeline.supabase.SupabasePublisher.from_env",
+            return_value=publisher,
+        ), patch(
+            "foldarium_pipeline.worker.execute_task_json",
+            return_value=result,
+        ):
+            module._execute(base)
+            module._execute(long_retry)
+        self.assertEqual(
+            [lease for _run_id, lease in publisher.claims], [2700, 5400]
+        )
+        self.assertGreater(2700, 2100)
+        self.assertGreater(5400, 4800)
+
+    def test_tick_caps_retry_batch_to_campaign_budget(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows(retryable_count=6)
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return rows
+
+        class RetryRemote:
+            calls = []
+
+            @classmethod
+            def remote(cls, retry_requests, resubmit):
+                cls.calls.append((retry_requests, resubmit))
+                return {
+                    "submission_status": "submitted",
+                    "submissions": [
+                        {
+                            "run_id": request["run_id"],
+                            "modal_call_id": f"call-{request['run_id']}",
+                        }
+                        for request in retry_requests
+                    ],
+                }
+
+        class ForbiddenAssembly:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("an authorized retry batch must not assemble")
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(
+            module, "retry_prediction_runs", RetryRemote
+        ), patch.object(module, "assemble_weekly_quiz_round", ForbiddenAssembly):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "prediction-retries-submitted")
+        self.assertEqual(len(result["retry_run_ids"]), 4)
+        self.assertEqual(result["automatic_retry_budget"]["remaining_retry_slots"], 4)
+        self.assertEqual(
+            [request["run_id"] for request in RetryRemote.calls[0][0]],
+            result["retry_run_ids"],
+        )
+
+    def test_tick_skips_retry_and_assembles_when_accounting_is_invalid(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows(retryable_count=1)
+        rows[-1]["result"] = None
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return rows
+
+        class ForbiddenRetry:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("invalid accounting must not authorize a retry")
+
+        class AssemblyRemote:
+            @staticmethod
+            def remote(*args):
+                return {"status": "opened", "round_id": args[1]}
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(
+            module, "retry_prediction_runs", ForbiddenRetry
+        ), patch.object(
+            module, "assemble_weekly_quiz_round", AssemblyRemote
+        ), patch.object(module, "_weekly_public_bucket", return_value="public-weekly"):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "preview-opened")
+        self.assertEqual(result["automatic_retry_status"], "skipped")
+        self.assertEqual(
+            result["automatic_retry_budget"]["status"],
+            "invalid-run-accounting",
+        )
+
+    def test_tick_skips_retry_and_assembles_when_budget_is_exhausted(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows(duration_seconds=1800.0, retryable_count=1)
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return rows
+
+        class ForbiddenRetry:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("an exhausted budget must not authorize a retry")
+
+        class AssemblyRemote:
+            @staticmethod
+            def remote(*args):
+                return {"status": "opened", "round_id": args[1]}
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(
+            module, "retry_prediction_runs", ForbiddenRetry
+        ), patch.object(
+            module, "assemble_weekly_quiz_round", AssemblyRemote
+        ), patch.object(module, "_weekly_public_bucket", return_value="public-weekly"):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "preview-opened")
+        self.assertEqual(result["automatic_retry_status"], "skipped")
+        self.assertEqual(result["automatic_retry_budget"]["status"], "exhausted")
+        self.assertEqual(
+            result["automatic_retry_budget"]["remaining_retry_slots"], 0
+        )
+
+    def test_tick_waits_for_every_active_prediction_before_assembly(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return [
+                    {
+                        "run_id": "run-active",
+                        "method": "openfold3",
+                        "status": "running",
+                        "attempt_count": 1,
+                        "max_attempts": 1,
+                        "error_code": None,
+                    }
+                ]
+
+        class ForbiddenRemote:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("active campaigns must not assemble or retry")
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(module, "assemble_weekly_quiz_round", ForbiddenRemote), patch.object(
+            module, "retry_prediction_runs", ForbiddenRemote
+        ):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "waiting-for-predictions")
+        self.assertEqual(result["active_run_ids"], ["run-active"])
+
+    def test_tick_waits_for_authorized_retry_ack_gap(self) -> None:
+        module = self.deployment_module()
+        rows = self._terminal_rows()
+        rows[0].update(
+            {
+                "status": "failed",
+                "attempt_count": 1,
+                "max_attempts": 2,
+                "error_code": "gpu_out_of_memory",
+            }
+        )
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return rows
+
+        class ForbiddenRemote:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("ack-gap rows must neither retry nor assemble")
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(module, "assemble_weekly_quiz_round", ForbiddenRemote), patch.object(
+            module, "retry_prediction_runs", ForbiddenRemote
+        ):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "waiting-for-authorized-retries")
+        self.assertEqual(
+            result["authorized_retry_pending_run_ids"], [rows[0]["run_id"]]
+        )
+
+    def test_existing_v2_is_immutable_and_short_circuits_all_work(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                self.assertEqual(
+                    round_id, "preview-weekly-2026-08-15-nextweekly-v2"
+                )
+                return True
+
+        self_ref = self
+        Coordinator.weekly_quiz_round_exists = staticmethod(
+            lambda round_id: (
+                self_ref.assertEqual(
+                    round_id, "preview-weekly-2026-08-15-nextweekly-v2"
+                )
+                or True
+            )
+        )
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "preview-ready")
+
+    def test_terminal_campaign_opens_preview_and_never_production(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return False
+
+            @staticmethod
+            def weekly_campaign_exists(campaign_id):
+                return True
+
+            @staticmethod
+            def campaign_prediction_run_statuses(campaign_id):
+                return [
+                    {
+                        "run_id": "run-of3",
+                        "method": "openfold3",
+                        "status": "succeeded",
+                        "attempt_count": 1,
+                        "max_attempts": 1,
+                        "error_code": None,
+                    },
+                    {
+                        "run_id": "run-boltz",
+                        "method": "boltz2",
+                        "status": "succeeded",
+                        "attempt_count": 1,
+                        "max_attempts": 1,
+                        "error_code": None,
+                    },
+                ]
+
+        class AssemblyRemote:
+            calls = []
+
+            @classmethod
+            def remote(cls, *args):
+                cls.calls.append(args)
+                return {"status": "opened", "round_id": args[1]}
+
+        class ForbiddenRetry:
+            @staticmethod
+            def remote(*args):
+                raise AssertionError("succeeded campaigns must not retry")
+
+        raw_function = module.nextweekly_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch.object(module, "assemble_weekly_quiz_round", AssemblyRemote), patch.object(
+            module, "retry_prediction_runs", ForbiddenRetry
+        ), patch.object(module, "_weekly_public_bucket", return_value="public-weekly"):
+            result = raw_function("2026-08-15")
+        self.assertEqual(result["status"], "preview-opened")
+        self.assertEqual(len(AssemblyRemote.calls), 1)
+        args = AssemblyRemote.calls[0]
+        self.assertEqual(args[0], "wwpdb-2026-08-15")
+        self.assertEqual(args[1], "preview-weekly-2026-08-15-nextweekly-v2")
+        self.assertIs(args[4], True)
+        self.assertIs(args[5], module.NEXTWEEKLY_INCLUDE_POSE_METRICS)
+        self.assertEqual(args[7], "preview")
+        self.assertNotIn("production", args)
+
 class WeeklyMetricReuseTests(unittest.TestCase):
     @staticmethod
     def deployment_module():
@@ -407,6 +1197,265 @@ class WeeklyScoringConcurrencyTests(unittest.TestCase):
             [result["pose_id"] for result in results],
             [request["pose_id"] for request in requests],
         )
+
+
+class WeeklyLifecycleReconciliationTests(unittest.TestCase):
+    @staticmethod
+    def deployment_module():
+        return TransientMsaRetrySubmissionTests.deployment_module()
+
+    def test_production_window_derives_preview_identity(self) -> None:
+        module = self.deployment_module()
+        window = module._weekly_production_window("2026-08-15")
+        self.assertEqual(window["preview_round_id"], "preview-weekly-2026-08-15-nextweekly-v2")
+        self.assertEqual(window["round_id"], "weekly-2026-08-15-beta-v1")
+        self.assertEqual(window["environment"], "production")
+
+    def test_lifecycle_report_includes_retrospective_gates(self) -> None:
+        module = self.deployment_module()
+        report = module._lifecycle_deployment_report()
+        self.assertEqual(report["weekly_retrospective_publication"]["cron"], "45 0-5 * * 3")
+        self.assertIn(
+            "20260826190000_require_retrospective_vote_scope.sql",
+            report["required_migrations_before_publication"],
+        )
+
+    def test_public_private_coordinators_use_reviewed_bucket_split(self) -> None:
+        module = self.deployment_module()
+        environments: list[dict[str, str]] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+        class PublicCoordinator:
+            storage_bucket = "foldarium-weekly-quiz"
+
+        def from_env(environment=None):
+            environments.append(dict(environment or os.environ))
+            if environment is None:
+                return PrivateCoordinator()
+            return PublicCoordinator()
+
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            side_effect=from_env,
+        ), patch.object(module, "_weekly_public_bucket", return_value="foldarium-weekly-quiz"):
+            private, public = module._weekly_quiz_public_private_coordinators()
+
+        self.assertIsInstance(private, PrivateCoordinator)
+        self.assertIsInstance(public, PublicCoordinator)
+        self.assertEqual(
+            environments[1]["FOLDARIUM_STORAGE_BUCKET"],
+            "foldarium-weekly-quiz",
+        )
+
+    def test_selector_backfill_uses_exact_round_row_and_coordinators(self) -> None:
+        module = self.deployment_module()
+        round_row = {
+            "round_id": "weekly-2026-08-15-beta-v1",
+            "blind_manifest": {"round_id": "weekly-2026-08-15-beta-v1", "items": []},
+            "metadata": {},
+        }
+        calls: list[tuple] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round(self, round_id: str):
+                self.round_id = round_id
+                return round_row
+
+        class PublicCoordinator:
+            storage_bucket = "foldarium-weekly-quiz"
+
+        private = PrivateCoordinator()
+        public = PublicCoordinator()
+
+        def backfill(round_row_arg, *, public_coordinator, private_coordinator, register_catalog):
+            calls.append(
+                (
+                    round_row_arg,
+                    public_coordinator,
+                    private_coordinator,
+                    register_catalog,
+                )
+            )
+            return {"kit_sha256": "a" * 64, "registered": True}
+
+        with patch(
+            "foldarium_pipeline.weekly_quiz.backfill_selector_kit_for_round",
+            side_effect=backfill,
+            create=True,
+        ):
+            result = module._attempt_production_selector_kit_registration(
+                "weekly-2026-08-15-beta-v1",
+                private_coordinator=private,
+                public_coordinator=public,
+            )
+
+        self.assertEqual(result["status"], "registered")
+        self.assertEqual(private.round_id, "weekly-2026-08-15-beta-v1")
+        self.assertEqual(calls[0][0], round_row)
+        self.assertIs(calls[0][1], public)
+        self.assertIs(calls[0][2], private)
+        self.assertTrue(calls[0][3])
+
+    def test_production_promotion_is_idempotent_when_round_exists_without_registration(
+        self,
+    ) -> None:
+        module = self.deployment_module()
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module, "_attempt_production_selector_kit_registration"
+        ) as register:
+            raw_function = module.weekly_production_promotion_tick.get_raw_f()
+            report = raw_function("2026-08-15")
+
+        self.assertEqual(report["status"], "production-ready")
+        register.assert_not_called()
+
+    def test_existing_production_round_retries_selector_registration(self) -> None:
+        module = self.deployment_module()
+        register_calls: list[str] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        def register(round_id, *, private_coordinator, public_coordinator):
+            register_calls.append(round_id)
+            return {
+                "status": "registered",
+                "retryable": False,
+                "kit_sha256": "b" * 64,
+                "registered": True,
+            }
+
+        raw_function = module.weekly_production_promotion_tick.get_raw_f()
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            side_effect=register,
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            report = raw_function("2026-08-15")
+
+        self.assertEqual(report["status"], "production-ready")
+        self.assertEqual(register_calls, ["weekly-2026-08-15-beta-v1"])
+        self.assertEqual(report["selector_kit_status"], "registered")
+
+    def test_selector_module_unavailable_is_non_mutating(self) -> None:
+        module = self.deployment_module()
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            return_value={
+                "status": "skipped-module-unavailable",
+                "retryable": False,
+            },
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            report = module.weekly_production_promotion_tick.get_raw_f()("2026-08-15")
+
+        self.assertEqual(report["status"], "production-ready-selector-kit-skipped")
+        self.assertEqual(report["selector_kit_status"], "skipped-module-unavailable")
+        self.assertFalse(report["selector_kit_retryable"])
+
+    def test_selector_registration_failure_remains_retryable_on_later_tick(self) -> None:
+        module = self.deployment_module()
+        outcomes = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        def register(round_id, *, private_coordinator, public_coordinator):
+            if len(outcomes) == 0:
+                return {
+                    "status": "failed:RuntimeError",
+                    "retryable": True,
+                    "error": "catalog unavailable",
+                }
+            return {
+                "status": "registered",
+                "retryable": False,
+                "kit_sha256": "c" * 64,
+                "registered": True,
+            }
+
+        raw_function = module.weekly_production_promotion_tick.get_raw_f()
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            side_effect=register,
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            first = raw_function("2026-08-15")
+            outcomes.append(first)
+            second = raw_function("2026-08-15")
+            outcomes.append(second)
+
+        self.assertEqual(first["status"], "production-ready-selector-kit-retryable")
+        self.assertTrue(first["selector_kit_retryable"])
+        self.assertEqual(second["status"], "production-ready")
+        self.assertEqual(second["selector_kit_status"], "registered")
+
+    def test_lifecycle_preflight_reports_round_existence(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id.startswith("preview-weekly-")
+
+            def weekly_campaign_exists(self, campaign_id):
+                self.campaign_id = campaign_id
+                return False
+
+            def current_weekly_quiz_round(self):
+                return {"round_id": "weekly-2026-08-08-v2"}
+
+        coordinator = Coordinator()
+        raw_function = module.weekly_lifecycle_preflight.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=coordinator,
+        ):
+            report = raw_function("2026-08-15")
+
+        self.assertTrue(report["preview"]["exists"])
+        self.assertFalse(report["production"]["exists"])
+        self.assertEqual(coordinator.campaign_id, "wwpdb-2026-08-15")
+        self.assertEqual(report["current_production_round_id"], "weekly-2026-08-08-v2")
 
 
 class WednesdayRevealDeploymentTests(unittest.TestCase):

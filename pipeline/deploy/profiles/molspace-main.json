@@ -7,20 +7,37 @@
   "entrypoint": "pipeline/deploy/modal_app.py",
   "environment": {
     "FOLDARIUM_ENABLE_WEEKLY_CRON": "1",
-    "FOLDARIUM_WEEKLY_CRON": "*/15 3-6 * * 6",
+    "FOLDARIUM_WEEKLY_CRON": "*/15 3-12 * * 6",
     "FOLDARIUM_WEEKLY_HOOK": "foldarium_pipeline.weekly:modal_weekly_hook",
     "FOLDARIUM_WEEKLY_REGISTER": "1",
     "FOLDARIUM_WEEKLY_SUBMIT": "1",
-    "FOLDARIUM_WEEKLY_MAX_TARGETS": "2",
+    "FOLDARIUM_WEEKLY_MAX_TARGETS": "40",
     "FOLDARIUM_WEEKLY_GPU_CLASS": "l4",
     "FOLDARIUM_PUBLIC_QUIZ_BUCKET": "foldarium-weekly-quiz",
     "FOLDARIUM_PREDICTION_MAX_CONTAINERS": "5",
+    "FOLDARIUM_ENABLE_NEXTWEEKLY_CRON": "1",
+    "FOLDARIUM_NEXTWEEKLY_CRON": "5 * * * 6,0,1",
+    "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT": "preview",
+    "FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS": "1",
+    "FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION": "1",
+    "FOLDARIUM_WEEKLY_PRODUCTION_CRON": "15 * * * 6,0,1",
+    "FOLDARIUM_WEEKLY_PRODUCTION_OPEN": "0",
+    "FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX": "beta-v1",
+    "FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT": "0",
     "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL": "1",
     "FOLDARIUM_WEDNESDAY_REVEAL_CRON": "5 0-5 * * 3",
-    "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH": "0"
+    "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH": "0",
+    "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE": "1",
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON": "15 0-5 * * 3",
+    "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION": "0",
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON": "45 0-5 * * 3"
   },
   "review_notes": {
-    "weekly_max_targets": "Two is the last explicitly reviewed production safety cap, not the desired permanent weekly volume. Raising it requires a separate product and spend review.",
-    "wednesday_publish": "Standing scheduled calls evaluate only. Publication requires a separately reviewed explicit manual action."
+    "weekly_max_targets": "Approved 2026-08-14 for automatic intake: at most 40 eligible targets (80 method jobs), five samples per method on L4, five concurrent containers per method, with a 40 GPU-hour command-duration ceiling.",
+    "nextweekly": "Saturday through Monday progress ticks may retry only explicit transient MSA failures and may open only an environment=preview round.",
+    "weekly_production": "Production promotion clones the immutable Preview round without recomputing poses. Opening and selector-kit registration remain separately gated.",
+    "wednesday_publish": "Standing scheduled calls evaluate only. Publication requires a separately reviewed explicit manual action or deployment gate change.",
+    "weekly_retrospective": "Private post-close evaluation runs on the Wednesday schedule and never blocks reveal.",
+    "weekly_retrospective_publication": "Publication remains disabled until 20260826190000_require_retrospective_vote_scope.sql is applied and explicitly reviewed."
   }
 }

@@ -21,16 +21,20 @@ class DeploymentProfileTests(unittest.TestCase):
     def setUp(self) -> None:
         self.profile_path = DEPLOY_ROOT / "profiles" / "molspace-main.json"
 
-    def test_reviewed_profile_is_complete_and_publication_is_off(self) -> None:
+    def test_reviewed_profile_matches_live_intake_policy(self) -> None:
         profile = MODULE.load_profile(self.profile_path)
         environment = profile["environment"]
         self.assertEqual(set(environment), MODULE.GATE_KEYS)
-        self.assertEqual(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"], "2")
-        self.assertEqual(environment["FOLDARIUM_WEEKLY_GPU_CLASS"], "l4")
-        self.assertEqual(environment["FOLDARIUM_PREDICTION_MAX_CONTAINERS"], "5")
+        self.assertEqual(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"], "40")
+        self.assertEqual(environment["FOLDARIUM_WEEKLY_CRON"], "*/15 3-12 * * 6")
         self.assertEqual(environment["FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"], "0")
-        self.assertNotIn(
-            "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION", environment
+        self.assertEqual(environment["FOLDARIUM_WEEKLY_PRODUCTION_OPEN"], "0")
+        self.assertEqual(
+            environment["FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON"],
+            "45 0-5 * * 3",
+        )
+        self.assertEqual(
+            environment["FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION"], "0"
         )
 
     def test_environment_scrubs_ambient_foldarium_values(self) -> None:
@@ -45,7 +49,7 @@ class DeploymentProfileTests(unittest.TestCase):
             },
         )
         self.assertEqual(environment["PATH"], "/bin")
-        self.assertEqual(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"], "2")
+        self.assertEqual(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"], "40")
         self.assertNotIn("FOLDARIUM_UNREVIEWED_FLAG", environment)
         self.assertEqual(environment["MODAL_PROFILE"], "molspace-production")
         self.assertEqual(
@@ -72,6 +76,17 @@ class DeploymentProfileTests(unittest.TestCase):
             path = Path(temporary) / "profile.json"
             path.write_text(json.dumps(profile), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "requires.*PUBLISH='0'"):
+                MODULE.load_profile(path)
+
+    def test_two_target_cap_fails_closed(self) -> None:
+        import json
+
+        profile = json.loads(self.profile_path.read_text(encoding="utf-8"))
+        profile["environment"]["FOLDARIUM_WEEKLY_MAX_TARGETS"] = "2"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "profile.json"
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "40-target"):
                 MODULE.load_profile(path)
 
     def test_default_invocation_is_validation_only(self) -> None:
