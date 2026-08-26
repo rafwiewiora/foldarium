@@ -500,8 +500,8 @@ class WeeklyLlmClaudeTests(unittest.TestCase):
 
 @dataclass
 class FakeUsageCost:
-    charged_cents: int
-    raw_cost_cents: int | None = None
+    charged_cents: float
+    raw_cost_cents: float | None = None
 
 
 @dataclass
@@ -511,12 +511,14 @@ class FakeAgentUsage:
 
 class WeeklyLlmCursorCostTests(unittest.TestCase):
     def test_extract_billed_cost_zero_and_nonzero(self) -> None:
-        zero = _extract_billed_cost(FakeAgentUsage(cost=FakeUsageCost(charged_cents=0, raw_cost_cents=0)))
-        self.assertEqual(zero, (0.0, 0, 0))
-        nonzero = _extract_billed_cost(
-            FakeAgentUsage(cost=FakeUsageCost(charged_cents=125, raw_cost_cents=150))
+        zero = _extract_billed_cost(
+            FakeAgentUsage(cost=FakeUsageCost(charged_cents=0.0, raw_cost_cents=0.0))
         )
-        self.assertEqual(nonzero, (1.25, 125, 150))
+        self.assertEqual(zero, (0.0, 0.0, 0.0))
+        nonzero = _extract_billed_cost(
+            FakeAgentUsage(cost=FakeUsageCost(charged_cents=125.5, raw_cost_cents=150.25))
+        )
+        self.assertEqual(nonzero, (1.255, 125.5, 150.25))
 
 
 class WeeklyLlmCursorSerializationTests(unittest.TestCase):

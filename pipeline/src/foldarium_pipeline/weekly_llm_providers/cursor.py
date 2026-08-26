@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import asdict, is_dataclass
 from typing import Any, Mapping, Sequence
@@ -112,15 +113,30 @@ def _observed_model_ids(result: Any) -> tuple[str, ...]:
     return tuple(sorted(observed))
 
 
-def _extract_billed_cost(billed: Any) -> tuple[float | None, int | None, int | None]:
+def _extract_billed_cost(
+    billed: Any,
+) -> tuple[float | None, float | None, float | None]:
     cost = getattr(billed, "cost", None)
     if cost is None:
         return None, None, None
     charged = getattr(cost, "charged_cents", None)
     raw = getattr(cost, "raw_cost_cents", None)
-    if isinstance(charged, int) and not isinstance(charged, bool):
-        raw_value = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
-        return charged / 100.0, charged, raw_value
+    if (
+        isinstance(charged, (int, float))
+        and not isinstance(charged, bool)
+        and math.isfinite(float(charged))
+        and charged >= 0
+    ):
+        charged_value = float(charged)
+        raw_value = (
+            float(raw)
+            if isinstance(raw, (int, float))
+            and not isinstance(raw, bool)
+            and math.isfinite(float(raw))
+            and raw >= 0
+            else None
+        )
+        return charged_value / 100.0, charged_value, raw_value
     return None, None, None
 
 

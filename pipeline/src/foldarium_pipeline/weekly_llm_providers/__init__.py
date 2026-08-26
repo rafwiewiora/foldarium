@@ -14,8 +14,8 @@ class ProviderUsage:
     cache_creation_tokens: int | None = None
     reasoning_tokens: int | None = None
     cost_usd: float | None = None
-    charged_cents: int | None = None
-    raw_cost_cents: int | None = None
+    charged_cents: float | None = None
+    raw_cost_cents: float | None = None
     duration_ms: int | None = None
 
 
