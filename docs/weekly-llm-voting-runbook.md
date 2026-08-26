@@ -304,6 +304,36 @@ server-only `/benchmarks` endpoint. Set `run_class` exactly to
 record exactly one observed model identifier, and set
 `reasoning_trace_retained` to `false`.
 
+Use the audited runner to verify the kit, render deterministic evidence and
+images, score one item at a time, validate every provider response, and emit
+both a private execution bundle and canonical benchmark JSON. By default the
+runner is artifact-only and performs no network submission.
+
+```bash
+python pipeline/scripts/weekly_llm_score.py preflight-claude
+python pipeline/scripts/weekly_llm_score.py preflight-cursor
+python pipeline/scripts/weekly_llm_score.py list-cursor-models
+
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/out \
+  --provider fake \
+  --fake-fixture pipeline/tests/fixtures/weekly_llm_fake_provider.json \
+  --execution-id "$EXECUTION_ID"
+
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/out \
+  --provider claude
+
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/out \
+  --provider cursor
+```
+
+Optional submission uses `FOLDARIUM_SELECTOR_BENCHMARK_URL` and
+`FOLDARIUM_SELECTOR_BENCHMARK_TOKEN`. Retries must reuse the same execution UUID
+and exact benchmark bytes. Deliberate reruns use a new UUID and set
+`--supersedes-execution-id` to the prior execution.
+
 For Claude's first pass, request `default` effort by omitting the CLI effort
 flag. If the CLI does not report applied effort, record
 `effort_reporting: "not_exposed"` and `applied_effort: null`; never infer it.

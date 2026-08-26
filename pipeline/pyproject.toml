@@ -21,6 +21,9 @@ interactions = [
   "prolif==2.2.0",
   "rdkit==2026.3.4",
 ]
+weekly-llm = [
+  "cursor-sdk==1.0.28",
+]
 
 [project.scripts]
 foldarium-pipeline = "foldarium_pipeline.cli:main"
