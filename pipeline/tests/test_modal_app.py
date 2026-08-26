@@ -1220,22 +1220,215 @@ class WeeklyLifecycleReconciliationTests(unittest.TestCase):
             report["required_migrations_before_publication"],
         )
 
-    def test_production_promotion_is_idempotent_when_round_exists(self) -> None:
+    def test_public_private_coordinators_use_reviewed_bucket_split(self) -> None:
+        module = self.deployment_module()
+        environments: list[dict[str, str]] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+        class PublicCoordinator:
+            storage_bucket = "foldarium-weekly-quiz"
+
+        def from_env(environment=None):
+            environments.append(dict(environment or os.environ))
+            if environment is None:
+                return PrivateCoordinator()
+            return PublicCoordinator()
+
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            side_effect=from_env,
+        ), patch.object(module, "_weekly_public_bucket", return_value="foldarium-weekly-quiz"):
+            private, public = module._weekly_quiz_public_private_coordinators()
+
+        self.assertIsInstance(private, PrivateCoordinator)
+        self.assertIsInstance(public, PublicCoordinator)
+        self.assertEqual(
+            environments[1]["FOLDARIUM_STORAGE_BUCKET"],
+            "foldarium-weekly-quiz",
+        )
+
+    def test_selector_backfill_uses_exact_round_row_and_coordinators(self) -> None:
+        module = self.deployment_module()
+        round_row = {
+            "round_id": "weekly-2026-08-15-beta-v1",
+            "blind_manifest": {"round_id": "weekly-2026-08-15-beta-v1", "items": []},
+            "metadata": {},
+        }
+        calls: list[tuple] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round(self, round_id: str):
+                self.round_id = round_id
+                return round_row
+
+        class PublicCoordinator:
+            storage_bucket = "foldarium-weekly-quiz"
+
+        private = PrivateCoordinator()
+        public = PublicCoordinator()
+
+        def backfill(round_row_arg, *, public_coordinator, private_coordinator, register_catalog):
+            calls.append(
+                (
+                    round_row_arg,
+                    public_coordinator,
+                    private_coordinator,
+                    register_catalog,
+                )
+            )
+            return {"kit_sha256": "a" * 64, "registered": True}
+
+        with patch(
+            "foldarium_pipeline.weekly_quiz.backfill_selector_kit_for_round",
+            side_effect=backfill,
+            create=True,
+        ):
+            result = module._attempt_production_selector_kit_registration(
+                "weekly-2026-08-15-beta-v1",
+                private_coordinator=private,
+                public_coordinator=public,
+            )
+
+        self.assertEqual(result["status"], "registered")
+        self.assertEqual(private.round_id, "weekly-2026-08-15-beta-v1")
+        self.assertEqual(calls[0][0], round_row)
+        self.assertIs(calls[0][1], public)
+        self.assertIs(calls[0][2], private)
+        self.assertTrue(calls[0][3])
+
+    def test_production_promotion_is_idempotent_when_round_exists_without_registration(
+        self,
+    ) -> None:
         module = self.deployment_module()
 
-        class Coordinator:
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
             def weekly_quiz_round_exists(self, round_id):
                 return round_id == "weekly-2026-08-15-beta-v1"
 
-        raw_function = module.weekly_production_promotion_tick.get_raw_f()
-        with patch(
-            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
-            return_value=Coordinator(),
-        ):
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module, "_attempt_production_selector_kit_registration"
+        ) as register:
+            raw_function = module.weekly_production_promotion_tick.get_raw_f()
             report = raw_function("2026-08-15")
 
         self.assertEqual(report["status"], "production-ready")
-        self.assertEqual(report["round_id"], "weekly-2026-08-15-beta-v1")
+        register.assert_not_called()
+
+    def test_existing_production_round_retries_selector_registration(self) -> None:
+        module = self.deployment_module()
+        register_calls: list[str] = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        def register(round_id, *, private_coordinator, public_coordinator):
+            register_calls.append(round_id)
+            return {
+                "status": "registered",
+                "retryable": False,
+                "kit_sha256": "b" * 64,
+                "registered": True,
+            }
+
+        raw_function = module.weekly_production_promotion_tick.get_raw_f()
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            side_effect=register,
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            report = raw_function("2026-08-15")
+
+        self.assertEqual(report["status"], "production-ready")
+        self.assertEqual(register_calls, ["weekly-2026-08-15-beta-v1"])
+        self.assertEqual(report["selector_kit_status"], "registered")
+
+    def test_selector_module_unavailable_is_non_mutating(self) -> None:
+        module = self.deployment_module()
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            return_value={
+                "status": "skipped-module-unavailable",
+                "retryable": False,
+            },
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            report = module.weekly_production_promotion_tick.get_raw_f()("2026-08-15")
+
+        self.assertEqual(report["status"], "production-ready-selector-kit-skipped")
+        self.assertEqual(report["selector_kit_status"], "skipped-module-unavailable")
+        self.assertFalse(report["selector_kit_retryable"])
+
+    def test_selector_registration_failure_remains_retryable_on_later_tick(self) -> None:
+        module = self.deployment_module()
+        outcomes = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            def weekly_quiz_round_exists(self, round_id):
+                return round_id == "weekly-2026-08-15-beta-v1"
+
+        def register(round_id, *, private_coordinator, public_coordinator):
+            if len(outcomes) == 0:
+                return {
+                    "status": "failed:RuntimeError",
+                    "retryable": True,
+                    "error": "catalog unavailable",
+                }
+            return {
+                "status": "registered",
+                "retryable": False,
+                "kit_sha256": "c" * 64,
+                "registered": True,
+            }
+
+        raw_function = module.weekly_production_promotion_tick.get_raw_f()
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module,
+            "_attempt_production_selector_kit_registration",
+            side_effect=register,
+        ), patch.dict(os.environ, {module.WEEKLY_PRODUCTION_OPEN_ENV: "1", module.WEEKLY_REGISTER_SELECTOR_KIT_ENV: "1"}):
+            first = raw_function("2026-08-15")
+            outcomes.append(first)
+            second = raw_function("2026-08-15")
+            outcomes.append(second)
+
+        self.assertEqual(first["status"], "production-ready-selector-kit-retryable")
+        self.assertTrue(first["selector_kit_retryable"])
+        self.assertEqual(second["status"], "production-ready")
+        self.assertEqual(second["selector_kit_status"], "registered")
 
     def test_lifecycle_preflight_reports_round_existence(self) -> None:
         module = self.deployment_module()

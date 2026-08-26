@@ -487,6 +487,127 @@ def _weekly_production_window(
     }
 
 
+def _weekly_quiz_public_private_coordinators() -> tuple[Any, Any]:
+    """Return private and public coordinators using the reviewed bucket split."""
+
+    from foldarium_pipeline.supabase import SupabaseConfigurationError, SupabaseCoordinator
+
+    private = SupabaseCoordinator.from_env()
+    try:
+        public_bucket = _weekly_public_bucket()
+    except ValueError as exc:
+        raise SupabaseConfigurationError(
+            f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+        ) from exc
+    public_environment = dict(os.environ)
+    public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+    public = SupabaseCoordinator.from_env(public_environment)
+    if public.storage_bucket == private.storage_bucket:
+        raise SupabaseConfigurationError(
+            "public quiz bucket must differ from the private prediction bucket"
+        )
+    return private, public
+
+
+def _attempt_production_selector_kit_registration(
+    round_id: str,
+    *,
+    private_coordinator: Any,
+    public_coordinator: Any,
+) -> dict[str, Any]:
+    """Register one production selector kit and surface retryable failures."""
+
+    try:
+        from foldarium_pipeline.weekly_quiz import backfill_selector_kit_for_round
+    except ImportError:
+        return {
+            "status": "skipped-module-unavailable",
+            "retryable": False,
+        }
+
+    try:
+        round_row = private_coordinator.weekly_quiz_round(round_id)
+        result = backfill_selector_kit_for_round(
+            round_row,
+            public_coordinator=public_coordinator,
+            private_coordinator=private_coordinator,
+            register_catalog=True,
+        )
+    except Exception as exc:
+        return {
+            "status": f"failed:{type(exc).__name__}",
+            "retryable": True,
+            "error": str(exc),
+        }
+    return {
+        "status": "registered",
+        "retryable": False,
+        "kit_sha256": result.get("kit_sha256"),
+        "registered": result.get("registered"),
+    }
+
+
+def _production_selector_kit_status(
+    *,
+    open_round: bool,
+    register_selector_kit: bool,
+    selector_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize selector-kit fields for one production promotion tick."""
+
+    if not register_selector_kit:
+        return {
+            "selector_kit_status": "not-requested",
+            "selector_kit_retryable": False,
+        }
+    if not open_round:
+        return {
+            "selector_kit_status": "pending-open-gate",
+            "selector_kit_retryable": False,
+        }
+    if selector_result is None:
+        return {
+            "selector_kit_status": "not-requested",
+            "selector_kit_retryable": False,
+        }
+    return {
+        "selector_kit_status": selector_result["status"],
+        "selector_kit_retryable": bool(selector_result.get("retryable")),
+        **(
+            {"selector_kit_error": selector_result["error"]}
+            if selector_result.get("error")
+            else {}
+        ),
+        **(
+            {"selector_kit_sha256": selector_result["kit_sha256"]}
+            if selector_result.get("kit_sha256")
+            else {}
+        ),
+    }
+
+
+def _production_tick_status(
+    *,
+    production_exists: bool,
+    preview_exists: bool,
+    open_round: bool,
+    selector_kit_retryable: bool,
+    selector_kit_status: str,
+    just_promoted: bool,
+) -> str:
+    if not production_exists:
+        if not preview_exists:
+            return "waiting-for-preview"
+        return "production-opened" if open_round else "production-staged"
+    if selector_kit_status == "skipped-module-unavailable":
+        return "production-ready-selector-kit-skipped"
+    if selector_kit_retryable:
+        return "production-ready-selector-kit-retryable"
+    if just_promoted:
+        return "production-opened" if open_round else "production-staged"
+    return "production-ready"
+
+
 def _lifecycle_deployment_report() -> dict[str, Any]:
     """Return the non-secret deployment gates visible to preflight callers."""
 
@@ -2110,26 +2231,24 @@ if modal is not None:
         from foldarium_pipeline.supabase import SupabaseCoordinator
 
         window = _weekly_production_window(release_date)
-        coordinator = SupabaseCoordinator.from_env()
+        private, public = _weekly_quiz_public_private_coordinators()
         open_round = os.environ.get(WEEKLY_PRODUCTION_OPEN_ENV) == "1"
         register_selector_kit = (
             os.environ.get(WEEKLY_REGISTER_SELECTOR_KIT_ENV) == "1"
         )
-        if coordinator.weekly_quiz_round_exists(window["round_id"]):
-            outcome = {
-                **window,
-                "status": "production-ready",
-                "open_round": open_round,
-                "register_selector_kit": register_selector_kit,
-            }
-        elif not coordinator.weekly_quiz_round_exists(window["preview_round_id"]):
-            outcome = {
-                **window,
-                "status": "waiting-for-preview",
-                "open_round": open_round,
-                "register_selector_kit": register_selector_kit,
-            }
-        else:
+        production_exists = private.weekly_quiz_round_exists(window["round_id"])
+        preview_exists = private.weekly_quiz_round_exists(window["preview_round_id"])
+        selector_result = None
+        promoted = None
+        just_promoted = False
+        if production_exists:
+            if open_round and register_selector_kit:
+                selector_result = _attempt_production_selector_kit_registration(
+                    window["round_id"],
+                    private_coordinator=private,
+                    public_coordinator=public,
+                )
+        elif preview_exists:
             promoted = promote_weekly_quiz_round.remote(
                 window["preview_round_id"],
                 window["round_id"],
@@ -2140,31 +2259,34 @@ if modal is not None:
                 True,
                 open_round,
             )
-            selector_status = "not-requested"
+            just_promoted = True
             if open_round and register_selector_kit:
-                try:
-                    from foldarium_pipeline.weekly_quiz import (
-                        backfill_selector_kit_for_round,
-                    )
-
-                    backfill_selector_kit_for_round(
-                        round_id=window["round_id"],
-                        campaign_id=window["campaign_id"],
-                        round_environment=window["environment"],
-                    )
-                    selector_status = "registered"
-                except ImportError:
-                    selector_status = "skipped-module-unavailable"
-                except Exception as exc:
-                    selector_status = f"failed:{type(exc).__name__}"
-            outcome = {
-                **window,
-                "status": "production-opened" if open_round else "production-staged",
-                "promotion": promoted,
-                "open_round": open_round,
-                "register_selector_kit": register_selector_kit,
-                "selector_kit_status": selector_status,
-            }
+                selector_result = _attempt_production_selector_kit_registration(
+                    window["round_id"],
+                    private_coordinator=private,
+                    public_coordinator=public,
+                )
+        selector_fields = _production_selector_kit_status(
+            open_round=open_round,
+            register_selector_kit=register_selector_kit,
+            selector_result=selector_result,
+        )
+        outcome = {
+            **window,
+            "status": _production_tick_status(
+                production_exists=production_exists or just_promoted,
+                preview_exists=preview_exists,
+                open_round=open_round,
+                selector_kit_retryable=selector_fields["selector_kit_retryable"],
+                selector_kit_status=selector_fields["selector_kit_status"],
+                just_promoted=just_promoted,
+            ),
+            "open_round": open_round,
+            "register_selector_kit": register_selector_kit,
+            **selector_fields,
+        }
+        if promoted is not None:
+            outcome["promotion"] = promoted
         print(
             "foldarium.weekly_production "
             + json.dumps(
