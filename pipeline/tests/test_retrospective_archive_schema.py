@@ -173,6 +173,38 @@ class RetrospectiveArchiveSchemaTests(unittest.TestCase):
                 normalized,
             )
 
+    def test_publication_identity_hash_closes_canonical_json_string(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        migration = (
+            repository
+            / "supabase"
+            / "migrations"
+            / "20260826184000_fix_retrospective_publication_identity.sql"
+        ).read_text(encoding="utf-8").lower()
+        normalized = " ".join(migration.split())
+
+        self.assertIn(
+            "|| (p_publication ->> 'source_snapshot_sha256') || '\"}'",
+            normalized,
+        )
+        self.assertNotIn(
+            "|| (p_publication ->> 'source_snapshot_sha256') || '}',",
+            normalized,
+        )
+        for role in ("public", "anon", "authenticated"):
+            self.assertIn(
+                "revoke all on function "
+                "public.register_weekly_retrospective_publication(jsonb, text) "
+                f"from {role}",
+                normalized,
+            )
+        self.assertIn(
+            "grant execute on function "
+            "public.register_weekly_retrospective_publication(jsonb, text) "
+            "to service_role",
+            normalized,
+        )
+
     def test_catalog_is_separate_append_only_and_service_only(self) -> None:
         normalized = " ".join(self.migration().split())
         self.assertIn(
