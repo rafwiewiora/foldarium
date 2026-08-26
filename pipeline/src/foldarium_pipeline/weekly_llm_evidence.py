@@ -15,6 +15,7 @@ MAX_PDB_BYTES = 5_000_000
 MAX_PNG_BYTES = 2_000_000
 MAX_IMAGE_DIMENSION = 256
 MAX_ATOMS = 8_000
+MAX_PROTEIN_ATOMS = 100_000
 MAX_PAIR_CHECKS = 250_000
 MAX_CONTACT_ENTRIES = 32
 MAX_EVIDENCE_JSON_BYTES = 200_000
@@ -96,9 +97,22 @@ def _parse_optional_float(text: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def parse_pdb_atoms(content: bytes, *, label: str) -> list[Atom]:
+def parse_pdb_atoms(
+    content: bytes,
+    *,
+    label: str,
+    max_atoms: int = MAX_ATOMS,
+) -> list[Atom]:
     if len(content) > MAX_PDB_BYTES:
         raise WeeklyLlmEvidenceError(f"{label} exceeds {MAX_PDB_BYTES} bytes")
+    if (
+        isinstance(max_atoms, bool)
+        or not isinstance(max_atoms, int)
+        or not 1 <= max_atoms <= MAX_PROTEIN_ATOMS
+    ):
+        raise WeeklyLlmEvidenceError(
+            f"{label} max_atoms must be between 1 and {MAX_PROTEIN_ATOMS}"
+        )
     atoms: list[Atom] = []
     for line_number, raw_line in enumerate(content.splitlines(), start=1):
         line = raw_line.decode("utf-8", errors="strict")
@@ -159,8 +173,8 @@ def parse_pdb_atoms(content: bytes, *, label: str) -> list[Atom]:
                 b_factor=b_factor,
             )
         )
-        if len(atoms) > MAX_ATOMS:
-            raise WeeklyLlmEvidenceError(f"{label} exceeds {MAX_ATOMS} heavy atoms")
+        if len(atoms) > max_atoms:
+            raise WeeklyLlmEvidenceError(f"{label} exceeds {max_atoms} heavy atoms")
     atoms.sort(
         key=lambda atom: (
             atom.chain_id,
@@ -609,7 +623,11 @@ def build_choice_evidence(
     pocket_bytes: bytes,
 ) -> tuple[dict[str, object], dict[str, bytes]]:
     pose_atoms = parse_pdb_atoms(pose_bytes, label=f"{choice_id}/pose")
-    protein_atoms = parse_pdb_atoms(protein_bytes, label=f"{choice_id}/protein")
+    protein_atoms = parse_pdb_atoms(
+        protein_bytes,
+        label=f"{choice_id}/protein",
+        max_atoms=MAX_PROTEIN_ATOMS,
+    )
     pocket_atoms = parse_pdb_atoms(pocket_bytes, label=f"{choice_id}/pocket")
     if not pose_atoms:
         raise WeeklyLlmEvidenceError(f"{choice_id} pose has no heavy atoms")
