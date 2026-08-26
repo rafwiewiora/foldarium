@@ -29,26 +29,24 @@ def _build_provider(args: argparse.Namespace):
         fixture_path = args.fake_fixture
         if fixture_path is None:
             raise SystemExit("fake provider requires --fake-fixture")
-        return FakeProvider(fixture_path=fixture_path), "fake", args.display_name or "Fake Provider", False
+        return FakeProvider(fixture_path=fixture_path), "fake", args.display_name or "Fake Provider"
     if args.provider == "claude":
         return (
             ClaudeProvider(dry_run=args.dry_run_provider),
             "anthropic",
             args.display_name or "Claude Opus",
-            True,
         )
     if args.provider == "cursor":
         return (
             CursorProvider(dry_run=args.dry_run_provider),
             "cursor",
             args.display_name or "GPT-5.6 Sol",
-            True,
         )
     raise SystemExit(f"unsupported provider: {args.provider}")
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    provider, provider_name, display_name, live_provider = _build_provider(args)
+    provider, provider_name, display_name = _build_provider(args)
     submit_token = os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_TOKEN")
     submit_url = args.submit_url or os.environ.get("FOLDARIUM_SELECTOR_BENCHMARK_URL")
     dry_run_submit = args.artifact_only or not submit_url or not submit_token
@@ -59,7 +57,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
             provider=provider,
             display_name=display_name,
             provider_name=provider_name,
-            live_provider=live_provider,
             network_allowlist_path=args.network_allowlist,
             egress_enforcement_asserted=args.assert_provider_egress_enforced,
             execution_id=args.execution_id,

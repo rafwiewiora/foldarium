@@ -33,6 +33,7 @@ def build_output_manifest(*, items: Sequence[Mapping[str, Any]]) -> dict[str, An
                 {
                     "item_id": item["item_id"],
                     "response_sha256": item["response_sha256"],
+                    "validated_response_artifact": item["validated_response_artifact"],
                 }
                 for item in items
             ],

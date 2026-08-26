@@ -14,6 +14,8 @@ class ProviderUsage:
     cache_creation_tokens: int | None = None
     reasoning_tokens: int | None = None
     cost_usd: float | None = None
+    charged_cents: int | None = None
+    raw_cost_cents: int | None = None
     duration_ms: int | None = None
 
 
@@ -36,6 +38,9 @@ class ProviderResult:
 
 
 class WeeklyLlmProvider(Protocol):
+    network_required: bool
+    network_policy: str
+
     def preflight(self) -> None: ...
 
     def score_item(

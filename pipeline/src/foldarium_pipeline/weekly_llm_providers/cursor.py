@@ -112,21 +112,32 @@ def _observed_model_ids(result: Any) -> tuple[str, ...]:
     return tuple(sorted(observed))
 
 
-def _provider_usage(agent: Any, result: Any) -> ProviderUsage:
+def _extract_billed_cost(billed: Any) -> tuple[float | None, int | None, int | None]:
+    cost = getattr(billed, "cost", None)
+    if cost is None:
+        return None, None, None
+    charged = getattr(cost, "charged_cents", None)
+    raw = getattr(cost, "raw_cost_cents", None)
+    if isinstance(charged, int) and not isinstance(charged, bool):
+        raw_value = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+        return charged / 100.0, charged, raw_value
+    return None, None, None
+
+
+def _provider_usage(result: Any, billed_usage: Any | None) -> ProviderUsage:
     usage = result.usage
     cost_usd = None
-    if hasattr(agent, "get_usage"):
-        try:
-            billed = agent.get_usage()
-            for attr in ("cost_usd", "total_cost_usd", "cost"):
-                value = getattr(billed, attr, None)
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    cost_usd = float(value)
-                    break
-        except Exception:
-            cost_usd = None
+    charged_cents = None
+    raw_cost_cents = None
+    if billed_usage is not None:
+        cost_usd, charged_cents, raw_cost_cents = _extract_billed_cost(billed_usage)
     if usage is None:
-        return ProviderUsage(duration_ms=result.duration_ms, cost_usd=cost_usd)
+        return ProviderUsage(
+            duration_ms=result.duration_ms,
+            cost_usd=cost_usd,
+            charged_cents=charged_cents,
+            raw_cost_cents=raw_cost_cents,
+        )
     return ProviderUsage(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
@@ -134,11 +145,16 @@ def _provider_usage(agent: Any, result: Any) -> ProviderUsage:
         cache_creation_tokens=getattr(usage, "cache_write_tokens", None),
         reasoning_tokens=getattr(usage, "reasoning_tokens", None),
         cost_usd=cost_usd,
+        charged_cents=charged_cents,
+        raw_cost_cents=raw_cost_cents,
         duration_ms=result.duration_ms,
     )
 
 
 class CursorProvider:
+    network_required = True
+    network_policy = "provider-api-only"
+
     def __init__(self, *, api_key: str | None = None, dry_run: bool = False):
         require_cursor_sdk()
         self.api_key = (api_key or os.environ.get("CURSOR_API_KEY", "")).strip()
@@ -192,13 +208,13 @@ class CursorProvider:
                 raise CursorProviderError("cursor result is not valid JSON") from error
             observed_ids = _observed_model_ids(result)
             applied_effort = _applied_effort_from_model(result.model, self._model_params)
-            usage = _provider_usage(agent, result)
             billed_usage = None
             if hasattr(agent, "get_usage"):
                 try:
                     billed_usage = agent.get_usage()
                 except Exception:
                     billed_usage = None
+            usage = _provider_usage(result, billed_usage)
             envelope = {
                 "agent_id": result.agent_id,
                 "run_id": result.id,

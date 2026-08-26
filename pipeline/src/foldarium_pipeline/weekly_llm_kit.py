@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import zipfile
 from pathlib import Path
 from typing import Any, Mapping
 
-from .weekly_selector import WeeklySelectorError, verify_selector_kit_zip
+from .contracts import validate_target
+from .weekly_selector import WeeklySelectorError, canonical_json, verify_selector_kit_zip
 from .weekly_llm_contract import sha256_hex
+from .weekly_llm_evidence import MAX_EVIDENCE_JSON_BYTES, WeeklyLlmEvidenceError
 
 MAX_KIT_ZIP_BYTES = 200_000_000
 MAX_UNCOMPRESSED_BYTES = 500_000_000
@@ -88,6 +91,11 @@ def _declared_digest(manifest: Mapping[str, Any], path: str) -> str | None:
     return None
 
 
+def _load_normalized_target(target_path: Path) -> dict[str, Any]:
+    payload = json.loads(target_path.read_text(encoding="utf-8"))
+    return validate_target(payload)
+
+
 def build_item_workspace(
     *,
     kit_dir: Path,
@@ -100,6 +108,11 @@ def build_item_workspace(
         raise WeeklyLlmKitError(f"missing item directory for {item_id}")
     evidence_dir.mkdir(parents=True, exist_ok=True)
     _chmod_or_raise(evidence_dir, 0o700)
+
+    target_path = item_root / "target.json"
+    if not target_path.is_file():
+        raise WeeklyLlmKitError(f"missing target.json for {item_id}")
+    normalized_target = _load_normalized_target(target_path)
 
     candidate_evidence: list[dict[str, Any]] = []
     image_attachments: list[dict[str, Any]] = []
@@ -137,10 +150,20 @@ def build_item_workspace(
             attachment_index += 1
         candidate_evidence.append(evidence)
 
-    evidence_digest = sha256_hex({"candidate_evidence": candidate_evidence})
+    item_evidence = {
+        "target": normalized_target,
+        "candidates": candidate_evidence,
+    }
+    evidence_json = canonical_json(item_evidence)
+    if len(evidence_json.encode("utf-8")) > MAX_EVIDENCE_JSON_BYTES:
+        raise WeeklyLlmEvidenceError(
+            f"{item_id} candidate evidence exceeds {MAX_EVIDENCE_JSON_BYTES} bytes"
+        )
+    evidence_digest = sha256_hex(item_evidence)
     return {
         "item_id": item_id,
-        "target_path": item_root / "target.json",
+        "target_path": target_path,
+        "item_evidence": item_evidence,
         "candidate_evidence": candidate_evidence,
         "candidate_evidence_digest": evidence_digest,
         "image_attachments": image_attachments,

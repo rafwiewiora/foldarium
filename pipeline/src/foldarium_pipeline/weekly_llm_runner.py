@@ -14,7 +14,11 @@ from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .weekly_llm_blindness import build_provider_blindness_attestation, require_live_blindness_inputs
+from .weekly_llm_blindness import (
+    build_provider_blindness_attestation,
+    load_network_allowlist,
+    require_live_blindness_inputs,
+)
 from .weekly_llm_config import METHOD_NAME, METHOD_VERSION
 from .weekly_llm_contract import (
     BENCHMARK_SCHEMA_VERSION,
@@ -59,7 +63,6 @@ class RunnerOptions:
     provider: WeeklyLlmProvider
     display_name: str
     provider_name: str
-    live_provider: bool = False
     network_allowlist_path: Path | None = None
     egress_enforcement_asserted: bool = False
     execution_id: str | None = None
@@ -86,14 +89,49 @@ def utc_now_iso() -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def render_item_prompt(*, item_id: str, candidate_evidence: list[Mapping[str, Any]]) -> str:
-    evidence_json = canonical_json(list(candidate_evidence))
+def render_item_prompt(*, item_id: str, item_evidence: Mapping[str, Any]) -> str:
+    evidence_json = canonical_json(dict(item_evidence))
     prompt = SELECTOR_ITEM_PROMPT_TEMPLATE.replace("{{item_id}}", item_id).replace(
         "{{candidate_evidence_json}}", evidence_json
     )
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
         raise WeeklyLlmRunnerError(f"rendered prompt for {item_id} exceeds {MAX_PROMPT_BYTES} bytes")
     return prompt
+
+
+def _artifact_ref(*, relative_path: str, content: bytes) -> dict[str, Any]:
+    return {
+        "path": relative_path,
+        "sha256": sha256_hex(content),
+        "bytes": len(content),
+    }
+
+
+def _resolve_network_attestation(
+    provider: WeeklyLlmProvider,
+    *,
+    network_allowlist_path: Path | None,
+    egress_enforcement_asserted: bool,
+) -> tuple[dict[str, Any], list[str] | None]:
+    if provider.network_required:
+        if provider.network_policy != "provider-api-only":
+            raise WeeklyLlmRunnerError(
+                f"unsupported live provider network policy: {provider.network_policy}"
+            )
+        allowlist = require_live_blindness_inputs(
+            network_allowlist_path=network_allowlist_path,
+            egress_enforcement_asserted=egress_enforcement_asserted,
+        )
+        return build_provider_blindness_attestation(allowlist=allowlist), allowlist
+    if network_allowlist_path is not None:
+        raise WeeklyLlmRunnerError("network allowlist is only valid for live providers")
+    if egress_enforcement_asserted:
+        raise WeeklyLlmRunnerError("egress enforcement attestation is only valid for live providers")
+    if provider.network_policy != "none":
+        raise WeeklyLlmRunnerError(
+            f"offline provider {provider.network_policy!r} cannot use network policy none mismatch"
+        )
+    return build_blindness_attestation(network_policy="none"), None
 
 
 def _chmod_or_raise(path: Path, mode: int) -> None:
@@ -110,10 +148,7 @@ def _assert_secure_permissions(path: Path, expected_mode: int) -> None:
 
 
 def _prepare_execution_output_dir(base_dir: Path, execution_id: str) -> Path:
-    if base_dir.exists() and any(base_dir.iterdir()):
-        execution_dir = base_dir / execution_id
-    else:
-        execution_dir = base_dir
+    execution_dir = base_dir / execution_id
     if execution_dir.exists() and any(execution_dir.iterdir()):
         raise WeeklyLlmRunnerError(
             f"execution output directory {execution_dir} must be empty before scoring"
@@ -159,14 +194,11 @@ def _validate_item_results_consistent(results: list[ProviderResult]) -> tuple[st
 
 
 def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
-    if options.live_provider:
-        allowlist = require_live_blindness_inputs(
-            network_allowlist_path=options.network_allowlist_path,
-            egress_enforcement_asserted=options.egress_enforcement_asserted,
-        )
-        attestation = build_provider_blindness_attestation(allowlist=allowlist)
-    else:
-        attestation = build_blindness_attestation(network_policy="none")
+    attestation, allowlist = _resolve_network_attestation(
+        options.provider,
+        network_allowlist_path=options.network_allowlist_path,
+        egress_enforcement_asserted=options.egress_enforcement_asserted,
+    )
 
     started_at = utc_now_iso()
     options.provider.preflight()
@@ -179,6 +211,16 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
     private_dir.mkdir(parents=True, exist_ok=True)
     _chmod_or_raise(private_dir, 0o700)
     _assert_secure_permissions(private_dir, 0o700)
+
+    network_allowlist_artifact: dict[str, Any] | None = None
+    if allowlist is not None:
+        allowlist_bytes = (canonical_json(allowlist) + "\n").encode("utf-8")
+        allowlist_path = private_dir / "network-allowlist.json"
+        _write_private_bytes(allowlist_path, allowlist_bytes)
+        network_allowlist_artifact = _artifact_ref(
+            relative_path="private/network-allowlist.json",
+            content=allowlist_bytes,
+        )
 
     with tempfile.TemporaryDirectory(prefix="foldarium-kit-") as kit_tmp:
         kit_dir = Path(kit_tmp)
@@ -198,9 +240,26 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             )
             prompt_text = render_item_prompt(
                 item_id=item_id,
-                candidate_evidence=workspace["candidate_evidence"],
+                item_evidence=workspace["item_evidence"],
             )
+            prompt_bytes = prompt_text.encode("utf-8")
             prompt_bytes_sha256 = sha256_hex(prompt_text)
+            evidence_json_bytes = (canonical_json(workspace["item_evidence"]) + "\n").encode("utf-8")
+            item_private_dir = private_dir / "items" / item_id
+            item_private_dir.mkdir(parents=True, exist_ok=True)
+            _chmod_or_raise(item_private_dir, 0o700)
+            prompt_artifact_path = item_private_dir / "prompt.txt"
+            evidence_artifact_path = item_private_dir / "candidate-evidence.json"
+            _write_private_bytes(prompt_artifact_path, prompt_bytes)
+            _write_private_bytes(evidence_artifact_path, evidence_json_bytes)
+            prompt_artifact = _artifact_ref(
+                relative_path=f"private/items/{item_id}/prompt.txt",
+                content=prompt_bytes,
+            )
+            evidence_artifact = _artifact_ref(
+                relative_path=f"private/items/{item_id}/candidate-evidence.json",
+                content=evidence_json_bytes,
+            )
             item_workspace_dir = kit_dir / "items" / item_id
             image_paths = [attachment["path"] for attachment in workspace["image_attachments"]]
             provider_result = options.provider.score_item(
@@ -219,6 +278,13 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                 allowed_cluster_ids=allowed_cluster_ids,
                 allowed_choice_ids=allowed_choice_ids,
             )
+            validated_json_bytes = (canonical_json(validated) + "\n").encode("utf-8")
+            validated_artifact_path = item_private_dir / "validated-response.json"
+            _write_private_bytes(validated_artifact_path, validated_json_bytes)
+            validated_artifact = _artifact_ref(
+                relative_path=f"private/items/{item_id}/validated-response.json",
+                content=validated_json_bytes,
+            )
             validated_digest = sha256_hex(validated)
             submission_items.append(model_response_to_submission_item(validated))
             input_manifest_items.append(
@@ -227,7 +293,9 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                     "kit_zip_sha256": kit_zip_sha256,
                     "candidate_evidence_digest": workspace["candidate_evidence_digest"],
                     "rendered_prompt_sha256": prompt_bytes_sha256,
-                    "rendered_prompt_bytes": len(prompt_text.encode("utf-8")),
+                    "rendered_prompt_bytes": len(prompt_bytes),
+                    "prompt_artifact": prompt_artifact,
+                    "candidate_evidence_artifact": evidence_artifact,
                     "attachments": [
                         {
                             "attachment_index": attachment["attachment_index"],
@@ -243,8 +311,12 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                 {
                     "item_id": item_id,
                     "rendered_prompt_sha256": prompt_bytes_sha256,
+                    "rendered_prompt_bytes": len(prompt_bytes),
+                    "prompt_artifact": prompt_artifact,
                     "candidate_evidence_digest": workspace["candidate_evidence_digest"],
+                    "candidate_evidence_artifact": evidence_artifact,
                     "validated_response_sha256": validated_digest,
+                    "validated_response_artifact": validated_artifact,
                     "raw_envelope_sha256": provider_result.raw_envelope_digest,
                     "observed_model_id": provider_result.observed_ids[0],
                     "run_id": provider_result.run_id,
@@ -256,26 +328,30 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                         "cache_creation_tokens": provider_result.usage.cache_creation_tokens,
                         "reasoning_tokens": provider_result.usage.reasoning_tokens,
                         "cost_usd": provider_result.usage.cost_usd,
+                        "charged_cents": provider_result.usage.charged_cents,
+                        "raw_cost_cents": provider_result.usage.raw_cost_cents,
                         "duration_ms": provider_result.usage.duration_ms,
                     },
                 }
             )
             output_manifest_items.append(
-                {"item_id": item_id, "response_sha256": validated_digest}
+                {
+                    "item_id": item_id,
+                    "response_sha256": validated_digest,
+                    "validated_response_artifact": validated_artifact,
+                }
             )
 
         observed_ids = _validate_item_results_consistent(item_results)
         first = item_results[0]
         provider_config = dict(first.provider_config)
-        if options.live_provider and options.network_allowlist_path is not None:
-            allowlist = require_live_blindness_inputs(
-                network_allowlist_path=options.network_allowlist_path,
-                egress_enforcement_asserted=options.egress_enforcement_asserted,
-            )
+        if allowlist is not None:
             provider_config = {
                 **provider_config,
                 "network_allowlist_sha256": sha256_hex(allowlist),
             }
+            if network_allowlist_artifact is not None:
+                provider_config["network_allowlist_artifact"] = network_allowlist_artifact
 
         input_manifest = build_input_manifest(
             prompt_profile_id=selector_prompt_profile()["prompt_profile_id"],
@@ -455,6 +531,12 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:
     _write_json(path, payload)
+
+
+def _write_private_bytes(path: Path, payload: bytes) -> None:
+    path.write_bytes(payload)
+    _chmod_or_raise(path, 0o600)
+    _assert_secure_permissions(path, 0o600)
 
 
 __all__ = [

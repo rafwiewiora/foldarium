@@ -14,6 +14,9 @@ from ..weekly_selector_prompt import SELECTOR_MODEL_RESPONSE_SCHEMA_VERSION
 
 
 class FakeProvider:
+    network_required = False
+    network_policy = "none"
+
     def __init__(self, *, fixture_path: str | Path | None = None, fixture: Mapping[str, Any] | None = None):
         if fixture_path is not None:
             loaded = json.loads(Path(fixture_path).read_text(encoding="utf-8"))

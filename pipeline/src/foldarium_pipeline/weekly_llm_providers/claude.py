@@ -132,7 +132,7 @@ def parse_claude_json_output(payload: Mapping[str, Any]) -> ClaudeParseResult:
         else:
             raise ClaudeProviderError("claude result is missing")
 
-    model_usage = payload.get("modelUsage") or payload.get("usage") or {}
+    model_usage = _first_mapping(payload.get("modelUsage"), payload.get("usage"))
     observed_ids = _extract_observed_model_ids(model_usage, payload)
     applied_effort = None
     if isinstance(payload.get("effort"), str):
@@ -161,7 +161,7 @@ def parse_claude_json_output(payload: Mapping[str, Any]) -> ClaudeParseResult:
         ),
         reasoning_tokens=_int_or_none(_lookup_usage(model_usage, "reasoning_tokens", "reasoningTokens")),
         cost_usd=_extract_cost_usd(model_usage, payload),
-        duration_ms=_int_or_none(payload.get("duration_ms") or payload.get("durationMs")),
+        duration_ms=_int_or_none(_first_present(payload.get("duration_ms"), payload.get("durationMs"))),
     )
     session_id = payload.get("session_id") or payload.get("sessionId")
     run_id = payload.get("run_id") or payload.get("runId")
@@ -175,15 +175,35 @@ def parse_claude_json_output(payload: Mapping[str, Any]) -> ClaudeParseResult:
     )
 
 
+def _first_mapping(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None and not isinstance(value, bool):
+            return value
+    return None
+
+
 def _extract_cost_usd(model_usage: Any, payload: Mapping[str, Any]) -> float | None:
-    total = _float_or_none(payload.get("total_cost_usd") or payload.get("cost_usd"))
+    total = _float_or_none(
+        _first_present(payload.get("total_cost_usd"), payload.get("cost_usd"))
+    )
     if total is not None:
         return total
     if isinstance(model_usage, Mapping):
         for value in model_usage.values():
             if isinstance(value, Mapping):
                 nested = _float_or_none(
-                    value.get("costUSD") or value.get("cost_usd") or value.get("costUsd")
+                    _first_present(
+                        value.get("costUSD"),
+                        value.get("cost_usd"),
+                        value.get("costUsd"),
+                    )
                 )
                 if nested is not None:
                     return nested
@@ -249,6 +269,9 @@ def _float_or_none(value: Any) -> float | None:
 
 
 class ClaudeProvider:
+    network_required = True
+    network_policy = "provider-api-only"
+
     def __init__(self, *, dry_run: bool = False, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS):
         self.dry_run = dry_run
         self.timeout_seconds = timeout_seconds
