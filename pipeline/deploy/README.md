@@ -195,6 +195,55 @@ the post-close state on either side of reveal. Keep
 `FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE` unset until that migration and the
 deployment are explicitly approved.
 
+#### Retrospective archive publication
+
+`weekly_retrospective_publication_tick` is distinct from private evaluation
+generation. It consumes only an already-revealed production round and its
+immutable v5 evaluation, snapshots final votes plus current human pseudonyms,
+and classifies LLM credentials through the reviewed service-only automated
+identity registry. It stores three
+content-addressed objects in the verified private bucket:
+
+- a server-only source snapshot containing stable participant linkage for
+  retry verification and future cumulative aggregation;
+- a sanitized public artifact containing anonymous human aggregates plus the
+  approved LLM and Smina entries;
+- a full admin artifact containing per-publication human pseudonyms plus the
+  automated entries.
+
+Neither returned artifact contains user/session IDs, participant hashes,
+traces, comments, application state, auth data, credentials, or private object
+URIs. The admin artifact never leaves the private bucket. The immutable catalog
+records separate descriptors for all three objects and binds them to the exact
+round, reveal, v5 evaluation artifact, timestamps, and item/choice counts.
+Retries rebuild the source and artifacts and fail if an existing publication
+differs.
+
+Public human score details use a minimum cohort of three. Below that threshold,
+the artifact retains only the overall participant count and each question's
+answered count, marks those aggregates suppressed, and omits score
+distributions, answer breakdowns, and correct counts. The private admin
+artifact remains complete. Credential rotation for Claude Opus or Codex must
+use `register_weekly_retrospective_automated_identity` with a service-role
+operator; the allow-list remains code-reviewed and direct registry writes are
+not supported.
+
+The Modal schedule is absent unless
+`FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION=1` is present at deploy time;
+it is intentionally absent from the standing reviewed production profile.
+`FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON` defaults to
+`45 0 * * 3`. With an exact `round_id`, the function processes only that round.
+Without one, it calls the service-only missing-publication scan and backfills
+every eligible revealed production round in reveal order; it never derives the
+newest campaign.
+
+Review and apply
+`supabase/migrations/20260826003000_add_weekly_retrospective_publications.sql`
+before any manual invocation or separate deployment that enables the schedule.
+Do not enable the gate in `profiles/molspace-main.json` or apply the migration
+without explicit production approval. No migration, deployment, schedule, or
+live service is activated by this code.
+
 The Wednesday evaluator is a CPU-only Modal function. Its image pins
 `gemmi==0.7.5`, `numpy==2.3.2`, and `rdkit==2025.3.6`; it neither reserves a GPU
 nor uses either prediction cache Volume. The schedule is absent unless

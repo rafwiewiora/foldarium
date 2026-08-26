@@ -540,6 +540,43 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         self.assertNotIn("reveal_weekly_quiz_round", source)
         self.assertNotIn("run_wednesday_reveal", source)
 
+    def test_archive_publication_tick_supports_exact_round_and_global_backfill(
+        self,
+    ) -> None:
+        module = self.deployment_module()
+        coordinator = object()
+        calls = []
+
+        def publish(*, coordinator, round_id=None):
+            calls.append((coordinator, round_id))
+            return {
+                "status": "complete",
+                "requested_round_id": round_id,
+                "round_count": 1,
+                "round_ids": [round_id or "weekly-old"],
+                "results": [],
+            }
+
+        raw_function = module.weekly_retrospective_publication_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=coordinator,
+        ), patch(
+            "foldarium_pipeline.retrospective_archive.publish_missing_retrospectives",
+            side_effect=publish,
+        ):
+            exact = raw_function("weekly-exact")
+            backfill = raw_function()
+
+        self.assertEqual(calls, [(coordinator, "weekly-exact"), (coordinator, None)])
+        self.assertEqual(exact["mode"], "post-reveal-publication")
+        self.assertTrue(exact["admin_artifacts_private"])
+        self.assertEqual(backfill["round_ids"], ["weekly-old"])
+        source = inspect.getsource(raw_function)
+        self.assertNotIn("_default_weekly_campaign_id", source)
+        self.assertNotIn("current_weekly_quiz_round", source)
+        self.assertNotIn("materialize_postclose_weekly_evaluation", source)
+
     def test_scheduled_tick_follows_current_round_across_campaign_rollover(self) -> None:
         module = self.deployment_module()
 
@@ -619,6 +656,11 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         module = self.deployment_module()
         self.assertEqual(module.WEDNESDAY_REVEAL_CRON_UTC, "5 0-5 * * 3")
         self.assertEqual(module.WEEKLY_RETROSPECTIVE_CRON_UTC, "15 0-5 * * 3")
+        self.assertEqual(
+            module.WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
+            "45 0 * * 3",
+        )
+        self.assertFalse(module.WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED)
         self.assertEqual(module.WEDNESDAY_REVEAL_MODAL_RETRIES, 2)
         self.assertEqual(
             module.QUIZ_EVALUATION_PACKAGES,

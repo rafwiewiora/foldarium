@@ -24,6 +24,27 @@ unapplied review drafts for an append-only, service-role-only post-close
 retrospective integrity catalog. They store no result payload and create no
 browser view or RPC; applying them is a separate production decision.
 
+`20260826003000_add_weekly_retrospective_publications.sql` is the next,
+separately reviewed migration. It creates one immutable publication row per
+revealed production round and binds it to the exact v5 evaluation, reveal,
+source-snapshot, sanitized-public-artifact, and private-admin-artifact digests.
+The table is selectable only by `service_role`; inserts are possible only
+through the service-role-only validating RPC, which recomputes the normalized
+final vote/session source inside the registration transaction. The companion
+missing-publication RPC scans every revealed production round with a v5
+evaluation, not only the current campaign. Neither RPC is executable by
+`anon` or `authenticated`, and no browser view or policy is created. This
+migration is also an unapplied review draft; do not apply it as part of ordinary
+application deployment.
+
+The same draft also creates the append-only, service-role-only
+`weekly_retrospective_automated_identities` registry. Its deterministic seed
+copies the reviewed Claude Opus/Codex UUID-to-name bindings from beta-v4 and
+aborts on ambiguous legacy lineage. Future credential rotations must use the
+validating service-role registration RPC; direct inserts and all browser access
+remain revoked. Publication source recomputation joins and locks this registry
+instead of repeatedly treating a historical session name as authorization.
+
 Workers use `claim_prediction_run` for a bounded lease. After running a model, a worker uploads every
 verified artifact to Storage and calls `finish_prediction_run`; artifact metadata and the terminal result
 are committed in one database transaction. A dead Modal worker can therefore be reclaimed by a GCP worker

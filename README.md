@@ -13,6 +13,16 @@
 - **Easy** — ensembles that contain a correct pose; pick it.
 - **Hard** — pick the correct pose or **"none of these"** (class-balanced sessions).
 - **CAMEO** / **Runs-n-Poses** — prospective AF3 vs multi-method retrospective poses, with a Grid for comparing candidates.
+- **Weekly archive** — `/weekly/retrospectives` lists published anonymous weekly
+  results and all-time automated rankings. A week’s detail page links to its
+  read-only molecular review at `/weekly?retrospective_round=<round-id>`.
+
+Weekly archive admin responses are disabled unless all three deployment
+attestations are present: `VERCEL_ENV=preview`,
+`FOLDARIUM_WEEKLY_RETROSPECTIVE_ADMIN_ENABLED=1`, and
+`FOLDARIUM_WEEKLY_RETROSPECTIVE_ADMIN_ACCESS=vercel-team-protected`. The access
+attestation may only be set on a Vercel deployment with team authentication or
+deployment protection enabled; it is not a substitute for that protection.
 
 ## Benchmark demo and preparation pipelines
 

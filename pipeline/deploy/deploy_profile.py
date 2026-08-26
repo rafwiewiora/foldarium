@@ -244,6 +244,14 @@ print(json.dumps(report, sort_keys=True))
             "cron": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_CRON"],
             "publish": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"] == "1",
         },
+        "weekly_retrospective": {
+            "enabled": False,
+            "cron": "15 0-5 * * 3",
+        },
+        "weekly_retrospective_publication": {
+            "enabled": False,
+            "cron": "45 0 * * 3",
+        },
     }
     if report != expected_report:
         raise RuntimeError("deployed Modal configuration does not match reviewed profile")

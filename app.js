@@ -87,6 +87,8 @@ const researchBackend = () => DEV ? null : window.foldariumBackend;
 const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
 const isPrivatePrecloseReview = () => window.FOLDARIUM_PRIVATE_REVIEW?.active === true;
+const isArchiveRetrospective = () => window.FOLDARIUM_ARCHIVE_REVIEW?.active === true;
+const isRetrospectiveReview = () => isPrivatePrecloseReview() || isArchiveRetrospective();
 const itemHasReleasedCrystal = item => !!item?.released_crystal?.cif_url;
 const itemHasXtalOverlay = item => typeof item?.xtal_lig_file === 'string' && !!item.xtal_lig_file;
 const isXtalReferenceChoice = choice => choice?._xtalReference === true;
@@ -170,6 +172,7 @@ let WEEKLY_ROUND = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
 let WEEKLY_QUESTION_RESULTS = null;
+let WEEKLY_ARCHIVE_DETAIL = null;
 let retrospectiveQuestionFilter = 'all';
 let WEEKLY_LEADERBOARD_ERROR = '';
 let localWeeklyScore = { correct: 0, answered: 0 };
@@ -288,7 +291,7 @@ function rememberWeeklyItemState() {
 }
 
 function syncWeeklyGuideContent() {
-  if (!isPrivatePrecloseReview()) return;
+  if (!isRetrospectiveReview()) return;
   $('#quick-start-open').textContent = 'Scoring rules';
   $('#quick-start-title').textContent = 'Scoring rules';
   $('#quick-start-intro').textContent = 'How clustered and exact-pose selections are defined and scored.';
@@ -333,7 +336,7 @@ function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter
 }
 
 function retrospectiveQuestionIndexes(filter = retrospectiveQuestionFilter) {
-  if (!isPrivatePrecloseReview()) return ITEMS.map((_, index) => index);
+  if (!isRetrospectiveReview()) return ITEMS.map((_, index) => index);
   return ITEMS
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => retrospectiveQuestionMatches(item, filter))
@@ -344,7 +347,7 @@ function syncRetrospectiveQuestionFilter(visible) {
   const box = $('#retrospective-question-filter');
   const select = $('#retrospective-question-filter-select');
   if (!box || !select) return;
-  box.hidden = !visible || !isPrivatePrecloseReview();
+  box.hidden = !visible || !isRetrospectiveReview();
   if (box.hidden) return;
   select.innerHTML = RETROSPECTIVE_QUESTION_FILTERS.map(([value, label]) => {
     const count = retrospectiveQuestionIndexes(value).length;
@@ -395,7 +398,7 @@ function adjacentRetrospectiveQuestionIndex(direction) {
 }
 
 async function setRetrospectiveQuestionFilter(filter) {
-  if (!isPrivatePrecloseReview()
+  if (!isRetrospectiveReview()
       || !RETROSPECTIVE_QUESTION_FILTERS.some(([value]) => value === filter)) return;
   const matchingIndexes = retrospectiveQuestionIndexes(filter);
   if (!matchingIndexes.length) return;
@@ -458,7 +461,7 @@ function setVoteStatus(message, state) {
 }
 
 function startWeeklyThinkingTrace() {
-  if (quizSource !== 'weekly' || !remoteSessionId || isPrivatePrecloseReview()
+  if (quizSource !== 'weekly' || !remoteSessionId || isRetrospectiveReview()
       || typeof window.createWeeklyTraceStream !== 'function') return;
   try {
     void weeklyTraceStream?.dispose?.();
@@ -1096,7 +1099,9 @@ function syncOneReviewState() {
   if (!actions) return;
   const choice = oneReviewChoice();
   const retrospective = !!choice && retrospectiveAnswerActive();
-  const visible = !!choice && cur.item.source === 'weekly' && (!cur.revealed || retrospective);
+  const visible = !!choice && cur.item.source === 'weekly'
+    && (!cur.revealed || retrospective)
+    && !(retrospective && isArchiveRetrospective());
   const rejected = visible && choiceRejected(choice);
   // Match Grid's whole-card rejection treatment in One-at-a-time. Applying
   // the shared class to the viewer shell mutes every molecular layer together
@@ -1495,7 +1500,7 @@ function bestRawCorrectPose(choices = allItemChoices()) {
 }
 function weeklyResultsRevealActive() {
   return quizSource === 'weekly'
-    && (WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview());
+    && (WEEKLY_ROUND?.public_status === 'revealed' || isRetrospectiveReview());
 }
 function retrospectiveAnswerActive() {
   return weeklyResultsRevealActive() && !!cur?.revealed && !!cur.showAnswer;
@@ -1629,11 +1634,12 @@ function syncGridSelection() {
   }
 }
 
-function applyPrivateRetrospectiveAnswer() {
-  if (!isPrivatePrecloseReview() || cur?.item?.source !== 'weekly') return false;
+function applyRetrospectiveAnswer() {
+  if (!isRetrospectiveReview() || cur?.item?.source !== 'weekly') return false;
   const choices = allItemChoices();
-  const best = window.foldariumPrivateReview?.selectRetrospectiveAnswer?.({ choices })
-    || bestRawCorrectPose(choices);
+  const best = (isPrivatePrecloseReview()
+    ? window.foldariumPrivateReview?.selectRetrospectiveAnswer?.({ choices })
+    : null) || bestRawCorrectPose(choices);
   cur.selected = best || {
     none: true,
     correct: true,
@@ -2246,7 +2252,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       card.addEventListener(eventName, () => activatePane(paneId, reason), { passive: true });
     }
     const head = document.createElement('button');
-    const canInspect = !locked() || (answerActive && isPrivatePrecloseReview());
+    const canInspect = !locked() || (answerActive && isRetrospectiveReview());
     head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry);
     head.disabled = !canInspect;
     attachPoseInfo(head, weeklyEntryEvidence(entry));
@@ -2296,7 +2302,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       };
     }
     actions.append(select, reject);
-    if (xtalReference) actions.hidden = true;
+    if (xtalReference || (answerActive && isArchiveRetrospective())) actions.hidden = true;
     const host = document.createElement('div'); host.className = 'grid-host';
     card.append(host, head);
     card.appendChild(actions);
@@ -2893,7 +2899,7 @@ async function loadQuestion(i) {
       applyUserView();
       shownOne = savedWeeklyState?.savedShownOne || 0;
       resetCrystalViewState();
-      if (applyPrivateRetrospectiveAnswer()) {
+      if (applyRetrospectiveAnswer()) {
         // A retrospective is an answer browser, not an unanswered ballot.
       } else if (restoreWeeklyResult && cur.showAnswer) {
         applyAnswerRevealView();
@@ -2903,7 +2909,7 @@ async function loadQuestion(i) {
         cur.answerRevealBest = null;
       }
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
-      $('#instruction').style.display = isPrivatePrecloseReview() ? 'none' : '';
+      $('#instruction').style.display = isRetrospectiveReview() ? 'none' : '';
       $('#choices').style.display = '';
       $('#answer-details').hidden = true; $('#answer-details').open = false;
       $('#answer-choices').replaceChildren(); $('#answer-ai').textContent = '';
@@ -2938,7 +2944,7 @@ function renderUI() {
   hideActivePoseInfoTooltip();
   const filteredIndexes = retrospectiveQuestionIndexes();
   const filteredPosition = filteredIndexes.indexOf(idx);
-  const questionOrdinal = isPrivatePrecloseReview() && filteredPosition >= 0
+  const questionOrdinal = isRetrospectiveReview() && filteredPosition >= 0
     ? `${filteredPosition + 1} / ${filteredIndexes.length}`
     : `${idx + 1} / ${ITEMS.length}`;
   $('#progress').textContent = DEV ? `item ${questionOrdinal} · dev` : `question ${questionOrdinal}`;
@@ -2957,7 +2963,7 @@ function renderUI() {
       ? weeklyViewerInstruction()
       : 'Pick the pose that best fits the binding pocket.');
   $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
-  $('#instruction').style.display = alignmentWarning || !isPrivatePrecloseReview() ? '' : 'none';
+  $('#instruction').style.display = alignmentWarning || !isRetrospectiveReview() ? '' : 'none';
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = choiceEntriesForSidebar();
   const retrospectiveAnswer = retrospectiveAnswerActive();
@@ -3025,18 +3031,18 @@ function renderUI() {
   }
   box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
   $('#vote-comment-enabled').checked = weeklyCommentPromptEnabled;
-  $('#vote-comment-option').style.display = quizSource === 'weekly' && !DEV && !isPrivatePrecloseReview()
+  $('#vote-comment-option').style.display = quizSource === 'weekly' && !DEV && !isRetrospectiveReview()
     && !cur.revealed ? 'flex' : 'none';
-  if (isPrivatePrecloseReview()) renderWeeklyLeaderboard();
+  if (isRetrospectiveReview()) renderWeeklyLeaderboard();
   if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
-    $('#lock').textContent = isPrivatePrecloseReview()
+    $('#lock').textContent = isRetrospectiveReview()
       ? 'Show result'
       : (WEEKLY_VOTES.has(cur.item.id) ? 'Update vote' : 'Record vote');
   }
   syncQuestionNavigation();
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
-  $('#verdict').style.display = cur.revealed && !isPrivatePrecloseReview() ? '' : 'none';
+  $('#verdict').style.display = cur.revealed && !isRetrospectiveReview() ? '' : 'none';
   if (!cur.revealed) delete $('#verdict').dataset.state;
   $('#next').style.display = quizSource !== 'weekly' && cur.revealed ? '' : 'none';
   updateScore();
@@ -3095,7 +3101,7 @@ function showIntro() {
     ? 'reference available Wednesday · pose details on hover'
     : 'crystal reference hidden · poses anonymised';
   $('#setup').style.display = '';
-  $('#participant-setup').style.display = DEV || isPrivatePrecloseReview() ? 'none' : '';
+  $('#participant-setup').style.display = DEV || isRetrospectiveReview() ? 'none' : '';
   $('#vote-comment-option').style.display = 'none';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
@@ -3113,7 +3119,7 @@ function showIntro() {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
     $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
-    $('#setuphint').innerHTML = isPrivatePrecloseReview()
+    $('#setuphint').innerHTML = isRetrospectiveReview()
       ? `${pool.length} retrospective questions.`
       : (status === 'revealed'
         ? `${pool.length} prospective weekly ensembles · Wednesday results are available.`
@@ -3121,7 +3127,7 @@ function showIntro() {
           ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
           : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`));
     $('#start').style.display = pool.length
-      && (isPrivatePrecloseReview() || status !== 'closed') ? '' : 'none';
+      && (isRetrospectiveReview() || status !== 'closed') ? '' : 'none';
     syncStartGate();
     return;
   }
@@ -3136,9 +3142,9 @@ function renderWeeklyResultsStatus() {
   const copy = $('#weekly-results-copy');
   const heading = $('#weekly-results-heading');
   if (!panel || !copy) return;
-  if (isPrivatePrecloseReview()) {
+  if (isRetrospectiveReview()) {
     if (heading) heading.textContent = 'Question result';
-    panel.dataset.status = 'private-review';
+    panel.dataset.status = isPrivatePrecloseReview() ? 'private-review' : 'archive-review';
     copy.hidden = true;
     copy.textContent = '';
     renderWeeklyLeaderboard();
@@ -3395,11 +3401,65 @@ function renderPrivateQuestionResult(result) {
   </div>`;
 }
 
+function archiveQuestionResult() {
+  const itemId = cur?.item?.id;
+  return itemId
+    ? WEEKLY_ARCHIVE_DETAIL?.retrospective?.questions?.find(item => item.item_id === itemId) || null
+    : null;
+}
+
+function renderArchiveQuestionResult(result) {
+  if (!result) {
+    return '<p class="weekly-scorecard-empty">Question results are unavailable.</p>';
+  }
+  const human = result.human_aggregate || {};
+  const answers = (human.answers || []).slice().sort((left, right) => (
+    right.vote_count - left.vote_count
+  ));
+  const humanRows = answers.map(answer => {
+    const state = privateQuestionAnswerState(answer);
+    return `<div class="weekly-question-result-answer">
+      <span class="weekly-question-result-rank">·</span>
+      <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
+      <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+      <span>${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}</span>
+    </div>`;
+  }).join('');
+  const automatedRows = (result.automated_entries || []).map((answer, index) => {
+    const state = privateQuestionAnswerState(answer);
+    return `<div class="weekly-question-result-answer">
+      <span class="weekly-question-result-rank">${index + 1}</span>
+      <b>${escapeLeaderboardText(answer.participant)}</b>
+      <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+      <span>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</span>
+    </div>`;
+  }).join('');
+  const humanSummary = human.suppressed
+    ? `<div><strong>${human.answered_count || 0}</strong>
+        <span>anonymous humans answered</span>
+      </div>`
+    : `<div><strong>${human.correct_count || 0}/${human.answered_count || 0}</strong>
+        <span>anonymous human answers were correct</span>
+      </div>`;
+  const humanBody = human.suppressed
+    ? '<p class="weekly-scorecard-empty">Aggregate answers are hidden until at least 3 humans answer.</p>'
+    : (humanRows || '<p class="weekly-scorecard-empty">No human answers.</p>');
+  return `<div class="weekly-question-result">
+    <div class="weekly-question-result-summary">
+      ${humanSummary}
+    </div>
+    <div class="weekly-question-result-heading">Anonymous human answers</div>
+    <div class="weekly-question-result-ranking">${humanBody}</div>
+    <div class="weekly-question-result-heading">Automated answers</div>
+    <div class="weekly-question-result-ranking">${automatedRows}</div>
+  </div>`;
+}
+
 function renderWeeklyLeaderboard() {
   if (!WEEKLY_ONLY) return;
   const host = $('#weekly-leaderboard');
   if (!host) return;
-  const revealed = WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview();
+  const revealed = WEEKLY_ROUND?.public_status === 'revealed' || isRetrospectiveReview();
   if (!revealed) {
     host.hidden = true;
     host.replaceChildren();
@@ -3408,6 +3468,10 @@ function renderWeeklyLeaderboard() {
   host.hidden = false;
   if (isPrivatePrecloseReview()) {
     host.innerHTML = renderPrivateQuestionResult(privateQuestionResult());
+    return;
+  }
+  if (isArchiveRetrospective()) {
+    host.innerHTML = renderArchiveQuestionResult(archiveQuestionResult());
     return;
   }
   if (WEEKLY_LEADERBOARD_ERROR && !WEEKLY_LEADERBOARD) {
@@ -3568,7 +3632,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
-  $('#instruction').style.display = isPrivatePrecloseReview() ? 'none' : '';
+  $('#instruction').style.display = isRetrospectiveReview() ? 'none' : '';
   $('#view-options').hidden = false;
   $('#instruction').textContent = quizSource === 'weekly'
     ? weeklyViewerInstruction()
@@ -3576,7 +3640,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
-    ? ((WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview()) ? 'Show result' : 'Record vote')
+    ? ((WEEKLY_ROUND?.public_status === 'revealed' || isRetrospectiveReview()) ? 'Show result' : 'Record vote')
     : 'Lock in answer';
   // Read-only Previews should still expose the dialog for visual/interaction
   // testing; only the database-backed Send action remains unavailable.
@@ -3587,7 +3651,7 @@ function beginQuiz(initialQuestionIndex = 0) {
 }
 
 async function resumeWeeklyQuizIfAvailable() {
-  if (DEV || isReadOnlyPreview() || isPrivatePrecloseReview()
+  if (DEV || isReadOnlyPreview() || isRetrospectiveReview()
     || quizSource !== 'weekly' || !WEEKLY_ROUND?.round_id) return false;
   const store = window.foldariumWeeklySessionResume;
   const token = store?.read?.();
@@ -3627,14 +3691,14 @@ function normalizedParticipantName() {
 
 function syncStartGate() {
   const button = $('#start');
-  if (DEV || isPrivatePrecloseReview()) { button.disabled = false; return; }
+  if (DEV || isRetrospectiveReview()) { button.disabled = false; return; }
   const input = $('#participant-name');
   const displayName = normalizedParticipantName();
   button.disabled = !displayName || displayName.length > 80 || !input.checkValidity();
 }
 
 async function startQuiz() {
-  if (DEV || isPrivatePrecloseReview()) {
+  if (DEV || isRetrospectiveReview()) {
     remoteSessionId = null;
     participantDisplayName = '';
     beginQuiz();
@@ -3650,7 +3714,7 @@ async function startQuiz() {
     input.focus();
     return;
   }
-  if (isReadOnlyPreview() || isPrivatePrecloseReview()
+  if (isReadOnlyPreview() || isRetrospectiveReview()
     || (quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed')) {
     remoteSessionId = null;
     participantDisplayName = displayName;
@@ -3865,7 +3929,7 @@ async function onPick(k, exactChoice = null, {
 function shouldPromptForVoteComment() {
   return quizSource === 'weekly'
     && WEEKLY_ROUND?.public_status !== 'revealed'
-    && !isPrivatePrecloseReview()
+    && !isRetrospectiveReview()
     && weeklyCommentPromptEnabled
     && !cur?.voteCommentHandled;
 }
@@ -3913,7 +3977,7 @@ async function reveal() {
   $('#lock').disabled = true;
   syncQuestionNavigation();
   try {
-    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isPrivatePrecloseReview()) {
+    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isRetrospectiveReview()) {
       setVoteStatus('Recording…', 'recording');
       await finalizeReveal();
     } else {
@@ -3928,7 +3992,7 @@ async function reveal() {
 
 async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
-  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isPrivatePrecloseReview()) {
+  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isRetrospectiveReview()) {
     await finalizeWeeklyVote();
     return;
   }
@@ -3953,7 +4017,7 @@ async function finalizeReveal() {
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealedQuestionUi();
   updateScore();
-  if (!isPrivatePrecloseReview()) logAnswer(picked, af3, viewerTrace);
+  if (!isRetrospectiveReview()) logAnswer(picked, af3, viewerTrace);
 }
 
 function renderRevealedQuestionUi() {
@@ -3966,7 +4030,7 @@ function renderRevealedQuestionUi() {
   renderRevealList(picked, af3);
   $('#lock').style.display = 'none'; $('#choices').style.display = 'none';
   const bestMatch = cur.answerRevealBest ?? bestRawCorrectPose();
-  if (isPrivatePrecloseReview()) {
+  if (isRetrospectiveReview()) {
     const v = $('#verdict');
     v.style.display = 'none';
     v.textContent = '';
@@ -4118,7 +4182,7 @@ function renderRevealList(picked, af3) {
     const voteText = cur.item.source === 'weekly' && !isPrivatePrecloseReview()
       ? `${WEEKLY_TOTALS.get(`${cur.item.id}|none`) || 0} votes` : '';
     const status = [
-      selectedNone && !isPrivatePrecloseReview() ? 'You' : '',
+      selectedNone && !isRetrospectiveReview() ? 'You' : '',
       voteText,
     ].filter(Boolean).join(' · ');
     el.innerHTML = '<span class="sw" style="background:#5a6675;border-style:dashed"></span>'
@@ -4144,7 +4208,7 @@ function renderRevealList(picked, af3) {
       ? `<span class="answer-choice-count">· ${entry.memberCount} poses</span>` : '';
     const status = isPrivatePrecloseReview() ? '' : [
         isBestMatch ? 'Best match' : '',
-        c === picked ? 'You' : '',
+        c === picked && !isRetrospectiveReview() ? 'You' : '',
         c === af3 ? 'AI' : '',
         cur.item.source === 'rnp' && c._method ? methodName(c._method) : '',
         cur.item.source === 'weekly' ? `${c._weeklyVoteCount || 0} votes` : '',
@@ -4408,7 +4472,7 @@ function finish() {
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   if (quizSource === 'weekly') {
-    if (isPrivatePrecloseReview()) {
+    if (isRetrospectiveReview()) {
       $('#verdict').style.display = 'none';
       $('#verdict').textContent = '';
       return;
@@ -4609,6 +4673,78 @@ async function init() {
       };
     }).filter(item => item.choices.length && item.protein_file);
   };
+  const activateArchiveDetail = detail => {
+    const expectedRoundId = window.FOLDARIUM_ARCHIVE_REVIEW?.round_id;
+    if (!detail || detail.format_version !== 'foldarium.weekly-retrospective-detail/v1'
+      || detail.round?.round_id !== expectedRoundId
+      || detail.blind_manifest?.round_id !== expectedRoundId
+      || detail.reveal_manifest?.round_id !== expectedRoundId
+      || !Array.isArray(detail.answer_overlays)
+      || !Array.isArray(detail.retrospective?.questions)) {
+      throw new Error('Archive retrospective detail is invalid.');
+    }
+    const synthetic = {
+      round_id: detail.round.round_id,
+      campaign_id: detail.round.campaign_id,
+      environment: 'production',
+      public_status: 'revealed',
+      opens_at: detail.round.opens_at,
+      closes_at: detail.round.closes_at,
+      revealed_at: detail.round.revealed_at,
+      blind_manifest: detail.blind_manifest,
+      reveal_manifest: detail.reveal_manifest,
+      item_count: detail.round.item_count,
+    };
+    const totals = new Map();
+    for (const question of detail.retrospective.questions) {
+      for (const answer of question.human_aggregate?.answers || []) {
+        totals.set(
+          `${question.item_id}|${answer.picked_none ? 'none' : answer.choice_id}`,
+          Number(answer.vote_count || 0),
+        );
+      }
+    }
+    WEEKLY_ROUND = synthetic;
+    WEEKLY_ARCHIVE_DETAIL = detail;
+    WEEKLY_TOTALS = totals;
+    WEEKLY_VOTES = new Map();
+    WEEKLY_ITEM_STATES = new Map();
+    WEEKLY_QUESTION_RESULTS = {
+      items: detail.retrospective.questions.map(question => ({
+        item_id: question.item_id,
+        answered_count: question.human_aggregate?.answered_count || 0,
+        correct_count: question.human_aggregate?.correct_count ?? null,
+        suppressed: question.human_aggregate?.suppressed === true,
+        answers: question.human_aggregate?.answers || [],
+      })),
+    };
+    WEEKLY_LEADERBOARD = null;
+    WEEKLY_LEADERBOARD_ERROR = '';
+    remoteSessionId = null;
+    weeklyTraceSessionSeed = null;
+    retrospectiveQuestionFilter = 'all';
+    localWeeklyScore = { correct: 0, answered: 0 };
+    localWeeklyScoredItems = new Set();
+    displayMode = 'grid';
+    clustered = true;
+    gridMethodIndex = 0;
+    cur = null;
+    POOLS.weekly = window.foldariumPrivateReview.enrichPrivateWeeklyPool(
+      normalizeWeekly(synthetic, totals),
+      {
+        blind_manifest: detail.blind_manifest,
+        reveal_manifest: detail.reveal_manifest,
+        answer_overlays: detail.answer_overlays,
+      },
+    );
+    const banner = $('#archive-review-banner');
+    if (banner) {
+      banner.hidden = false;
+      banner.dataset.active = 'true';
+    }
+    const back = $('#archive-review-back');
+    if (back) back.href = `/weekly/retrospectives/${encodeURIComponent(expectedRoundId)}`;
+  };
   // CAMEO: game-able + all-wrong + all-correct(positive control).  RnP: single file already carries all three buckets.
   const [cg, ca, cx, rn] = await Promise.all([fetchItems('quiz_items.json'), fetchItems('quiz_items_allwrong.json'),
     fetchItems('quiz_items_allcorrect.json'), fetchItems('quiz_items_rnp.json')]);
@@ -4622,28 +4758,38 @@ async function init() {
   POOLS.cameo = capAllCorrect([...cg, ...ca, ...cx].map(it => norm(it, 'cameo')).filter(keep));
   POOLS.rnp = capAllCorrect(rn.map(it => norm(it, 'rnp')).filter(keep));
   try {
-    const backend = researchBackend();
-    WEEKLY_ROUND = await backend?.getWeeklyRound() || null;
-    if (WEEKLY_ROUND && backend) {
-      const [votes, totals] = await Promise.all([
-        backend.getWeeklyVotes(WEEKLY_ROUND.round_id).catch(error => {
-          console.warn('Weekly vote restoration unavailable:', error.message); return [];
-        }),
-        WEEKLY_ROUND.public_status === 'revealed'
-          ? backend.getWeeklyVoteTotals(WEEKLY_ROUND.round_id).catch(error => {
-            console.warn('Weekly vote totals unavailable:', error.message); return [];
-          })
-          : Promise.resolve([]),
-      ]);
-      WEEKLY_VOTES = new Map(votes.map(vote => [vote.item_id, vote]));
-      WEEKLY_TOTALS = new Map(totals.map(total => [
-        `${total.item_id}|${total.picked_none ? 'none' : total.choice_id}`,
-        Number(total.vote_count) || 0,
-      ]));
-    }
-    POOLS.weekly = normalizeWeekly(WEEKLY_ROUND);
-    if (WEEKLY_ROUND?.public_status === 'revealed') {
-      void loadWeeklyLeaderboard();
+    if (isArchiveRetrospective()) {
+      activateArchiveDetail(await window.FOLDARIUM_ARCHIVE_DETAIL_READY);
+      window.foldariumApplyArchiveReviewDetail = async detail => {
+        activateArchiveDetail(detail);
+        renderWeeklyResultsStatus();
+        showIntro();
+        await startQuiz();
+      };
+    } else {
+      const backend = researchBackend();
+      WEEKLY_ROUND = await backend?.getWeeklyRound() || null;
+      if (WEEKLY_ROUND && backend) {
+        const [votes, totals] = await Promise.all([
+          backend.getWeeklyVotes(WEEKLY_ROUND.round_id).catch(error => {
+            console.warn('Weekly vote restoration unavailable:', error.message); return [];
+          }),
+          WEEKLY_ROUND.public_status === 'revealed'
+            ? backend.getWeeklyVoteTotals(WEEKLY_ROUND.round_id).catch(error => {
+              console.warn('Weekly vote totals unavailable:', error.message); return [];
+            })
+            : Promise.resolve([]),
+        ]);
+        WEEKLY_VOTES = new Map(votes.map(vote => [vote.item_id, vote]));
+        WEEKLY_TOTALS = new Map(totals.map(total => [
+          `${total.item_id}|${total.picked_none ? 'none' : total.choice_id}`,
+          Number(total.vote_count) || 0,
+        ]));
+      }
+      POOLS.weekly = normalizeWeekly(WEEKLY_ROUND);
+      if (WEEKLY_ROUND?.public_status === 'revealed') {
+        void loadWeeklyLeaderboard();
+      }
     }
   } catch (error) {
     console.warn('Weekly quiz unavailable:', error.message);
@@ -4653,7 +4799,9 @@ async function init() {
   if (WEEKLY_ONLY) {
     document.title = isPrivatePrecloseReview()
       ? 'Foldarium · Private pre-close review'
-      : 'Foldarium · Weekly blind';
+      : (isArchiveRetrospective()
+        ? 'Foldarium · Archive molecular review'
+        : 'Foldarium · Weekly blind');
     document.querySelectorAll('#quizsrc button').forEach(button => {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
@@ -4788,11 +4936,11 @@ async function init() {
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
   $('#question-prev').onclick = () => {
-    const target = isPrivatePrecloseReview() ? adjacentRetrospectiveQuestionIndex(-1) : idx - 1;
+    const target = isRetrospectiveReview() ? adjacentRetrospectiveQuestionIndex(-1) : idx - 1;
     if (target != null) void navigateWeeklyQuestion(target, 'question_previous');
   };
   $('#question-next').onclick = () => {
-    const target = isPrivatePrecloseReview() ? adjacentRetrospectiveQuestionIndex(1) : idx + 1;
+    const target = isRetrospectiveReview() ? adjacentRetrospectiveQuestionIndex(1) : idx + 1;
     if (target != null) void navigateWeeklyQuestion(target, 'question_next');
   };
   $('#retrospective-question-filter-select').onchange = event => {
@@ -4872,6 +5020,7 @@ async function init() {
     $('#ligand').textContent = 'no quiz items'; return;
   }
   if (!await resumeWeeklyQuizIfAvailable()) showIntro();
+  if (isArchiveRetrospective() && POOLS.weekly.length) await startQuiz();
   window.foldariumApplyPrivateReviewBundle = async (bundle) => {
     if (!bundle) {
       window.foldariumPrivateReview?.deactivatePrivateReview?.();

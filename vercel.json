@@ -1,5 +1,7 @@
 {
   "rewrites": [
+    { "source": "/weekly/retrospectives/:roundId", "destination": "/weekly-retrospectives.html" },
+    { "source": "/weekly/retrospectives", "destination": "/weekly-retrospectives.html" },
     { "source": "/weekly", "destination": "/index.html" },
     { "source": "/weekly.html", "destination": "/index.html" }
   ]

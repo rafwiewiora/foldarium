@@ -66,6 +66,38 @@ PRIVATE_WEEKLY_EVALUATION_FIELDS = (
     "artifact_size_bytes",
     "artifact_media_type",
 )
+WEEKLY_RETROSPECTIVE_PUBLICATION_FIELDS = (
+    "publication_id",
+    "round_id",
+    "campaign_id",
+    "environment",
+    "format_version",
+    "evaluation_id",
+    "evaluation_format_version",
+    "round_opens_at",
+    "round_closes_at",
+    "round_revealed_at",
+    "blind_manifest_sha256",
+    "private_index_sha256",
+    "reveal_manifest_sha256",
+    "reference_set_sha256",
+    "prediction_set_sha256",
+    "evaluation_artifact_sha256",
+    "item_count",
+    "choice_count",
+    "source_snapshot_object_uri",
+    "source_snapshot_sha256",
+    "source_snapshot_size_bytes",
+    "source_snapshot_media_type",
+    "public_artifact_object_uri",
+    "public_artifact_sha256",
+    "public_artifact_size_bytes",
+    "public_artifact_media_type",
+    "admin_artifact_object_uri",
+    "admin_artifact_sha256",
+    "admin_artifact_size_bytes",
+    "admin_artifact_media_type",
+)
 
 
 class SupabaseConfigurationError(ValueError):
@@ -563,6 +595,43 @@ class SupabaseCoordinator(SupabasePublisher):
         if not isinstance(value, list) or not all(isinstance(row, Mapping) for row in value):
             raise SupabasePublicationError(f"{operation} returned an invalid row set")
         return [deepcopy(dict(row)) for row in value]
+
+    def _get_all_json_rows(
+        self,
+        endpoint: str,
+        operation: str,
+        *,
+        page_size: int = 1000,
+        maximum_rows: int = 100_000,
+    ) -> list[dict[str, Any]]:
+        """Read a bounded complete PostgREST row set using explicit ranges."""
+
+        rows: list[dict[str, Any]] = []
+        for offset in range(0, maximum_rows, page_size):
+            body = self._request(
+                endpoint,
+                None,
+                operation=operation,
+                method="GET",
+                extra_headers={"Range": f"{offset}-{offset + page_size - 1}"},
+            )
+            try:
+                value = json.loads((body or b"[]").decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SupabasePublicationError(
+                    f"{operation} returned invalid JSON"
+                ) from exc
+            if not isinstance(value, list) or not all(
+                isinstance(row, Mapping) for row in value
+            ):
+                raise SupabasePublicationError(
+                    f"{operation} returned an invalid row set"
+                )
+            page = [deepcopy(dict(row)) for row in value]
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+        raise SupabasePublicationError(f"{operation} exceeded the bounded row limit")
 
     def weekly_campaign_exists(self, campaign_id: str) -> bool:
         """Return whether an immutable weekly campaign is already registered.
@@ -1924,6 +1993,332 @@ class SupabaseCoordinator(SupabasePublisher):
             if row.get(field) != expected:
                 raise SupabasePublicationError(
                     f"private weekly evaluation catalog differs at {field}"
+                )
+        return row
+
+    def weekly_retrospective_source_rows(
+        self, round_id: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Snapshot the bounded rows used by retrospective aggregation.
+
+        Raw application state is fetched only to extract the approved
+        ``selection_kind`` field in the deterministic core helper. It is never
+        copied into either publication artifact or the normalized source object.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+        round_filter = f"eq.{round_id}"
+        votes_query = urlencode(
+            {
+                "select": "round_id,user_id,item_id,choice_id,picked_none",
+                "round_id": round_filter,
+                "order": "user_id.asc,item_id.asc",
+            }
+        )
+        attempts_query = urlencode(
+            {
+                "select": (
+                    "vote_attempt_id,round_id,user_id,item_id,choice_id,"
+                    "picked_none,app_state,submitted_at"
+                ),
+                "round_id": round_filter,
+                "order": (
+                    "user_id.asc,item_id.asc,submitted_at.asc,"
+                    "vote_attempt_id.asc"
+                ),
+            }
+        )
+        sessions_query = urlencode(
+            {
+                "select": "round_id,user_id,display_name",
+                "round_id": round_filter,
+                "order": "user_id.asc,started_at.asc,session_id.asc",
+            }
+        )
+        automated_identities_query = urlencode(
+            {
+                "select": "user_id,display_name,participant_kind",
+                "order": "user_id.asc",
+            }
+        )
+        return {
+            "votes": self._get_all_json_rows(
+                f"/rest/v1/weekly_quiz_votes?{votes_query}",
+                "weekly retrospective vote snapshot",
+            ),
+            "vote_attempts": self._get_all_json_rows(
+                f"/rest/v1/weekly_quiz_vote_attempts?{attempts_query}",
+                "weekly retrospective vote-attempt snapshot",
+            ),
+            "current_sessions": self._get_all_json_rows(
+                f"/rest/v1/weekly_quiz_sessions?{sessions_query}",
+                "weekly retrospective session snapshot",
+            ),
+            "automated_identities": self._get_all_json_rows(
+                (
+                    "/rest/v1/weekly_retrospective_automated_identities?"
+                    f"{automated_identities_query}"
+                ),
+                "weekly retrospective automated-identity registry snapshot",
+            ),
+        }
+
+    def weekly_retrospective_publication(
+        self, round_id: str
+    ) -> dict[str, Any] | None:
+        """Return one exact immutable retrospective publication descriptor."""
+
+        round_id = _safe_identifier(round_id, "round_id")
+        query = urlencode(
+            {
+                "select": ",".join(WEEKLY_RETROSPECTIVE_PUBLICATION_FIELDS)
+                + ",created_at",
+                "round_id": f"eq.{round_id}",
+                "limit": "2",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/weekly_retrospective_publications?{query}",
+            "weekly retrospective publication lookup",
+        )
+        if len(rows) > 1:
+            raise SupabasePublicationError(
+                "weekly retrospective publication lookup returned duplicate rows"
+            )
+        return deepcopy(dict(rows[0])) if rows else None
+
+    def missing_weekly_retrospective_round_ids(self) -> list[str]:
+        """List every revealed production round whose publication is absent."""
+
+        response = self._rpc(
+            "list_missing_weekly_retrospective_publications", {}
+        )
+        if not isinstance(response, list) or not all(
+            isinstance(row, Mapping) for row in response
+        ):
+            raise SupabasePublicationError(
+                "missing retrospective publication scan returned an invalid row set"
+            )
+        round_ids = [
+            _safe_identifier(row.get("round_id"), "missing retrospective round_id")
+            for row in response
+        ]
+        if len(round_ids) != len(set(round_ids)):
+            raise SupabasePublicationError(
+                "missing retrospective publication scan returned duplicate rounds"
+            )
+        return round_ids
+
+    def register_weekly_retrospective_publication(
+        self,
+        descriptor: Mapping[str, Any],
+        *,
+        source_snapshot_canonical: str,
+    ) -> dict[str, Any]:
+        """Validate and register one exact source-bound archive publication."""
+
+        from .retrospective_archive import (
+            RETROSPECTIVE_MEDIA_TYPE,
+            RETROSPECTIVE_PUBLICATION_FORMAT_VERSION,
+            RETROSPECTIVE_SOURCE_FORMAT_VERSION,
+        )
+
+        payload = _json_object(
+            descriptor, "weekly retrospective publication descriptor"
+        )
+        if set(payload) != set(WEEKLY_RETROSPECTIVE_PUBLICATION_FIELDS):
+            raise SupabasePublicationError(
+                "weekly retrospective publication descriptor fields are not exact"
+            )
+        for field in (
+            "publication_id",
+            "round_id",
+            "campaign_id",
+            "evaluation_id",
+        ):
+            _safe_identifier(payload.get(field), f"retrospective descriptor {field}")
+        if payload.get("environment") != "production":
+            raise SupabasePublicationError(
+                "retrospective publication must bind production"
+            )
+        if payload.get("format_version") != RETROSPECTIVE_PUBLICATION_FORMAT_VERSION:
+            raise SupabasePublicationError(
+                "retrospective publication format_version is invalid"
+            )
+        if payload.get("evaluation_format_version") != (
+            "foldarium.weekly-private-evaluation/v5"
+        ):
+            raise SupabasePublicationError(
+                "retrospective evaluation format_version is invalid"
+            )
+        digest_fields = (
+            "blind_manifest_sha256",
+            "private_index_sha256",
+            "reveal_manifest_sha256",
+            "reference_set_sha256",
+            "prediction_set_sha256",
+            "evaluation_artifact_sha256",
+            "source_snapshot_sha256",
+            "public_artifact_sha256",
+            "admin_artifact_sha256",
+        )
+        for field in digest_fields:
+            value = payload.get(field)
+            if not isinstance(value, str) or not _SHA256.fullmatch(value):
+                raise SupabasePublicationError(
+                    f"retrospective publication {field} must be a lowercase SHA-256"
+                )
+        for field in (
+            "item_count",
+            "choice_count",
+            "source_snapshot_size_bytes",
+            "public_artifact_size_bytes",
+            "admin_artifact_size_bytes",
+        ):
+            value = payload.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise SupabasePublicationError(
+                    f"retrospective publication {field} must be positive"
+                )
+        for prefix in ("source_snapshot", "public_artifact", "admin_artifact"):
+            if payload.get(f"{prefix}_media_type") != RETROSPECTIVE_MEDIA_TYPE:
+                raise SupabasePublicationError(
+                    f"retrospective publication {prefix} media type is invalid"
+                )
+            digest = payload[f"{prefix}_sha256"]
+            object_uri = payload.get(f"{prefix}_object_uri")
+            parsed = urlsplit(object_uri) if isinstance(object_uri, str) else None
+            if (
+                parsed is None
+                or parsed.scheme != "supabase"
+                or parsed.netloc != self.storage_bucket
+                or parsed.path != f"/sha256/{digest[:2]}/{digest}"
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise SupabasePublicationError(
+                    f"retrospective publication {prefix} URI is invalid"
+                )
+        timestamps: dict[str, datetime] = {}
+        for field in (
+            "round_opens_at",
+            "round_closes_at",
+            "round_revealed_at",
+        ):
+            value = payload.get(field)
+            if not isinstance(value, str):
+                raise SupabasePublicationError(
+                    f"retrospective publication {field} is invalid"
+                )
+            try:
+                timestamps[field] = datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"retrospective publication {field} is invalid"
+                ) from exc
+            if timestamps[field].tzinfo is None:
+                raise SupabasePublicationError(
+                    f"retrospective publication {field} must include a timezone"
+                )
+        if not (
+            timestamps["round_opens_at"]
+            < timestamps["round_closes_at"]
+            <= timestamps["round_revealed_at"]
+        ):
+            raise SupabasePublicationError(
+                "retrospective publication round timestamps are inconsistent"
+            )
+
+        if not isinstance(source_snapshot_canonical, str) or not source_snapshot_canonical:
+            raise SupabasePublicationError(
+                "retrospective source snapshot canonical JSON is missing"
+            )
+        try:
+            source_snapshot = json.loads(source_snapshot_canonical)
+        except json.JSONDecodeError as exc:
+            raise SupabasePublicationError(
+                "retrospective source snapshot is not valid JSON"
+            ) from exc
+        if (
+            not isinstance(source_snapshot, Mapping)
+            or source_snapshot.get("format_version")
+            != RETROSPECTIVE_SOURCE_FORMAT_VERSION
+            or source_snapshot.get("round_id") != payload["round_id"]
+            or canonical_json(source_snapshot) != source_snapshot_canonical
+        ):
+            raise SupabasePublicationError(
+                "retrospective source snapshot canonical JSON is inconsistent"
+            )
+        source_digest = hashlib.sha256(
+            source_snapshot_canonical.encode("utf-8")
+        ).hexdigest()
+        if (
+            source_digest != payload["source_snapshot_sha256"]
+            or len(source_snapshot_canonical.encode("utf-8"))
+            != payload["source_snapshot_size_bytes"]
+        ):
+            raise SupabasePublicationError(
+                "retrospective source snapshot descriptor is inconsistent"
+            )
+        expected_id = stable_id(
+            "weekly_archive",
+            {
+                "format_version": payload["format_version"],
+                "round_id": payload["round_id"],
+                "evaluation_id": payload["evaluation_id"],
+                "evaluation_artifact_sha256": payload[
+                    "evaluation_artifact_sha256"
+                ],
+                "source_snapshot_sha256": payload["source_snapshot_sha256"],
+                "public_artifact_sha256": payload["public_artifact_sha256"],
+                "admin_artifact_sha256": payload["admin_artifact_sha256"],
+            },
+            length=32,
+        )
+        if payload["publication_id"] != expected_id:
+            raise SupabasePublicationError(
+                "retrospective publication_id is not deterministic"
+            )
+        response = self._rpc(
+            "register_weekly_retrospective_publication",
+            {
+                "p_publication": payload,
+                "p_source_snapshot_canonical": source_snapshot_canonical,
+            },
+        )
+        if isinstance(response, list) and len(response) == 1:
+            response = response[0]
+        if not isinstance(response, Mapping):
+            raise SupabasePublicationError(
+                "retrospective publication registration returned no descriptor"
+            )
+        row = deepcopy(dict(response))
+        for field, expected in payload.items():
+            observed = row.get(field)
+            if field in {
+                "round_opens_at",
+                "round_closes_at",
+                "round_revealed_at",
+            }:
+                try:
+                    observed_time = datetime.fromisoformat(
+                        str(observed).replace("Z", "+00:00")
+                    )
+                    expected_time = datetime.fromisoformat(
+                        str(expected).replace("Z", "+00:00")
+                    )
+                except ValueError as exc:
+                    raise SupabasePublicationError(
+                        f"retrospective publication catalog differs at {field}"
+                    ) from exc
+                differs = observed_time != expected_time
+            else:
+                differs = observed != expected
+            if differs:
+                raise SupabasePublicationError(
+                    f"retrospective publication catalog differs at {field}"
                 )
         return row
 

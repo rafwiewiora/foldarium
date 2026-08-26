@@ -270,6 +270,11 @@
     letter-spacing:.1em;text-transform:uppercase}
   #private-review-banner[data-active="true"]{display:block}
   #private-review-banner[hidden]{display:none!important}
+  #archive-review-banner{display:none;margin:0;color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase}
+  #archive-review-banner[data-active="true"]{display:block}
+  #archive-review-banner a{color:var(--accent);text-decoration:none}
+  #archive-review-banner[hidden]{display:none!important}
   #private-review-control{display:none;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:#fff}
   #private-review-control[hidden]{display:none!important}
   #private-review-control .sub{margin:0}
@@ -346,6 +351,8 @@
   html[data-quiz-mode="weekly"] #lock:not(:disabled):hover{background:#1178a4;color:#fff;border-color:#1178a4}
   html[data-quiz-mode="weekly"] #lock:disabled{background:#dce7ec;color:#7d8a94;border-color:#d3dee4;box-shadow:none}
   html[data-quiz-mode="weekly"] #weekly-results{display:block}
+  #archive-link{display:none}
+  html[data-quiz-mode="weekly"] #archive-link{display:inline}
   .hint{font-size:12px;color:var(--faint);line-height:1.55}
   #stage-topbar{position:absolute;z-index:30;top:14px;left:16px;right:64px;display:flex;
     align-items:flex-start;gap:12px;min-width:0;pointer-events:none}
@@ -428,11 +435,14 @@
     <div id="private-review-banner" hidden aria-live="polite">
       Retrospective
     </div>
+    <div id="archive-review-banner" hidden aria-live="polite">
+      <a id="archive-review-back" href="/weekly/retrospectives">Archive retrospective · back to results</a>
+    </div>
     <div class="brand">
       <img class="brand-mark" src="/assets/foldarium-mark.svg?v=2026082501" alt=""/>
       <div class="brand-copy">
         <h1>Foldarium</h1>
-        <div class="sub"><strong>Pose Quiz</strong> · Pick the correct predicted pose.<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
+        <div class="sub"><strong>Pose Quiz</strong> · Pick the correct predicted pose.<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span><span id="archive-link"> · <a href="/weekly/retrospectives" style="color:var(--accent);text-decoration:none">Past results</a></span></div>
       </div>
     </div>
 
@@ -639,12 +649,20 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
   const err = document.getElementById('gate-err');
   let loading = false;
   let persistenceStarted = false;
+  const archiveRoundId = (() => {
+    const value = new URLSearchParams(location.search).get('retrospective_round');
+    return value && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) ? value : null;
+  })();
 
   window.foldariumBackend = createDeferredBackend();
   window.createWeeklyTraceStream = createWeeklyTraceStream;
   window.foldariumWeeklySessionResume = createWeeklySessionResumeStore(sessionStorage);
   window.foldariumPrivateReview = foldariumPrivateReview;
   window.FOLDARIUM_PRIVATE_REVIEW = Object.freeze({ active: false });
+  window.FOLDARIUM_ARCHIVE_REVIEW = Object.freeze({
+    active: Boolean(archiveRoundId),
+    round_id: archiveRoundId,
+  });
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -685,10 +703,12 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
         ? await window.FOLDARIUM_CONFIG_READY
         : (window.FOLDARIUM_SUPABASE || {});
       window.foldariumBackend.attach(initQuizBackend(config));
-      foldariumPrivateReview.mountPrivateReviewUi({
-        config,
-        onBundleLoaded: applyPrivateReviewBundleWhenReady,
-      });
+      if (!archiveRoundId) {
+        foldariumPrivateReview.mountPrivateReviewUi({
+          config,
+          onBundleLoaded: applyPrivateReviewBundleWhenReady,
+        });
+      }
     } catch (e) {
       window.foldariumBackend.fail(e);
       console.warn('Remote quiz persistence disabled:', e.message);
@@ -713,6 +733,14 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       start.style.display = 'none';
     }
     document.getElementById('suggestion-open').hidden = false;
+    window.FOLDARIUM_ARCHIVE_DETAIL_READY = archiveRoundId
+      ? fetch(`/api/weekly-retrospectives?round_id=${encodeURIComponent(archiveRoundId)}`)
+        .then(async response => {
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(payload?.error || 'Archive round could not be loaded.');
+          return payload;
+        })
+      : Promise.resolve(null);
     void initPersistence();
     const css = document.createElement('link');
     css.rel = 'stylesheet';

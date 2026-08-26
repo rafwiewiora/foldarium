@@ -325,7 +325,7 @@ test('private retrospective supports xtal and folded protein frames', async () =
   assert.match(app, /retrospectiveGridProteinFrames\.set\(key, frame\)/);
   assert.match(app, /resetCameraOnNextBuild = true/);
   assert.match(app, /function refreshGridCameraSync\(\)[\s\S]*syncGridCameras\(active\)/);
-  assert.match(app, /const canInspect = !locked\(\) \|\| \(answerActive && isPrivatePrecloseReview\(\)\)/);
+  assert.match(app, /const canInspect = !locked\(\) \|\| \(answerActive && isRetrospectiveReview\(\)\)/);
   assert.match(app, /locked\(\) && !cell\.spec\.privateReview/);
   assert.match(app, /select\.textContent = 'Xtal'/);
   assert.match(app, /reject\.textContent = 'Folded'/);
@@ -607,6 +607,8 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
     participantDisplayName: 'Reviewer',
     localWeeklyScore: { correct: 2, answered: 3 },
     isPrivatePrecloseReview: () => false,
+    isArchiveRetrospective: () => false,
+    isRetrospectiveReview: () => false,
     formatWeeklyScoreLine,
     $: selector => elements[selector] || null,
   };
@@ -698,6 +700,8 @@ test('private retrospective renders compact per-question popularity with names b
       WEEKLY_ONLY: true,
       WEEKLY_ROUND: { public_status: 'open' },
       isPrivatePrecloseReview: () => true,
+      isArchiveRetrospective: () => false,
+      isRetrospectiveReview: () => true,
       privateQuestionResult: () => result,
       renderPrivateQuestionResult,
       $: selector => selector === '#weekly-leaderboard' ? host : null,

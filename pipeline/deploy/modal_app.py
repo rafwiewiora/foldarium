@@ -192,6 +192,12 @@ WEEKLY_RETROSPECTIVE_CRON_UTC = os.environ.get(
 WEEKLY_RETROSPECTIVE_ENABLED = (
     os.environ.get("FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE") == "1"
 )
+WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC = os.environ.get(
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON", "45 0 * * 3"
+)
+WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED = (
+    os.environ.get("FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION") == "1"
+)
 # Six hourly Wednesday ticks cover a delayed coordinate release without an
 # unbounded poller. Each tick receives two short infrastructure retries; a
 # scientifically incomplete item still aborts the whole atomic reveal.
@@ -216,6 +222,10 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL",
         "FOLDARIUM_WEDNESDAY_REVEAL_CRON",
         WEDNESDAY_REVEAL_PUBLISH_ENV,
+        "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON",
+        "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON",
         DEPLOYMENT_CONFIG_SHA256_ENV,
     )
     if key in os.environ
@@ -505,6 +515,10 @@ if modal is not None:
             "weekly_retrospective": {
                 "enabled": WEEKLY_RETROSPECTIVE_ENABLED,
                 "cron": WEEKLY_RETROSPECTIVE_CRON_UTC,
+            },
+            "weekly_retrospective_publication": {
+                "enabled": WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED,
+                "cron": WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
             },
         }
 
@@ -1314,6 +1328,63 @@ if modal is not None:
             flush=True,
         )
         return outcome
+
+    @app.function(
+        image=control_image,
+        cpu=1.0,
+        memory=2048,
+        schedule=(
+            modal.Cron(WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC)
+            if WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED
+            else None
+        ),
+        secrets=[control_plane_secret],
+        timeout=30 * 60,
+        retries=modal.Retries(
+            max_retries=WEDNESDAY_REVEAL_MODAL_RETRIES,
+            backoff_coefficient=1.0,
+            initial_delay=60.0,
+            max_delay=60.0,
+        ),
+        max_containers=1,
+    )
+    def weekly_retrospective_publication_tick(
+        round_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Publish one exact round or backfill all missing revealed rounds.
+
+        The schedule is absent by default. Unlike private evaluation generation,
+        a scan is global: it is not restricted to the newest Saturday campaign.
+        """
+
+        from foldarium_pipeline.retrospective_archive import (
+            publish_missing_retrospectives,
+        )
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        result = publish_missing_retrospectives(
+            coordinator=SupabaseCoordinator.from_env(),
+            round_id=round_id,
+        )
+        print(
+            "foldarium.weekly_retrospective_publication "
+            + json.dumps(
+                {
+                    "status": result["status"],
+                    "requested_round_id": result["requested_round_id"],
+                    "round_count": result["round_count"],
+                    "round_ids": result["round_ids"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return {
+            **result,
+            "mode": "post-reveal-publication",
+            "schedule_enabled": WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED,
+            "admin_artifacts_private": True,
+        }
 
     @app.function(
         image=quiz_assembly_image,

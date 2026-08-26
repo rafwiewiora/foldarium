@@ -158,6 +158,7 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.doesNotMatch(review, /FOLDARIUM_PREVIEW_PRIVATE_EVALUATION_PASSWORD|Invalid password/);
   assert.match(html, /weekly-private-review\.js/);
   assert.match(app, /const isPrivatePrecloseReview = \(\) => window\.FOLDARIUM_PRIVATE_REVIEW\?\.active === true/);
+  assert.match(app, /const isRetrospectiveReview = \(\) => isPrivatePrecloseReview\(\) \|\| isArchiveRetrospective\(\)/);
   assert.match(app, /!isPrivatePrecloseReview\(\)/);
   assert.match(app, /window\.foldariumApplyPrivateReviewBundle/);
   assert.match(app, /buildSyntheticReviewRound/);
@@ -166,8 +167,8 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.match(app, /const privateVoteTotals = new Map\(\)/);
   assert.match(app, /normalizeWeekly\(synthetic, privateVoteTotals\)/);
   assert.match(app, /WEEKLY_TOTALS = privateVoteTotals/);
-  assert.match(app, /DEV \|\| isPrivatePrecloseReview\(\)\) \{ button\.disabled = false; return; \}/);
-  assert.match(app, /participant-setup'\)\.style\.display = DEV \|\| isPrivatePrecloseReview\(\) \? 'none' : ''/);
+  assert.match(app, /DEV \|\| isRetrospectiveReview\(\)\) \{ button\.disabled = false; return; \}/);
+  assert.match(app, /participant-setup'\)\.style\.display = DEV \|\| isRetrospectiveReview\(\) \? 'none' : ''/);
   assert.match(app, /quickStart\.hidden = !visible/);
   assert.match(app, /textContent = 'Scoring rules'/);
   assert.match(app, /Clusters use 2\.0 Å/);
@@ -188,9 +189,9 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.match(app, /renderWeeklyLeaderboard/);
   assert.match(app, /getWeeklyResults/);
   assert.match(app, /Best match/);
-  assert.match(app, /applyPrivateRetrospectiveAnswer/);
+  assert.match(app, /applyRetrospectiveAnswer/);
   assert.doesNotMatch(app, /Crystal answer|Green means exact-correct|Private review complete/);
-  assert.match(app, /if \(isPrivatePrecloseReview\(\)\) \{[\s\S]*v\.style\.display = 'none'/);
+  assert.match(app, /if \(isRetrospectiveReview\(\)\) \{[\s\S]*v\.style\.display = 'none'/);
   assert.match(app, /details\.hidden = false[\s\S]*details\.open = true[\s\S]*details\.dataset\.privateReview = 'true'/);
   assert.match(html, /#answer-details\[data-private-review="true"\]>summary/);
   assert.match(app, /foldarium-private-review-ready/);
@@ -204,7 +205,7 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.doesNotMatch(app, /Private pre-close review loaded|Answers stay non-public/);
   assert.doesNotMatch(app, /readStoredBundle/);
   assert.doesNotMatch(app, /if \(privateBundle\)/);
-  assert.match(app, /if \(!isPrivatePrecloseReview\(\)\) logAnswer/);
+  assert.match(app, /if \(!isRetrospectiveReview\(\)\) logAnswer/);
   assert.doesNotMatch(app, /applyPrivateReviewRound/);
 });
 

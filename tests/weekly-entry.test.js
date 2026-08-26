@@ -15,9 +15,11 @@ test('weekly routes select weekly-only mode without changing classic routes', ()
   assert.equal(quizEntryMode('/weekly.html'), 'weekly');
 });
 
-test('Vercel serves both weekly entry points through the shared quiz shell', async () => {
+test('Vercel serves weekly and retrospective entry points through their shells', async () => {
   const config = JSON.parse(await read('vercel.json'));
   assert.deepEqual(config.rewrites, [
+    { source: '/weekly/retrospectives/:roundId', destination: '/weekly-retrospectives.html' },
+    { source: '/weekly/retrospectives', destination: '/weekly-retrospectives.html' },
     { source: '/weekly', destination: '/index.html' },
     { source: '/weekly.html', destination: '/index.html' },
   ]);
@@ -32,7 +34,7 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(app, /const WEEKLY_ONLY = window\.FOLDARIUM_QUIZ_MODE === 'weekly'/);
   assert.match(app, /quizSource = WEEKLY_ONLY \? 'weekly' : 'cameo'/);
   assert.match(app, /displayMode = WEEKLY_ONLY \? 'grid' : 'all'/);
-  assert.match(app, /const questionOrdinal = isPrivatePrecloseReview\(\)/);
+  assert.match(app, /const questionOrdinal = isRetrospectiveReview\(\)/);
   assert.match(app, /`question \$\{questionOrdinal\}`/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);

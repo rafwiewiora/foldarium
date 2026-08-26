@@ -624,6 +624,7 @@ test('One-at-a-time rejection mutes and restores the whole molecular viewer', as
     choiceRejected: () => rejected,
     gridChoiceSelected: () => false,
     retrospectiveAnswerActive: () => false,
+    isArchiveRetrospective: () => false,
   });
 
   syncOneReviewState();
@@ -671,6 +672,7 @@ test('retrospective One at a time replaces ballot actions with protein-frame con
     choiceRejected: () => false,
     gridChoiceSelected: () => false,
     retrospectiveAnswerActive: () => true,
+    isArchiveRetrospective: () => false,
     retrospectiveProteinFrame: 'folded',
     isXtalReferenceChoice: () => false,
   });

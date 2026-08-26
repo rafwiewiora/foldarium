@@ -76,6 +76,18 @@ const disabledBackend = {
   getWeeklyResults: async () => {
     throw new Error('Weekly results are unavailable.');
   },
+  getWeeklyRetrospectiveArchive: async () => {
+    throw new Error('Weekly retrospective archive is unavailable.');
+  },
+  getWeeklyRetrospectiveDetail: async () => {
+    throw new Error('Weekly retrospective detail is unavailable.');
+  },
+  getWeeklyRetrospectiveAllTime: async () => {
+    throw new Error('Weekly retrospective rankings are unavailable.');
+  },
+  getWeeklyRetrospectiveAdmin: async () => {
+    throw new Error('Weekly retrospective admin access is unavailable.');
+  },
   submitWeeklyVote: async () => {
     throw new Error('Weekly quiz persistence is unavailable.');
   },
@@ -111,6 +123,18 @@ function readOnlyBackend(readBackend) {
     getWeeklyVotes: async () => [],
     getWeeklyVoteTotals: (...args) => readBackend.getWeeklyVoteTotals(...args),
     getWeeklyResults: (...args) => readBackend.getWeeklyResults(...args),
+    getWeeklyRetrospectiveArchive: (...args) => (
+      readBackend.getWeeklyRetrospectiveArchive(...args)
+    ),
+    getWeeklyRetrospectiveDetail: (...args) => (
+      readBackend.getWeeklyRetrospectiveDetail(...args)
+    ),
+    getWeeklyRetrospectiveAllTime: (...args) => (
+      readBackend.getWeeklyRetrospectiveAllTime(...args)
+    ),
+    getWeeklyRetrospectiveAdmin: (...args) => (
+      readBackend.getWeeklyRetrospectiveAdmin(...args)
+    ),
     submitWeeklyVote: async () => unavailable(),
     submitWeeklyVoteAttempt: async () => unavailable(),
     submitWeeklyTraceBatch: async () => unavailable(),
@@ -186,6 +210,18 @@ export function createDeferredBackend({
     },
     async getWeeklyResults(...args) {
       return (await requireTarget()).getWeeklyResults(...args);
+    },
+    async getWeeklyRetrospectiveArchive(...args) {
+      return (await requireTarget()).getWeeklyRetrospectiveArchive(...args);
+    },
+    async getWeeklyRetrospectiveDetail(...args) {
+      return (await requireTarget()).getWeeklyRetrospectiveDetail(...args);
+    },
+    async getWeeklyRetrospectiveAllTime(...args) {
+      return (await requireTarget()).getWeeklyRetrospectiveAllTime(...args);
+    },
+    async getWeeklyRetrospectiveAdmin(...args) {
+      return (await requireTarget()).getWeeklyRetrospectiveAdmin(...args);
     },
     async submitWeeklyVote(...args) {
       return (await requireTarget()).submitWeeklyVote(...args);
@@ -371,6 +407,28 @@ export function createQuizBackend({
     return result.data;
   }
 
+  async function retrospectiveRequest(parameters = {}) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(parameters)) {
+      if (value !== null && value !== undefined && value !== false) {
+        query.set(key, value === true ? '1' : String(value));
+      }
+    }
+    let response;
+    try {
+      response = await fetch(`/api/weekly-retrospectives${query.size ? `?${query}` : ''}`);
+    } catch (error) {
+      throw new Error(`Weekly retrospectives are unavailable: ${error.message}`, {
+        cause: error,
+      });
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error || 'Weekly retrospective request failed');
+    }
+    return payload;
+  }
+
   return {
     startSession({ id = uuid(), source, difficulty }) {
       enqueue('session', {
@@ -518,6 +576,40 @@ export function createQuizBackend({
         throw new Error(payload?.error || 'Weekly results request failed');
       }
       return payload;
+    },
+    async getWeeklyRetrospectiveArchive({ limit = 20, cursor = null } = {}) {
+      return retrospectiveRequest({ limit, cursor });
+    },
+    async getWeeklyRetrospectiveDetail(roundId) {
+      if (!roundId) throw new Error('Weekly retrospective round identity is invalid.');
+      return retrospectiveRequest({ round_id: roundId });
+    },
+    async getWeeklyRetrospectiveAllTime({
+      ranking = 'total_correct',
+      participantKind = null,
+    } = {}) {
+      return retrospectiveRequest({
+        all_time: true,
+        ranking,
+        participant_kind: participantKind,
+      });
+    },
+    async getWeeklyRetrospectiveAdmin({
+      roundId = null,
+      allTime = false,
+      ranking = 'total_correct',
+      participantKind = null,
+    } = {}) {
+      if ((!roundId && !allTime) || (roundId && allTime)) {
+        throw new Error('Weekly retrospective admin request is invalid.');
+      }
+      return retrospectiveRequest({
+        admin: true,
+        all_time: allTime,
+        round_id: roundId,
+        ranking: allTime ? ranking : null,
+        participant_kind: allTime ? participantKind : null,
+      });
     },
     async submitWeeklyVote(roundId, itemId, choiceId, pickedNone) {
       if (!roundId || !itemId || typeof pickedNone !== 'boolean') {

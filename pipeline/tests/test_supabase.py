@@ -130,6 +130,73 @@ def private_evaluation_descriptor() -> dict:
     return payload
 
 
+def retrospective_publication_descriptor() -> tuple[dict, str]:
+    source = canonical_json(
+        {
+            "format_version": "foldarium.weekly-retrospective-source/v1",
+            "round_id": "weekly-2026-08-08-beta-v5-global-tm-29",
+            "participants": [],
+            "votes": [],
+        }
+    )
+    source_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    public_sha256 = "1" * 64
+    admin_sha256 = "2" * 64
+    evaluation = private_evaluation_descriptor()
+    payload = {
+        "round_id": evaluation["round_id"],
+        "campaign_id": evaluation["campaign_id"],
+        "environment": "production",
+        "format_version": "foldarium.weekly-retrospective-publication/v1",
+        "evaluation_id": evaluation["evaluation_id"],
+        "evaluation_format_version": evaluation["format_version"],
+        "round_opens_at": evaluation["round_opens_at"],
+        "round_closes_at": evaluation["round_closes_at"],
+        "round_revealed_at": "2026-08-18T01:00:00Z",
+        "blind_manifest_sha256": evaluation["blind_manifest_sha256"],
+        "private_index_sha256": evaluation["private_index_sha256"],
+        "reveal_manifest_sha256": evaluation["reveal_manifest_sha256"],
+        "reference_set_sha256": evaluation["reference_set_sha256"],
+        "prediction_set_sha256": evaluation["prediction_set_sha256"],
+        "evaluation_artifact_sha256": evaluation["artifact_sha256"],
+        "item_count": evaluation["item_count"],
+        "choice_count": evaluation["choice_count"],
+        "source_snapshot_object_uri": (
+            "supabase://prediction-results/sha256/"
+            f"{source_sha256[:2]}/{source_sha256}"
+        ),
+        "source_snapshot_sha256": source_sha256,
+        "source_snapshot_size_bytes": len(source.encode()),
+        "source_snapshot_media_type": "application/json",
+        "public_artifact_object_uri": (
+            "supabase://prediction-results/sha256/11/" + public_sha256
+        ),
+        "public_artifact_sha256": public_sha256,
+        "public_artifact_size_bytes": 100,
+        "public_artifact_media_type": "application/json",
+        "admin_artifact_object_uri": (
+            "supabase://prediction-results/sha256/22/" + admin_sha256
+        ),
+        "admin_artifact_sha256": admin_sha256,
+        "admin_artifact_size_bytes": 200,
+        "admin_artifact_media_type": "application/json",
+    }
+    payload["publication_id"] = stable_id(
+        "weekly_archive",
+        {
+            "format_version": payload["format_version"],
+            "round_id": payload["round_id"],
+            "evaluation_id": payload["evaluation_id"],
+            "evaluation_artifact_sha256": payload["evaluation_artifact_sha256"],
+            "source_snapshot_sha256": payload["source_snapshot_sha256"],
+            "public_artifact_sha256": payload["public_artifact_sha256"],
+            "admin_artifact_sha256": payload["admin_artifact_sha256"],
+        },
+        length=32,
+    )
+    return payload, source
+
+
 class SupabasePublisherTests(unittest.TestCase):
     def test_from_env_is_explicit_and_repr_redacts_service_role(self) -> None:
         opener = RecordingOpener()
@@ -328,6 +395,142 @@ class SupabasePublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(SupabasePublicationError, "not deterministic"):
             coordinator.register_private_weekly_evaluation(descriptor)
         self.assertEqual(opener.calls, [])
+
+    def test_retrospective_lookup_and_global_missing_scan_are_read_only(self) -> None:
+        descriptor, _source = retrospective_publication_descriptor()
+
+        class RetrospectiveOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.full_url.endswith(  # type: ignore[attr-defined]
+                    "/rest/v1/rpc/list_missing_weekly_retrospective_publications"
+                ):
+                    return FakeResponse(
+                        b'[{"round_id":"weekly-2026-08-01"},'
+                        b'{"round_id":"weekly-2026-08-08"}]'
+                    )
+                return FakeResponse(
+                    json.dumps(
+                        [{**descriptor, "created_at": "2026-08-18T02:00:00Z"}]
+                    ).encode()
+                )
+
+        opener = RetrospectiveOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        row = coordinator.weekly_retrospective_publication(descriptor["round_id"])
+        missing = coordinator.missing_weekly_retrospective_round_ids()
+
+        self.assertEqual(row["publication_id"], descriptor["publication_id"])
+        self.assertEqual(
+            missing, ["weekly-2026-08-01", "weekly-2026-08-08"]
+        )
+        self.assertEqual(opener.calls[0][0].get_method(), "GET")
+        self.assertEqual(opener.calls[1][0].get_method(), "POST")
+
+    def test_retrospective_registration_uses_validating_rpc(self) -> None:
+        descriptor, source = retrospective_publication_descriptor()
+
+        class RegistrationOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                rpc = json.loads(request.data)  # type: ignore[attr-defined]
+                return FakeResponse(
+                    json.dumps(
+                        {
+                            **rpc["p_publication"],
+                            "created_at": "2026-08-18T02:00:00Z",
+                        }
+                    ).encode()
+                )
+
+        opener = RegistrationOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        row = coordinator.register_weekly_retrospective_publication(
+            descriptor,
+            source_snapshot_canonical=source,
+        )
+
+        self.assertEqual(row["publication_id"], descriptor["publication_id"])
+        request = opener.calls[0][0]
+        self.assertTrue(
+            request.full_url.endswith(
+                "/rest/v1/rpc/register_weekly_retrospective_publication"
+            )
+        )
+        rpc = json.loads(request.data)
+        self.assertEqual(rpc["p_source_snapshot_canonical"], source)
+        self.assertEqual(rpc["p_publication"], descriptor)
+
+    def test_retrospective_source_snapshot_fetches_only_bounded_relevant_fields(
+        self,
+    ) -> None:
+        class SourceOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/weekly_quiz_votes?" in url:
+                    rows = [
+                        {
+                            "round_id": "weekly-2026-08-08",
+                            "user_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                            "item_id": "item-1",
+                            "choice_id": "choice-a",
+                            "picked_none": False,
+                        }
+                    ]
+                elif "/weekly_retrospective_automated_identities?" in url:
+                    rows = [
+                        {
+                            "user_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                            "display_name": "Claude Opus",
+                            "participant_kind": "llm",
+                        }
+                    ]
+                else:
+                    rows = []
+                return FakeResponse(json.dumps(rows).encode())
+
+        opener = SourceOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        rows = coordinator.weekly_retrospective_source_rows("weekly-2026-08-08")
+
+        self.assertEqual(len(rows["votes"]), 1)
+        self.assertEqual(
+            rows["automated_identities"],
+            [
+                {
+                    "user_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    "display_name": "Claude Opus",
+                    "participant_kind": "llm",
+                }
+            ],
+        )
+        self.assertNotIn("legacy_sessions", rows)
+        self.assertEqual(len(opener.calls), 4)
+        urls = "\n".join(call[0].full_url for call in opener.calls)
+        self.assertIn("weekly_retrospective_automated_identities", urls)
+        self.assertNotIn("weekly-2026-08-08-beta-v4", urls)
+        self.assertNotIn("viewer_trace", urls)
+        self.assertNotIn("suggestion", urls)
+        self.assertNotIn("comment", urls)
+        self.assertTrue(
+            all(call[0].get_header("Range") == "0-999" for call in opener.calls)
+        )
 
     def test_uploads_verified_digest_path_before_atomic_finish_rpc(self) -> None:
         content = b"data_foldarium\n#\n"

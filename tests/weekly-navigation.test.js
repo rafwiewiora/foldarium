@@ -60,6 +60,7 @@ test('weekly vote completion releases question arrows after the next question re
       ITEMS: Array.from({ length: 29 }, (_, index) => ({ id: `item-${index}` })),
       WEEKLY_ROUND: { public_status: 'open' },
       isPrivatePrecloseReview: () => false,
+      isRetrospectiveReview: () => false,
       syncRetrospectiveQuestionFilter() {},
       syncWeeklyGuideContent() {},
       retrospectiveQuestionIndexes: () => sandbox.ITEMS.map((_, index) => index),
@@ -138,6 +139,7 @@ test('retrospective question filters combine pose availability and player succes
       ],
     },
     isPrivatePrecloseReview: () => true,
+    isRetrospectiveReview: () => true,
   });
 
   assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('pose')), [0, 1]);

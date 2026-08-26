@@ -29,6 +29,9 @@ class DeploymentProfileTests(unittest.TestCase):
         self.assertEqual(environment["FOLDARIUM_WEEKLY_GPU_CLASS"], "l4")
         self.assertEqual(environment["FOLDARIUM_PREDICTION_MAX_CONTAINERS"], "5")
         self.assertEqual(environment["FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"], "0")
+        self.assertNotIn(
+            "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION", environment
+        )
 
     def test_environment_scrubs_ambient_foldarium_values(self) -> None:
         profile = MODULE.load_profile(self.profile_path)
