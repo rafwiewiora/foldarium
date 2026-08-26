@@ -19,6 +19,12 @@ from typing import Any, Mapping
 
 from .contracts import ContractError, SCHEMA_VERSION, validate_target
 from .quiz import QUIZ_SCHEMA_VERSION, manifest_sha256
+from .weekly_selector_prompt import (
+    SELECTOR_ITEM_PROMPT_TEMPLATE,
+    SELECTOR_MODEL_RESPONSE_SCHEMA,
+    SELECTOR_SYSTEM_PROMPT,
+    selector_prompt_profile,
+)
 
 KIT_SCHEMA_VERSION = "foldarium.weekly-selector-kit/v2"
 SUBMISSION_SCHEMA_VERSION = "foldarium.selector-submission/v2"
@@ -95,6 +101,9 @@ and raw coordinate arrays outside the bundled structure files.
 
 - `manifest.json` — canonical kit descriptor bound to this round
 - `schemas/submission.schema.json` — submission contract
+- `schemas/model-response.schema.json` — canonical model response contract
+- `prompts/profile.json` — versioned prompt profile and canonical digest
+- `prompts/system.txt` and `prompts/item-template.txt` — exact prompt bytes
 - `client/foldarium_selector_client.py` — stdlib-only helper
 - `items/<item_id>/target.json` — normalized `foldarium.prediction/v1` target
 - `items/<item_id>/choices/<choice_id>/{pose,protein,pocket}.pdb` — blind assets
@@ -800,6 +809,7 @@ def _build_manifest_body(
     normalized_targets: dict[str, dict[str, Any]],
     blind_items: list[dict[str, Any]],
     asset_descriptors: dict[str, dict[str, Any]],
+    prompt_profile: dict[str, Any],
     files: list[dict[str, Any]],
 ) -> dict[str, Any]:
     kit_items: list[dict[str, Any]] = []
@@ -839,6 +849,7 @@ def _build_manifest_body(
         "environment": environment,
         "round_id": round_id,
         "blind_manifest_sha256": blind_manifest_sha256,
+        "prompt_profile": prompt_profile,
         "policies": {
             "target_schema_version": SCHEMA_VERSION,
             "decision_modes": ["clustered", "unclustered"],
@@ -929,15 +940,30 @@ def build_selector_kit(
                 }
 
     schema_bytes = (canonical_json(build_submission_schema()) + "\n").encode("utf-8")
+    model_response_schema_bytes = (
+        canonical_json(SELECTOR_MODEL_RESPONSE_SCHEMA) + "\n"
+    ).encode("utf-8")
+    prompt_profile = selector_prompt_profile()
+    prompt_profile_bytes = (canonical_json(prompt_profile) + "\n").encode("utf-8")
+    system_prompt_bytes = SELECTOR_SYSTEM_PROMPT.encode("utf-8")
+    item_prompt_template_bytes = SELECTOR_ITEM_PROMPT_TEMPLATE.encode("utf-8")
     client_bytes = CLIENT_TEMPLATE.encode("utf-8")
     readme_bytes = README_TEMPLATE.encode("utf-8")
     entries["README.md"] = readme_bytes
     entries["client/foldarium_selector_client.py"] = client_bytes
+    entries["prompts/item-template.txt"] = item_prompt_template_bytes
+    entries["prompts/profile.json"] = prompt_profile_bytes
+    entries["prompts/system.txt"] = system_prompt_bytes
+    entries["schemas/model-response.schema.json"] = model_response_schema_bytes
     entries["schemas/submission.schema.json"] = schema_bytes
 
     static_files = [
         ("README.md", readme_bytes),
         ("client/foldarium_selector_client.py", client_bytes),
+        ("prompts/item-template.txt", item_prompt_template_bytes),
+        ("prompts/profile.json", prompt_profile_bytes),
+        ("prompts/system.txt", system_prompt_bytes),
+        ("schemas/model-response.schema.json", model_response_schema_bytes),
         ("schemas/submission.schema.json", schema_bytes),
     ]
     for item_id in sorted(normalized_targets):
@@ -966,6 +992,7 @@ def build_selector_kit(
         normalized_targets=normalized_targets,
         blind_items=validated_blind["items"],
         asset_descriptors=asset_descriptors,
+        prompt_profile=prompt_profile,
         files=files_manifest,
     )
     if policies:
@@ -1084,6 +1111,7 @@ def validate_selector_kit_manifest(
             "round_id",
             "kit_sha256",
             "blind_manifest_sha256",
+            "prompt_profile",
             "policies",
             "items",
             "files",
@@ -1100,6 +1128,13 @@ def validate_selector_kit_manifest(
     blind_manifest_sha256 = _hash(
         manifest.get("blind_manifest_sha256"), "manifest.blind_manifest_sha256"
     )
+    prompt_profile = _object(
+        manifest.get("prompt_profile"), "manifest.prompt_profile"
+    )
+    if prompt_profile != selector_prompt_profile():
+        raise WeeklySelectorError(
+            "manifest.prompt_profile is not the canonical registered profile"
+        )
 
     items_raw = manifest.get("items")
     if not isinstance(items_raw, list) or not items_raw:
@@ -1221,6 +1256,7 @@ def validate_selector_kit_manifest(
         "round_id": round_id,
         "kit_sha256": kit_sha256,
         "blind_manifest_sha256": blind_manifest_sha256,
+        "prompt_profile": prompt_profile,
         "policies": _object(manifest.get("policies"), "manifest.policies"),
         "items": normalized_items,
         "files": deepcopy(files_raw),

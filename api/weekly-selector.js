@@ -15,6 +15,7 @@ import {
   validateKitDescriptor,
   validateTokenRequest,
 } from '../lib/weekly-selector-contract.js';
+import { SELECTOR_PROMPT_PROFILE } from '../lib/weekly-selector-prompt.js';
 
 export function resolveSelectorConfig(env = process.env) {
   const deploymentEnvironment = normalizeDeploymentEnvironment(env.VERCEL_ENV);
@@ -166,6 +167,7 @@ export function selectorApiDocumentation() {
     schema_version: 'foldarium.weekly-selector-api/v2',
     submission_schema_version: SUBMISSION_SCHEMA_VERSION,
     blindness_attestation_schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
+    prompt_profile: SELECTOR_PROMPT_PROFILE,
     complete_only: true,
     canonical_json_required: true,
     token_request: {
@@ -178,6 +180,7 @@ export function selectorApiDocumentation() {
         'provider',
         'model_name',
         'model_version',
+        'prompt_profile_id',
         'prompt_sha256',
         'tools_sha256',
         'config_sha256',
@@ -299,6 +302,7 @@ async function handleCurrentRound({ config, fetchImpl, response }) {
     closes_at: round.closes_at,
     item_count: round.item_count,
     blind_manifest_sha256: round.blind_manifest_sha256,
+    prompt_profile: SELECTOR_PROMPT_PROFILE,
     kit,
   });
 }
@@ -328,6 +332,7 @@ async function handleKitRedirect({ config, fetchImpl, response, roundId }) {
     round_id: kit.round_id,
     blind_manifest_sha256: kit.blind_manifest_sha256,
     kit_sha256: kit.kit_sha256,
+    prompt_profile: SELECTOR_PROMPT_PROFILE,
     descriptor_verified: true,
     download_url: downloadUrl,
   });
@@ -386,6 +391,7 @@ async function handleIssueToken({ config, fetchImpl, request, response }) {
         p_provider: tokenRequest.provider,
         p_model_name: tokenRequest.model_name,
         p_model_version: tokenRequest.model_version,
+        p_prompt_profile_id: tokenRequest.prompt_profile_id,
         p_prompt_sha256: tokenRequest.prompt_sha256,
         p_tools_sha256: tokenRequest.tools_sha256,
         p_config_sha256: tokenRequest.config_sha256,
@@ -411,6 +417,7 @@ async function handleIssueToken({ config, fetchImpl, request, response }) {
     provider: tokenRequest.provider,
     model_name: tokenRequest.model_name,
     model_version: tokenRequest.model_version,
+    prompt_profile_id: tokenRequest.prompt_profile_id,
   });
 }
 

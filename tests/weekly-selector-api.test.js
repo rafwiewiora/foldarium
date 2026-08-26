@@ -13,6 +13,10 @@ import {
   SUBMISSION_SCHEMA_VERSION,
   canonicalJson,
 } from '../lib/weekly-selector-contract.js';
+import {
+  SELECTOR_PROMPT_PROFILE_ID,
+  SELECTOR_PROMPT_SHA256,
+} from '../lib/weekly-selector-prompt.js';
 
 const BLIND_SHA = 'b'.repeat(64);
 const KIT_SHA = 'a'.repeat(64);
@@ -88,7 +92,8 @@ function validTokenRequest(overrides = {}) {
     provider: 'example-provider',
     model_name: 'example-model',
     model_version: '2026-08-01',
-    prompt_sha256: 'c'.repeat(64),
+    prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+    prompt_sha256: SELECTOR_PROMPT_SHA256,
     tools_sha256: 'd'.repeat(64),
     config_sha256: 'e'.repeat(64),
     blindness_attestation: validBlindnessAttestation(),
@@ -214,6 +219,8 @@ test('serves static API documentation without database credentials', async () =>
   assert.equal(response.body.complete_only, true);
   assert.equal(response.body.schema_version, 'foldarium.weekly-selector-api/v2');
   assert.equal(response.body.canonical_json_required, true);
+  assert.equal(response.body.prompt_profile.prompt_profile_id, SELECTOR_PROMPT_PROFILE_ID);
+  assert.equal(response.body.prompt_profile.prompt_sha256, SELECTOR_PROMPT_SHA256);
   assert.equal(
     response.body.blindness_attestation_schema_version,
     BLINDNESS_ATTESTATION_SCHEMA_VERSION,
@@ -258,6 +265,7 @@ test('returns current round and kit descriptor without secrets', async () => {
   assert.equal(response.body.environment, 'production');
   assert.equal(response.body.blind_manifest_sha256, BLIND_SHA);
   assert.equal(response.body.kit.kit_sha256, KIT_SHA);
+  assert.equal(response.body.prompt_profile.prompt_profile_id, SELECTOR_PROMPT_PROFILE_ID);
   assert.doesNotMatch(response.text, /sb_secret_production|"blind_manifest":/);
   assert.equal(fetchImpl.calls[0].headers.Authorization, undefined);
   assert.equal(fetchImpl.calls[0].headers.apikey, 'sb_publishable_production');
@@ -310,7 +318,8 @@ test('issues a round-scoped expiring v2 token without exposing persisted hashes'
         assert.equal(body.p_provider, 'example-provider');
         assert.equal(body.p_model_name, 'example-model');
         assert.equal(body.p_model_version, '2026-08-01');
-        assert.equal(body.p_prompt_sha256, 'c'.repeat(64));
+        assert.equal(body.p_prompt_profile_id, SELECTOR_PROMPT_PROFILE_ID);
+        assert.equal(body.p_prompt_sha256, SELECTOR_PROMPT_SHA256);
         assert.equal(body.p_tools_sha256, 'd'.repeat(64));
         assert.equal(body.p_config_sha256, 'e'.repeat(64));
         assert.deepEqual(body.p_blindness_attestation, validBlindnessAttestation());

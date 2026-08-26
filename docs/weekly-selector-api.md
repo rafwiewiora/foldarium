@@ -101,6 +101,7 @@ container bytes.
   "provider": "anthropic",
   "model_name": "claude-opus",
   "model_version": "exact-provider-version",
+  "prompt_profile_id": "weekly-pose-selector-v1",
   "prompt_sha256": "…64 lowercase hex…",
   "tools_sha256": "…64 lowercase hex…",
   "config_sha256": "…64 lowercase hex…",
@@ -118,11 +119,14 @@ container bytes.
 ```
 
 Every top-level and nested key shown above is required, and unknown keys are
-rejected. Provider, model, version, and all three existing method digests remain
-required. Those digests refer to frozen artifacts:
+rejected. Provider, model, version, the registered prompt profile, and all three
+method digests remain required. `prompt_profile_id` and `prompt_sha256` must
+match the canonical profile returned by `GET /docs` and bundled in the verified
+kit; callers cannot register an unexplained custom prompt. The digests refer to
+frozen artifacts:
 
 - `prompt_sha256`: exact prompt bytes, including system/developer text and
-  templates supplied by the operator;
+  response schema and item template in the registered profile;
 - `tools_sha256`: canonical tool declarations plus any executable/helper bundle
   available to the model; and
 - `config_sha256`: canonical JSON for inference parameters and runtime settings.
@@ -331,6 +335,30 @@ superseded ballots.
 
 Historical ballots with unresolved scope remain labeled `scope unknown`; the
 results API must not infer their mode from a representative pose ID.
+
+## Canonical scoring prompt
+
+`GET /api/weekly-selector/docs` returns the complete
+`foldarium.selector-prompt-profile/v1` object. The same object and exact prompt
+files are inside every v2 kit:
+
+- `prompts/profile.json`
+- `prompts/system.txt`
+- `prompts/item-template.txt`
+- `schemas/model-response.schema.json`
+
+The initial registered profile is `weekly-pose-selector-v1`. It requires one
+independent cluster decision and one independent exact-pose decision per item,
+permits `none` only when every candidate in that mode is physically
+implausible, treats method metrics as weak within-item evidence, prohibits
+external retrieval and answer-derived material, and requests only a short
+observable-evidence note. Hidden chain-of-thought is neither requested nor
+retained.
+
+The profile digest is SHA-256 over canonical JSON of the profile body excluding
+its `prompt_sha256` field. Each rendered item request receives a separate digest
+in the private execution manifest; changing item evidence does not silently
+change the registered reusable profile.
 
 ## Security and data handling
 

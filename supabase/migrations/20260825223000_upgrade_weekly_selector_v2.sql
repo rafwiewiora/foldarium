@@ -68,6 +68,8 @@ create table if not exists public.weekly_selector_identities_v2 (
   provider text not null,
   model_name text not null,
   model_version text not null,
+  prompt_profile_id text not null
+    check (prompt_profile_id = 'weekly-pose-selector-v1'),
   prompt_sha256 text not null check (prompt_sha256 ~ '^[0-9a-f]{64}$'),
   tools_sha256 text not null check (tools_sha256 ~ '^[0-9a-f]{64}$'),
   config_sha256 text not null check (config_sha256 ~ '^[0-9a-f]{64}$'),
@@ -80,7 +82,7 @@ create table if not exists public.weekly_selector_identities_v2 (
   unique (
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
-    prompt_sha256, tools_sha256, config_sha256,
+    prompt_profile_id, prompt_sha256, tools_sha256, config_sha256,
     blindness_attestation_sha256
   ),
   check (
@@ -439,6 +441,7 @@ create or replace function public.issue_weekly_selector_token_v2(
   p_provider text,
   p_model_name text,
   p_model_version text,
+  p_prompt_profile_id text,
   p_prompt_sha256 text,
   p_tools_sha256 text,
   p_config_sha256 text,
@@ -478,7 +481,8 @@ begin
   if p_environment not in ('production', 'preview', 'development')
      or p_round_id !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
      or p_token_hash !~ '^[0-9a-f]{64}$'
-     or p_prompt_sha256 !~ '^[0-9a-f]{64}$'
+     or p_prompt_profile_id <> 'weekly-pose-selector-v1'
+     or p_prompt_sha256 <> 'e09a6d42af2538ede670dd502ae83f8b6b918e53695b3453ade5e551cfd30f85'
      or p_tools_sha256 !~ '^[0-9a-f]{64}$'
      or p_config_sha256 !~ '^[0-9a-f]{64}$'
      or not private.weekly_selector_blindness_attestation_is_valid_v2(
@@ -520,14 +524,14 @@ begin
   insert into public.weekly_selector_identities_v2 (
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
-    prompt_sha256, tools_sha256, config_sha256,
+    prompt_profile_id, prompt_sha256, tools_sha256, config_sha256,
     blindness_attestation, blindness_attestation_sha256,
     participant_hash, display_name_hash
   )
   values (
     v_user_id, v_display_name, v_method_name, v_method_version,
     v_provider, v_model_name, v_model_version,
-    p_prompt_sha256, p_tools_sha256, p_config_sha256,
+    p_prompt_profile_id, p_prompt_sha256, p_tools_sha256, p_config_sha256,
     p_blindness_attestation, p_blindness_attestation_sha256,
     private.foldarium_identity_hmac('participant', v_user_id::text),
     private.foldarium_identity_hmac(
@@ -537,7 +541,7 @@ begin
   on conflict (
     user_id, display_name, method_name, method_version,
     provider, model_name, model_version,
-    prompt_sha256, tools_sha256, config_sha256,
+    prompt_profile_id, prompt_sha256, tools_sha256, config_sha256,
     blindness_attestation_sha256
   )
   do update set display_name = excluded.display_name
@@ -862,6 +866,7 @@ returns table (
   provider text,
   model_name text,
   model_version text,
+  prompt_profile_id text,
   prompt_sha256 text,
   tools_sha256 text,
   config_sha256 text,
@@ -883,6 +888,7 @@ as $$
     identity.provider,
     identity.model_name,
     identity.model_version,
+    identity.prompt_profile_id,
     identity.prompt_sha256,
     identity.tools_sha256,
     identity.config_sha256,
@@ -927,7 +933,7 @@ revoke all on function private.weekly_selector_validate_complete_payload_v2(
 
 revoke all on function public.get_weekly_selector_round_v2(text, text) from public;
 revoke all on function public.issue_weekly_selector_token_v2(
-  text, text, text, text, text, text, text, text, text, text, text,
+  text, text, text, text, text, text, text, text, text, text, text, text,
   jsonb, text, text
 ) from public;
 revoke all on function public.revoke_weekly_selector_token_v2(uuid, text) from public;
@@ -967,7 +973,7 @@ begin
       text, text
     ) to authenticated;
     grant execute on function public.issue_weekly_selector_token_v2(
-      text, text, text, text, text, text, text, text, text, text, text,
+      text, text, text, text, text, text, text, text, text, text, text, text,
       jsonb, text, text
     ) to authenticated;
     grant execute on function public.revoke_weekly_selector_token_v2(
@@ -997,7 +1003,7 @@ begin
       text, text
     ) to service_role;
     grant execute on function public.issue_weekly_selector_token_v2(
-      text, text, text, text, text, text, text, text, text, text, text,
+      text, text, text, text, text, text, text, text, text, text, text, text,
       jsonb, text, text
     ) to service_role;
     grant execute on function public.revoke_weekly_selector_token_v2(
@@ -1021,7 +1027,7 @@ comment on table public.weekly_selector_tokens_v2 is
 comment on table public.weekly_selector_submission_revisions_v2 is
   'Append-only canonical complete-batch v2 revisions accepted strictly before round close.';
 comment on function public.issue_weekly_selector_token_v2(
-  text, text, text, text, text, text, text, text, text, text, text,
+  text, text, text, text, text, text, text, text, text, text, text, text,
   jsonb, text, text
 ) is
   'Issues an expiring round/environment-bound v2 token for a fully identified model configuration and strict blindness attestation.';

@@ -33,6 +33,14 @@ from foldarium_pipeline.weekly_selector import (
     validate_selector_submission,
     verify_selector_kit_zip,
 )
+from foldarium_pipeline.weekly_selector_prompt import (
+    SELECTOR_ITEM_PROMPT_TEMPLATE,
+    SELECTOR_MODEL_RESPONSE_SCHEMA,
+    SELECTOR_PROMPT_PROFILE_ID,
+    SELECTOR_PROMPT_SHA256,
+    SELECTOR_SYSTEM_PROMPT,
+    selector_prompt_profile,
+)
 
 
 def source_items() -> list[dict]:
@@ -191,6 +199,14 @@ class WeeklySelectorTests(unittest.TestCase):
         )
         self.assertEqual(first_descriptor["item_count"], 2)
         self.assertEqual(first_descriptor["choice_count"], 3)
+        self.assertEqual(
+            first_kit["prompt_profile"]["prompt_profile_id"],
+            SELECTOR_PROMPT_PROFILE_ID,
+        )
+        self.assertEqual(
+            first_kit["prompt_profile"]["prompt_sha256"],
+            SELECTOR_PROMPT_SHA256,
+        )
 
     def test_zip_contains_required_paths_and_canonical_metadata(self) -> None:
         zip_bytes, _descriptor, kit = self._build()
@@ -200,6 +216,10 @@ class WeeklySelectorTests(unittest.TestCase):
             self.assertIn("README.md", names)
             self.assertIn("manifest.json", names)
             self.assertIn("schemas/submission.schema.json", names)
+            self.assertIn("schemas/model-response.schema.json", names)
+            self.assertIn("prompts/profile.json", names)
+            self.assertIn("prompts/system.txt", names)
+            self.assertIn("prompts/item-template.txt", names)
             self.assertIn("client/foldarium_selector_client.py", names)
             for item in kit["items"]:
                 self.assertIn(f"items/{item['item_id']}/target.json", names)
@@ -222,6 +242,34 @@ class WeeklySelectorTests(unittest.TestCase):
             )
             schema = json.loads(archive.read("schemas/submission.schema.json"))
             self.assertEqual(schema, build_submission_schema())
+            self.assertEqual(
+                json.loads(archive.read("schemas/model-response.schema.json")),
+                SELECTOR_MODEL_RESPONSE_SCHEMA,
+            )
+            self.assertEqual(
+                json.loads(archive.read("prompts/profile.json")),
+                selector_prompt_profile(),
+            )
+            self.assertEqual(
+                archive.read("prompts/system.txt").decode("utf-8"),
+                SELECTOR_SYSTEM_PROMPT,
+            )
+            self.assertEqual(
+                archive.read("prompts/item-template.txt").decode("utf-8"),
+                SELECTOR_ITEM_PROMPT_TEMPLATE,
+            )
+
+    def test_prompt_profile_is_canonical_and_blind(self) -> None:
+        profile = selector_prompt_profile()
+        self.assertEqual(
+            profile["prompt_sha256"],
+            "e09a6d42af2538ede670dd502ae83f8b6b918e53695b3453ade5e551cfd30f85",
+        )
+        self.assertEqual(profile["prompt_profile_id"], "weekly-pose-selector-v1")
+        self.assertIn("{{candidate_evidence_json}}", profile["item_prompt_template"])
+        self.assertIn("independently", profile["item_prompt_template"])
+        self.assertIn("Do not use a browser", profile["system_prompt"])
+        self.assertIn("not hidden chain-of-thought", profile["system_prompt"])
 
     def test_verify_selector_kit_zip_rejects_hash_mismatch(self) -> None:
         zip_bytes, _descriptor, _kit = self._build()

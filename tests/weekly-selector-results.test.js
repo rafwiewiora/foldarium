@@ -17,6 +17,10 @@ import {
   createWeeklySelectorResultsHandler,
   weeklySelectorResultsConfig,
 } from '../api/weekly-selector-results.js';
+import {
+  SELECTOR_PROMPT_PROFILE_ID,
+  SELECTOR_PROMPT_SHA256,
+} from '../lib/weekly-selector-prompt.js';
 
 const ROUND_ID = 'weekly-2026-08-25-preview';
 const HASH = character => character.repeat(64);
@@ -113,7 +117,8 @@ function identity(overrides = {}) {
     provider: 'example',
     model_name: 'rules',
     model_version: '2',
-    prompt_sha256: HASH('a'),
+    prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+    prompt_sha256: SELECTOR_PROMPT_SHA256,
     tools_sha256: HASH('b'),
     config_sha256: HASH('c'),
     blindness_attestation: blindnessAttestation,
@@ -311,7 +316,8 @@ test('normalization publishes only approved identity metadata', () => {
     provider: 'example',
     model: 'rules',
     model_version: '2',
-    prompt_sha256: HASH('a'),
+    prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+    prompt_sha256: SELECTOR_PROMPT_SHA256,
     tools_sha256: HASH('b'),
     config_sha256: HASH('c'),
     blindness_attestation: identity().blindness_attestation,

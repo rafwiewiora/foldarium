@@ -3160,6 +3160,7 @@ function readSelectorIdentityFields() {
     provider: $('#selector-provider')?.value.trim() || '',
     model: $('#selector-model')?.value.trim() || '',
     modelVersion: $('#selector-model-version')?.value.trim() || '',
+    promptProfileId: $('#selector-prompt-profile-id')?.value.trim() || '',
     promptSha256: $('#selector-prompt-sha256')?.value.trim() || '',
     toolsSha256: $('#selector-tools-sha256')?.value.trim() || '',
     configSha256: $('#selector-config-sha256')?.value.trim() || '',
@@ -3220,6 +3221,12 @@ async function loadProgrammaticVotingDescriptor() {
       throw new Error('The explicit dual-mode v2 selector round is unavailable.');
     }
     SELECTOR_ROUND_DESCRIPTOR = descriptor;
+    if ($('#selector-prompt-profile-id')) {
+      $('#selector-prompt-profile-id').value = descriptor.prompt_profile?.prompt_profile_id || '';
+    }
+    if ($('#selector-prompt-sha256')) {
+      $('#selector-prompt-sha256').value = descriptor.prompt_profile?.prompt_sha256 || '';
+    }
     syncProgrammaticVotingPanel();
     setProgrammaticVotingStatus(
       descriptor.public_status === 'open'
@@ -3281,6 +3288,7 @@ async function createSelectorApiToken() {
   if (
     !identity.displayName || !identity.methodName || !identity.methodVersion
     || !identity.provider || !identity.model || !identity.modelVersion
+    || !identity.promptProfileId
   ) {
     setProgrammaticVotingStatus(
       'Enter display name, method, provider, model, and their exact versions.',
@@ -3331,6 +3339,7 @@ async function createSelectorApiToken() {
         provider: identity.provider,
         model_name: identity.model,
         model_version: identity.modelVersion,
+        prompt_profile_id: identity.promptProfileId,
         prompt_sha256: identity.promptSha256,
         tools_sha256: identity.toolsSha256,
         config_sha256: identity.configSha256,

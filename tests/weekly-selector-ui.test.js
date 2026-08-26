@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import {
+  SELECTOR_PROMPT_PROFILE_ID,
+  SELECTOR_PROMPT_SHA256,
+} from '../lib/weekly-selector-prompt.js';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 const HASH = character => character.repeat(64);
@@ -58,6 +62,7 @@ test('weekly intro documents explicit dual-mode v2 and exposes provenance inputs
     'selector-provider',
     'selector-model',
     'selector-model-version',
+    'selector-prompt-profile-id',
     'selector-prompt-sha256',
     'selector-tools-sha256',
     'selector-config-sha256',
@@ -100,7 +105,8 @@ test('token issuance sends the round-bound v2 identity and provenance contract',
       provider: 'example',
       model: 'rules',
       modelVersion: '2',
-      promptSha256: HASH('a'),
+      promptProfileId: SELECTOR_PROMPT_PROFILE_ID,
+      promptSha256: SELECTOR_PROMPT_SHA256,
       toolsSha256: HASH('b'),
       configSha256: HASH('c'),
       networkPolicy: 'none',
@@ -136,6 +142,8 @@ test('token issuance sends the round-bound v2 identity and provenance contract',
   assert.equal(body.method_version, '2');
   assert.equal(body.model_name, 'rules');
   assert.equal(body.model_version, '2');
+  assert.equal(body.prompt_profile_id, SELECTOR_PROMPT_PROFILE_ID);
+  assert.equal(body.prompt_sha256, SELECTOR_PROMPT_SHA256);
   assert.equal(body.tools_sha256, HASH('b'));
   assert.deepEqual(body.blindness_attestation, {
     schema_version: 'foldarium.selector-blindness-attestation/v1',

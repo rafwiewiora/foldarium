@@ -101,12 +101,14 @@ new round/version before open.
 
 ## 3. Freeze method provenance
 
-Create a read-only method directory containing:
+Start from the exact registered prompt profile in the verified kit. Do not
+rewrite, summarize, prepend to, or otherwise customize its system prompt, item
+template, or response schema. Create a read-only method directory containing:
 
 1. the exact provider name, model name, provider model/version identifier, API
    version, and any pinned region/runtime;
-2. the exact prompt bytes, including system/developer instructions, user
-   template, output schema, and whitespace/encoding convention;
+2. `prompt_profile_id`, the exact bundled prompt-profile bytes, and each
+   rendered item request;
 3. canonical tool declarations and every local helper executable or source file
    available during inference;
 4. canonical JSON configuration containing temperature, top-p, seed when
@@ -117,10 +119,14 @@ Create a read-only method directory containing:
 Compute and review:
 
 ```text
-prompt_sha256 = SHA256(exact prompt bytes)
+prompt_sha256 = registered prompt profile digest from the verified kit
 tools_sha256  = SHA256(canonical tool manifest or frozen tool bundle)
 config_sha256 = SHA256(canonical JSON inference configuration)
 ```
+
+Record a SHA-256 for every rendered item request and a canonical manifest root
+over those request digests. The registered profile digest remains stable across
+rounds; the rendered request digests bind the profile to the exact item evidence.
 
 Do not use a marketing alias such as “latest” as `model_version`. If the
 provider cannot report or pin a meaningful version, record the returned model

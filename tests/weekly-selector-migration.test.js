@@ -24,6 +24,7 @@ test('v2 identity and token storage binds complete model and round identity', ()
   assert.match(sql, /provider text not null/);
   assert.match(sql, /model_name text not null/);
   assert.match(sql, /model_version text not null/);
+  assert.match(sql, /prompt_profile_id text not null check \(prompt_profile_id = 'weekly-pose-selector-v1'\)/);
   assert.match(sql, /prompt_sha256 text not null/);
   assert.match(sql, /tools_sha256 text not null/);
   assert.match(sql, /config_sha256 text not null/);
@@ -31,7 +32,11 @@ test('v2 identity and token storage binds complete model and round identity', ()
   assert.match(sql, /blindness_attestation_sha256 text not null/);
   assert.match(
     sql,
-    /prompt_sha256, tools_sha256, config_sha256, blindness_attestation_sha256/,
+    /prompt_profile_id, prompt_sha256, tools_sha256, config_sha256, blindness_attestation_sha256/,
+  );
+  assert.match(
+    sql,
+    /p_prompt_sha256 <> 'e09a6d42af2538ede670dd502ae83f8b6b918e53695b3453ade5e551cfd30f85'/,
   );
   assert.match(sql, /environment text not null check \(environment in \('production', 'preview', 'development'\)\)/);
   assert.match(sql, /round_id text not null references public\.weekly_quiz_rounds/);

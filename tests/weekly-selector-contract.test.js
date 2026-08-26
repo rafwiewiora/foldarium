@@ -16,6 +16,10 @@ import {
   validateKitDescriptor,
   validateTokenRequest,
 } from '../lib/weekly-selector-contract.js';
+import {
+  SELECTOR_PROMPT_PROFILE_ID,
+  SELECTOR_PROMPT_SHA256,
+} from '../lib/weekly-selector-prompt.js';
 
 const BLIND_SHA = 'b'.repeat(64);
 const KIT_SHA = 'a'.repeat(64);
@@ -102,7 +106,8 @@ function validTokenRequest(overrides = {}) {
     provider: 'example-provider',
     model_name: 'example-model',
     model_version: '2026-08-01',
-    prompt_sha256: 'c'.repeat(64),
+    prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+    prompt_sha256: SELECTOR_PROMPT_SHA256,
     tools_sha256: 'd'.repeat(64),
     config_sha256: 'e'.repeat(64),
     blindness_attestation: validBlindnessAttestation(),
@@ -333,7 +338,8 @@ test('validates the extended model identity and explicit token scope', () => {
   );
   assert.equal(normalized.display_name, 'Ada Lovelace');
   assert.equal(normalized.provider, 'example-provider');
-  assert.equal(normalized.prompt_sha256, 'c'.repeat(64));
+  assert.equal(normalized.prompt_profile_id, SELECTOR_PROMPT_PROFILE_ID);
+  assert.equal(normalized.prompt_sha256, SELECTOR_PROMPT_SHA256);
   assert.deepEqual(normalized.blindness_attestation, validBlindnessAttestation());
   assert.throws(
     () => validateTokenRequest(validTokenRequest({ environment: 'production' }), {
@@ -346,6 +352,12 @@ test('validates the extended model identity and explicit token scope', () => {
       environment: 'preview',
     }),
     /prompt_sha256/,
+  );
+  assert.throws(
+    () => validateTokenRequest(validTokenRequest({ prompt_profile_id: 'custom' }), {
+      environment: 'preview',
+    }),
+    /selector identity/,
   );
   const missingProvider = validTokenRequest();
   delete missingProvider.provider;
