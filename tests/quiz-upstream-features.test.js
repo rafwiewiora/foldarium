@@ -1079,6 +1079,45 @@ test('Weekly Grid inspects without preferring the exact pose clicked inside its 
   ]);
 });
 
+test('Archive Grid builds the Xtal reference from retrospective crystal artifacts', async () => {
+  const app = await readApp();
+  const choice = { _xtalReference: true };
+  const calls = [];
+  const plugin = {
+    canvas3d: { camera: { changed: {}, getSnapshot: () => ({}) } },
+  };
+  const sandbox = {
+    gridBuildRevision: 7,
+    gridProteinUrls: () => ({ prot: undefined, pocket: undefined, color: 0 }),
+    isXtalReferenceChoice: candidate => candidate?._xtalReference === true,
+    buildRetrospectiveFoldedGridCell: async () => { calls.push('folded'); },
+    buildRetrospectiveGridCell: async () => { calls.push('crystal'); },
+    itemHasReleasedCrystal: () => true,
+    loadStruct: async () => { throw new Error('archive Xtal must not request a pose protein URL'); },
+    cameraChanges: target => target.canvas3d.camera.changed,
+    window: { waitForCameraSettled: async () => {} },
+  };
+  const populateGridCell = evaluateDeclaration(
+    app, 'async function populateGridCell(cell, revision, { preserveCamera = null } = {})', sandbox,
+  );
+  const cell = {
+    entry: { choice },
+    viewer: { handleResize() {} },
+    plugin,
+    disposed: false,
+    spec: {
+      item: { source: 'archive', released_crystal: { cif_url: 'crystal.cif' } },
+      answer: true,
+      retrospectiveReview: true,
+      retrospectiveProteinFrame: 'xtal',
+    },
+  };
+
+  await populateGridCell(cell, 7);
+
+  assert.deepEqual(calls, ['crystal']);
+});
+
 test('Weekly Show all waits for the click zoom before activating pose context', async () => {
   const app = await readApp();
   const oldCamera = { position: [1, 1, 1], target: [0, 0, 0] };

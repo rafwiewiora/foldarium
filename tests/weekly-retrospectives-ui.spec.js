@@ -245,6 +245,30 @@ test('archive list has four outcome lanes, no Mol-star, and no desktop overflow'
   expect(molecularRequests).toEqual([]);
 });
 
+test('desktop split view keeps archive summary inside its pane', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await mockApi(page);
+  await unlock(page, `${baseUrl}/${roundId}`);
+  await expect(page.locator('#round-detail')).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const list = document.querySelector('#round-list').getBoundingClientRect();
+    const detail = document.querySelector('#round-detail').getBoundingClientRect();
+    const explore = document.querySelector('.round-row .explore').getBoundingClientRect();
+    return {
+      noPageOverflow: document.documentElement.scrollWidth <= innerWidth,
+      panesSeparated: list.right < detail.left,
+      exploreContained: explore.left >= list.left && explore.right <= list.right,
+    };
+  });
+
+  expect(layout).toEqual({
+    noPageOverflow: true,
+    panesSeparated: true,
+    exploreContained: true,
+  });
+});
+
 test('detail filters four outcomes, safely renders admin names, and fits mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);

@@ -2117,9 +2117,9 @@ async function populateGridCell(cell, revision, { preserveCamera = null } = {}) 
   const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
   const crystalFrame = cell.spec.retrospectiveProteinFrame !== 'folded'
     || isXtalReferenceChoice(c);
-  if (cell.spec.privateReview && cell.spec.answer && !crystalFrame) {
+  if (cell.spec.retrospectiveReview && cell.spec.answer && !crystalFrame) {
     await buildRetrospectiveFoldedGridCell(cell, c, urls);
-  } else if (cell.spec.privateReview && cell.spec.answer && crystalFrame
+  } else if (cell.spec.retrospectiveReview && cell.spec.answer && crystalFrame
       && itemHasReleasedCrystal(cell.spec.item)) {
     await buildRetrospectiveGridCell(cell, c);
   } else {
@@ -2149,7 +2149,7 @@ async function populateGridCell(cell, revision, { preserveCamera = null } = {}) 
     for (const layer of poseMembers) {
       const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
       const poseColor = cell.spec.answer
-        ? ((cell.spec.privateReview ? answerViewPoseCorrect(layer.choice) : acceptedChoiceCorrect(layer.choice))
+        ? ((cell.spec.retrospectiveReview ? answerViewPoseCorrect(layer.choice) : acceptedChoiceCorrect(layer.choice))
           ? GOOD : BAD)
         : c.color;
       const poseRepresentation = await addPose(pose.struct,
@@ -2171,7 +2171,7 @@ async function populateGridCell(cell, revision, { preserveCamera = null } = {}) 
   }
   if (cell.spec.item.source === 'weekly') {
     cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
-      if ((locked() && !cell.spec.privateReview)
+      if ((locked() && !cell.spec.retrospectiveReview)
           || !sameChoice(choiceFromPoseInteraction(event), c)) return;
       clearTransientPoseSelection(cell.plugin);
       inspectGridChoice(cell.entry, cell.paneId, 'ligand-click');
@@ -2312,7 +2312,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         clustered, showHbonds, showProteinEnsemble, showSurface,
-        privateReview: isPrivatePrecloseReview(), retrospectiveProteinFrame: entryProteinFrame } };
+        retrospectiveReview: isRetrospectiveReview(), retrospectiveProteinFrame: entryProteinFrame } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
