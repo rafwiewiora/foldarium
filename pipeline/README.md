@@ -182,7 +182,7 @@ project, and only then enable submission. `FOLDARIUM_WEEKLY_MAX_TARGETS` is the 
 Wednesday evaluation has independent controls. `FOLDARIUM_ENABLE_WEDNESDAY_REVEAL=1` installs the
 CPU-only schedule; its default `FOLDARIUM_WEDNESDAY_REVEAL_CRON` runs hourly from 00:05 through 05:05 UTC
 on Wednesday, giving delayed coordinate releases a bounded retry window after the 00:00 UTC close. The
-evaluation image pins `gemmi==0.7.3`, `numpy==2.3.2`, and `rdkit==2025.3.6`. Publication remains off unless
+evaluation image pins `gemmi==0.7.5`, `numpy==2.3.2`, and `rdkit==2025.3.6`. Publication remains off unless
 `FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH=1` is present, or an operator explicitly passes `--publish` to a
 manual invocation; `--no-publish` performs the full scoring dry run without the reveal RPC.
 

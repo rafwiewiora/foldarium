@@ -1,2 +1,6 @@
 data/
 data_rnp/
+docs/
+pipeline/
+prep/
+supabase/

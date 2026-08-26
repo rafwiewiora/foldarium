@@ -45,7 +45,9 @@ function weeklyHbondCount(choice) {
 }
 function weeklyEntryEvidence(entry) {
   if (cur?.item?.source !== 'weekly') return '';
-  const members = clustered && entry.cluster ? entry.cluster.members : [entry.choice];
+  const members = Array.isArray(entry.members)
+    ? entry.members
+    : (clustered && entry.cluster ? entry.cluster.members : [entry.choice]);
   return members.map(weeklyPoseEvidence).filter(Boolean).join('\n');
 }
 function poseInfoTooltipRows(evidence) {
@@ -58,7 +60,8 @@ function poseInfoTooltipRows(evidence) {
     return { method, metrics };
   });
 }
-const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0xC026D3;
+const GOOD = 0x2BA84A, BAD = 0xE23B2E, PROT = 0x9aa6b2, AF3PROT = 0x8FA8CC, XTAL = 0x8B5CF6;
+const XTAL_POSE_SIZE = 0.32;
 const REJECTED_POSE = 0x9aa6b2;
 const GHOST_POSE_ALPHA = 0.10, GHOST_POSE_SIZE = 0.14, GHOST_PROTEIN_ALPHA = 0.12;
 const ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT = false;
@@ -83,12 +86,94 @@ const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
+const isPrivatePrecloseReview = () => window.FOLDARIUM_PRIVATE_REVIEW?.active === true;
+const itemHasReleasedCrystal = item => !!item?.released_crystal?.cif_url;
+const itemHasXtalOverlay = item => typeof item?.xtal_lig_file === 'string' && !!item.xtal_lig_file;
+const isXtalReferenceChoice = choice => choice?._xtalReference === true;
+function buildXtalReferenceChoice(item) {
+  const overlay = item?.answer_overlay;
+  const sourcePose = [...(overlay?.poses || [])]
+    .sort((left, right) => left.rmsd - right.rmsd || left.id.localeCompare(right.id))[0];
+  return {
+    _xtalReference: true,
+    _weeklyChoiceId: '__xtal_reference__',
+    id: '__xtal_reference__',
+    label: 'Xtal',
+    color: XTAL,
+    answer_crystal_pdb: overlay?.crystal_ligand_pdb || sourcePose?.crystal_ligand_pdb,
+    answer_crystal_pocket_pdb: sourcePose?.crystal_pocket_pdb,
+    correct: false,
+    clusterAccepted: false,
+    rmsd: 0,
+  };
+}
+function retrospectiveNavChoices() {
+  const base = visibleChoices();
+  if (!retrospectiveAnswerActive() || !itemHasReleasedCrystal(cur?.item)) return base;
+  if (displayMode === 'all') return base;
+  return [...base, buildXtalReferenceChoice(cur.item)];
+}
+const viewingReleasedCrystal = () => releasedCrystalMode && itemHasReleasedCrystal(cur?.item);
+
+function resetCrystalViewState() {
+  showXtal = false;
+  releasedCrystalMode = false;
+  releasedCrystalError = '';
+  const checkbox = $('#showXtal');
+  if (checkbox) checkbox.checked = false;
+  syncXtalRow();
+}
+
+function syncXtalRow() {
+  const row = $('#xtalrow');
+  const label = $('#xtal-label');
+  const link = $('#rcsb-link');
+  const status = $('#xtal-status');
+  if (!row || !label) return;
+  const showRow = !!(cur?.showAnswer && (itemHasXtalOverlay(cur.item) || itemHasReleasedCrystal(cur.item)));
+  row.style.display = showRow ? '' : 'none';
+  if (!showRow) {
+    if (link) link.style.display = 'none';
+    if (status) status.textContent = '';
+    return;
+  }
+  if (itemHasReleasedCrystal(cur.item)) {
+    const released = cur.item.released_crystal;
+    label.innerHTML = isPrivatePrecloseReview()
+      ? '<span style="color:#2BA84A">Predictions aligned to crystal protein</span> · '
+        + '<span style="color:#8B5CF6">crystal ligand: violet</span>'
+      : (releasedCrystalMode
+        ? 'Released crystal visible <span style="color:#8B5CF6">(uncheck for predicted poses)</span>'
+        : 'View released crystal structure <span style="color:#8B5CF6">(target ligand, violet)</span>');
+    if (link) {
+      link.href = released.structure_page_url;
+      link.style.display = '';
+      link.textContent = 'Open in RCSB ↗';
+    }
+    if (status) status.textContent = releasedCrystalError;
+    const checkbox = $('#showXtal');
+    if (checkbox) {
+      checkbox.checked = isPrivatePrecloseReview() ? showXtal : releasedCrystalMode;
+      checkbox.disabled = isPrivatePrecloseReview();
+    }
+    return;
+  }
+  label.innerHTML = 'Show crystal reference <span style="color:#8B5CF6">(true pose, violet)</span>';
+  if (link) link.style.display = 'none';
+  if (status) status.textContent = '';
+}
 const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
 let POOLS = { cameo: [], rnp: [], weekly: [] };
 let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'hard' : 'easy';
 let WEEKLY_ROUND = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
+let WEEKLY_LEADERBOARD = null;
+let WEEKLY_QUESTION_RESULTS = null;
+let retrospectiveQuestionFilter = 'all';
+let WEEKLY_LEADERBOARD_ERROR = '';
+let localWeeklyScore = { correct: 0, answered: 0 };
+let localWeeklyScoredItems = new Set();
 let WEEKLY_ITEM_STATES = new Map();
 let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
@@ -98,14 +183,17 @@ let weeklyTraceStream = null;
 let weeklyTraceSessionSeed = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
-let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, proteinMode = 'crystal';
+let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, releasedCrystalMode = false, releasedCrystalError = '', proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
+let retrospectiveHbondStatus = '';
 let showProteinEnsemble = false; // optional faint receptor backbones for the Weekly visual experiment
 let showSurface = false;
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
 let poseChoiceByRepresentation = new WeakMap();
+let retrospectiveProteinFrame = 'xtal';
+let retrospectiveGridProteinFrames = new Map();
 let canonicalPoseClickSubscription = null;
 let nextCanonicalCameraSnapshot = null, canonicalPoseActivationRevision = 0;
 let resetCameraOnNextBuild = false;
@@ -129,6 +217,10 @@ const hex = c => '#' + c.toString(16).padStart(6, '0');
 // answer hidden) everything is interactive again, exactly as before voting.
 const locked = () => cur && cur.revealed && cur.showAnswer;
 const interactionBlocked = () => viewerTransitionBusy || revealRequested || locked();
+// Viewer chrome stays inert during ordinary answer reveal, but private retrospective answer
+// review still needs display mode / surface / H-bond controls without unlocking vote actions.
+const viewerControlBlocked = () => viewerTransitionBusy || revealRequested
+  || (locked() && !retrospectiveAnswerActive());
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)'
   : (quizSource === 'weekly' ? 'Weekly benchmark' : 'AlphaFold3 (pLDDT-ranked)'));
 
@@ -152,6 +244,7 @@ function currentReplayableAppState({ includeVoteComment = false, continuousTrace
     show_protein_ensemble: showProteinEnsemble,
     show_surface: showSurface,
     show_xtal: showXtal,
+    released_crystal_mode: releasedCrystalMode,
     shown_one_index: shownOne,
     grid_page_index: gridMethodIndex,
     active_pane_id: activePaneId,
@@ -194,6 +287,72 @@ function rememberWeeklyItemState() {
   WEEKLY_ITEM_STATES.set(cur.item.id, cur);
 }
 
+function syncWeeklyGuideContent() {
+  if (!isPrivatePrecloseReview()) return;
+  $('#quick-start-open').textContent = 'Scoring rules';
+  $('#quick-start-title').textContent = 'Scoring rules';
+  $('#quick-start-intro').textContent = 'How clustered and exact-pose selections are defined and scored.';
+  $('.quick-start-list').innerHTML = `
+    <li><div><strong>Clusters use 2.0 Å</strong><p>The frozen prospective clustering uses a strict ligand-RMSD cutoff below 2.0 Å after shared receptor alignment. It does not use the later crystal answer.</p></div></li>
+    <li><div><strong>The representative is the medoid</strong><p>Before scoring, each cluster is shown by the member with the lowest total distance to the other members; ties are deterministic. It is only a display choice, not an exact-pose vote.</p></div></li>
+    <li><div><strong>Choose cluster or exact pose</strong><p>With clustering on, a vote selects the whole cluster. With <b>Uncluster</b> on, it selects one raw pose. Selector/API ballots can submit independent cluster and exact-pose decisions; results keep them separate.</p></div></li>
+    <li><div><strong>Scoring uses 1.5 Å</strong><p>An exact pose is correct below 1.5 Å to crystal. A cluster is correct when any member is below 1.5 Å. Yellow marks a pose outside 1.5 Å that belongs to a correct cluster; <b>None</b> is correct only when no pose passes.</p></div></li>`;
+  $('#quick-start-close').textContent = 'Close';
+}
+
+const RETROSPECTIVE_QUESTION_FILTERS = [
+  ['all', 'All questions'],
+  ['pose', 'Has a correct pose'],
+  ['none', 'No correct pose'],
+  ['pose-solved', 'Correct pose · someone right'],
+  ['pose-unsolved', 'Correct pose · nobody right'],
+  ['none-solved', 'No pose · someone chose None'],
+  ['none-unsolved', 'No pose · nobody chose None'],
+];
+
+function weeklyItemHasCorrectPose(item) {
+  return item?.choices?.some(choice => choice?.correct === true) === true;
+}
+
+function weeklyQuestionResultForItem(item) {
+  return WEEKLY_QUESTION_RESULTS?.items?.find(result => result.item_id === item?.id) || null;
+}
+
+function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter) {
+  if (filter === 'all') return true;
+  const hasPose = weeklyItemHasCorrectPose(item);
+  const result = weeklyQuestionResultForItem(item);
+  const solved = Number(result?.correct_count || 0) > 0;
+  if (filter === 'pose') return hasPose;
+  if (filter === 'none') return !hasPose;
+  if (filter === 'pose-solved') return hasPose && solved;
+  if (filter === 'pose-unsolved') return hasPose && !solved;
+  if (filter === 'none-solved') return !hasPose && solved;
+  if (filter === 'none-unsolved') return !hasPose && !solved;
+  return true;
+}
+
+function retrospectiveQuestionIndexes(filter = retrospectiveQuestionFilter) {
+  if (!isPrivatePrecloseReview()) return ITEMS.map((_, index) => index);
+  return ITEMS
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => retrospectiveQuestionMatches(item, filter))
+    .map(({ index }) => index);
+}
+
+function syncRetrospectiveQuestionFilter(visible) {
+  const box = $('#retrospective-question-filter');
+  const select = $('#retrospective-question-filter-select');
+  if (!box || !select) return;
+  box.hidden = !visible || !isPrivatePrecloseReview();
+  if (box.hidden) return;
+  select.innerHTML = RETROSPECTIVE_QUESTION_FILTERS.map(([value, label]) => {
+    const count = retrospectiveQuestionIndexes(value).length;
+    return `<option value="${value}"${count ? '' : ' disabled'}>${label} (${count})</option>`;
+  }).join('');
+  select.value = retrospectiveQuestionFilter;
+}
+
 function syncQuestionNavigation() {
   const nav = $('#question-nav');
   if (!nav) return;
@@ -201,9 +360,14 @@ function syncQuestionNavigation() {
   nav.style.display = visible ? 'flex' : 'none';
   const quickStart = $('#quick-start-open');
   if (quickStart) quickStart.hidden = !visible;
+  syncRetrospectiveQuestionFilter(visible);
+  if (visible) syncWeeklyGuideContent();
   if (!visible) return;
-  $('#question-prev').disabled = viewerTransitionBusy || revealRequested || idx <= 0;
-  $('#question-next').disabled = viewerTransitionBusy || revealRequested || idx >= ITEMS.length - 1;
+  const filteredIndexes = retrospectiveQuestionIndexes();
+  const filteredPosition = filteredIndexes.indexOf(idx);
+  $('#question-prev').disabled = viewerTransitionBusy || revealRequested || filteredPosition <= 0;
+  $('#question-next').disabled = viewerTransitionBusy || revealRequested
+    || filteredPosition < 0 || filteredPosition >= filteredIndexes.length - 1;
 }
 
 function openWeeklyQuickStart(origin = 'manual') {
@@ -222,6 +386,28 @@ async function navigateWeeklyQuestion(nextIndex, action = 'question_navigated') 
   recordAppEvent(action);
   rememberWeeklyItemState();
   await loadQuestion(nextIndex);
+}
+
+function adjacentRetrospectiveQuestionIndex(direction) {
+  const filteredIndexes = retrospectiveQuestionIndexes();
+  const position = filteredIndexes.indexOf(idx);
+  return filteredIndexes[position + direction] ?? null;
+}
+
+async function setRetrospectiveQuestionFilter(filter) {
+  if (!isPrivatePrecloseReview()
+      || !RETROSPECTIVE_QUESTION_FILTERS.some(([value]) => value === filter)) return;
+  const matchingIndexes = retrospectiveQuestionIndexes(filter);
+  if (!matchingIndexes.length) return;
+  retrospectiveQuestionFilter = filter;
+  const target = matchingIndexes.includes(idx)
+    ? idx
+    : (matchingIndexes.find(index => index >= idx) ?? matchingIndexes[0]);
+  if (target === idx) {
+    renderUI();
+    return;
+  }
+  await navigateWeeklyQuestion(target, 'question_filter_changed');
 }
 
 function recordAppEvent(action, stateDetails = null) {
@@ -272,7 +458,7 @@ function setVoteStatus(message, state) {
 }
 
 function startWeeklyThinkingTrace() {
-  if (quizSource !== 'weekly' || !remoteSessionId
+  if (quizSource !== 'weekly' || !remoteSessionId || isPrivatePrecloseReview()
       || typeof window.createWeeklyTraceStream !== 'function') return;
   try {
     void weeklyTraceStream?.dispose?.();
@@ -308,6 +494,11 @@ function setViewerControlsBusy(busy) {
     + '#next, #prev, #question-prev, #question-next, #myview, #showXtal, #start, #gridpages button, '
     + '.grid-review-actions button, #one-review-actions button',
   ).forEach(control => { control.disabled = busy; });
+  if (!busy && viewingReleasedCrystal()) {
+    document.querySelectorAll(
+      '#mode button, #protmode button, #uncluster, #hbonds, #surface, #protein-ensemble',
+    ).forEach(control => { control.disabled = true; });
+  }
   if (!busy && cur && !cur.revealed) {
     $('#lock').disabled = revealRequested || cur.selected == null;
   }
@@ -321,11 +512,18 @@ function structureRequestUrl(url) {
   if (typeof url === 'string' && url.startsWith('supabase://')) return resolved;
   return resolved + (resolved.includes('?') ? '&' : '?') + 'v=' + CACHE_BUST;
 }
-async function loadStruct(url, format, targetPlugin = plugin) {
+async function loadStruct(url, format, targetPlugin = plugin, structureParams = undefined) {
   // Mol* otherwise uses the full signed/public Storage URL as the model label,
   // which leaks into its residue hover overlay.
   const data = await targetPlugin.builders.data.download({ url: structureRequestUrl(url),
     isBinary: false, label: 'Foldarium' });
+  const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
+  const model = await targetPlugin.builders.structure.createModel(traj);
+  const struct = await targetPlugin.builders.structure.createStructure(model, structureParams);
+  return { data, struct };
+}
+async function loadStructText(text, format, targetPlugin = plugin) {
+  const data = await targetPlugin.builders.data.rawData({ data: text, label: 'Foldarium answer' });
   const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
   const model = await targetPlugin.builders.structure.createModel(traj);
   const struct = await targetPlugin.builders.structure.createStructure(model);
@@ -334,6 +532,223 @@ async function loadStruct(url, format, targetPlugin = plugin) {
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
   const r = await fetch(structureRequestUrl(url));
   return r.ok ? await r.text() : '';
+}
+function pdbCoordinateRecords(text) {
+  return String(text || '').split(/\r?\n/).filter(line => /^(ATOM  |HETATM)/.test(line)).map(line => ({
+    atom: `${line.slice(12, 16)}|${line.slice(76, 78)}`,
+    position: [
+      Number.parseFloat(line.slice(30, 38)),
+      Number.parseFloat(line.slice(38, 46)),
+      Number.parseFloat(line.slice(46, 54)),
+    ],
+  })).filter(record => record.position.every(Number.isFinite));
+}
+function rigidPdbTransform(sourcePdb, targetPdb) {
+  const source = pdbCoordinateRecords(sourcePdb);
+  const target = pdbCoordinateRecords(targetPdb);
+  if (source.length < 3 || source.length !== target.length
+      || source.some((record, index) => record.atom !== target[index].atom)) {
+    throw new Error('Aligned pose atom correspondence is unavailable');
+  }
+  const subtract = (left, right) => left.map((value, index) => value - right[index]);
+  const dot = (left, right) => left.reduce((sum, value, index) => sum + value * right[index], 0);
+  const scale = (vector, factor) => vector.map(value => value * factor);
+  const norm = vector => Math.sqrt(dot(vector, vector));
+  const normalize = vector => {
+    const length = norm(vector);
+    if (!(length > 1e-6)) throw new Error('Aligned pose does not define a stable rigid frame');
+    return scale(vector, 1 / length);
+  };
+  const cross = (left, right) => [
+    left[1] * right[2] - left[2] * right[1],
+    left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0],
+  ];
+  let first = 0, second = 1, farthest = -1;
+  for (let i = 0; i < source.length; i++) {
+    for (let j = i + 1; j < source.length; j++) {
+      const distance = dot(subtract(source[j].position, source[i].position),
+        subtract(source[j].position, source[i].position));
+      if (distance > farthest) { first = i; second = j; farthest = distance; }
+    }
+  }
+  const sourceAxis1 = normalize(subtract(source[second].position, source[first].position));
+  let third = -1, widest = -1;
+  for (let i = 0; i < source.length; i++) {
+    const offset = subtract(source[i].position, source[first].position);
+    const perpendicular = subtract(offset, scale(sourceAxis1, dot(offset, sourceAxis1)));
+    const width = dot(perpendicular, perpendicular);
+    if (width > widest) { third = i; widest = width; }
+  }
+  if (third < 0 || widest < 1e-6) throw new Error('Aligned pose atoms are collinear');
+  const orthonormalBasis = (records) => {
+    const axis1 = normalize(subtract(records[second].position, records[first].position));
+    const offset = subtract(records[third].position, records[first].position);
+    const axis2 = normalize(subtract(offset, scale(axis1, dot(offset, axis1))));
+    return [axis1, axis2, normalize(cross(axis1, axis2))];
+  };
+  const sourceBasis = orthonormalBasis(source);
+  const targetBasis = orthonormalBasis(target);
+  const rotation = Array.from({ length: 3 }, (_, row) => Array.from({ length: 3 }, (_, column) => (
+    targetBasis.reduce((sum, axis, index) => sum + axis[row] * sourceBasis[index][column], 0)
+  )));
+  const applyRotation = position => rotation.map(row => dot(row, position));
+  const centroid = records => records.reduce(
+    (sum, record) => sum.map((value, index) => value + record.position[index]),
+    [0, 0, 0],
+  ).map(value => value / records.length);
+  const sourceCenter = centroid(source), targetCenter = centroid(target);
+  const translation = subtract(targetCenter, applyRotation(sourceCenter));
+  const apply = position => applyRotation(position).map(
+    (value, index) => value + translation[index],
+  );
+  const residuals = source.map((record, index) => norm(
+    subtract(apply(record.position), target[index].position),
+  ));
+  const rmsd = Math.sqrt(residuals.reduce((sum, value) => sum + value * value, 0) / residuals.length);
+  if (!Number.isFinite(rmsd) || rmsd > 0.03 || Math.max(...residuals) > 0.08) {
+    throw new Error('Could not recover the evaluator alignment from this pose');
+  }
+  return { rotation, translation, apply, rmsd };
+}
+function transformPdbCoordinates(text, transform) {
+  const coordinate = value => {
+    const formatted = value.toFixed(3);
+    if (formatted.length > 8) throw new Error('Aligned coordinate exceeds PDB field width');
+    return formatted.padStart(8);
+  };
+  return String(text || '').split(/\r?\n/).map(line => {
+    if (!/^(ATOM  |HETATM)/.test(line)) return line;
+    const position = [
+      Number.parseFloat(line.slice(30, 38)),
+      Number.parseFloat(line.slice(38, 46)),
+      Number.parseFloat(line.slice(46, 54)),
+    ];
+    if (!position.every(Number.isFinite)) return line;
+    const aligned = transform.apply(position);
+    return `${line.slice(0, 30)}${aligned.map(coordinate).join('')}${line.slice(54)}`;
+  }).join('\n');
+}
+function extractAlignedPocketPdb(proteinPdb, ligandPdb, radiusAngstrom = 8) {
+  const anchors = pdbCoordinateRecords(ligandPdb).map(record => record.position);
+  if (!anchors.length) throw new Error('Crystal ligand coordinates are unavailable');
+  const radiusSq = radiusAngstrom * radiusAngstrom;
+  const records = String(proteinPdb || '').split(/\r?\n/).filter(
+    line => line.startsWith('ATOM  '),
+  ).map(line => {
+    const atomName = line.slice(12, 16).trim();
+    const element = (line.slice(76, 78).trim() || atomName.replace(/^[0-9]+/, '').slice(0, 1))
+      .toUpperCase();
+    return {
+      line,
+      chain: line[21] || ' ',
+      residue: `${line[21] || ' '}|${line.slice(22, 27)}`,
+      heavy: element !== 'H' && element !== 'D',
+      position: [
+        Number.parseFloat(line.slice(30, 38)),
+        Number.parseFloat(line.slice(38, 46)),
+        Number.parseFloat(line.slice(46, 54)),
+      ],
+    };
+  }).filter(record => record.heavy && record.position.every(Number.isFinite));
+  const selectedResidues = new Set();
+  for (const record of records) {
+    if (anchors.some(anchor => record.position.reduce(
+      (sum, value, index) => sum + (value - anchor[index]) ** 2,
+      0,
+    ) <= radiusSq)) selectedResidues.add(record.residue);
+  }
+  const selected = records.filter(record => selectedResidues.has(record.residue));
+  if (!selected.length) throw new Error('Aligned folded pocket is empty');
+  const sourceChains = [...new Set(selected.map(record => record.chain))].sort();
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  if (sourceChains.length > alphabet.length) throw new Error('Aligned folded pocket has too many chains');
+  const chainMap = new Map(sourceChains.map((chain, index) => [chain, alphabet[index]]));
+  return selected.map((record, index) => (
+    `ATOM  ${String(index + 1).padStart(5)}${record.line.slice(11, 21)}`
+    + `${chainMap.get(record.chain)}${record.line.slice(22)}`
+  )).join('\n') + '\nEND\n';
+}
+const alignedFoldedAssetCache = new Map();
+async function alignedFoldedAssets(choice, urls) {
+  const key = retrospectiveChoiceKey(choice);
+  if (!key) throw new Error('Folded pose identity is missing');
+  if (!alignedFoldedAssetCache.has(key)) {
+    const pending = (async () => {
+      const [sourcePosePdb, proteinPdb, pocketPdb] = await Promise.all([
+        fetchPdbText(choice.pose_file),
+        fetchPdbText(urls.prot),
+        urls.pocket ? fetchPdbText(urls.pocket) : Promise.resolve(''),
+      ]);
+      if (!sourcePosePdb || !proteinPdb || !choice.answer_overlay_pdb) {
+        throw new Error('Folded alignment assets are incomplete');
+      }
+      const transform = rigidPdbTransform(sourcePosePdb, choice.answer_overlay_pdb);
+      const alignedProteinPdb = transformPdbCoordinates(proteinPdb, transform);
+      return {
+        proteinPdb: alignedProteinPdb,
+        pocketPdb: pocketPdb ? transformPdbCoordinates(pocketPdb, transform) : '',
+        transformRmsd: transform.rmsd,
+      };
+    })().catch(error => {
+      alignedFoldedAssetCache.delete(key);
+      throw error;
+    });
+    alignedFoldedAssetCache.set(key, pending);
+  }
+  return alignedFoldedAssetCache.get(key);
+}
+function relabelPdbRecords(text, options = {}) {
+  const {
+    chain = 'X',
+    residueName = 'LIG',
+    residueNumber = 1,
+    startSerial = 1,
+    recordTypes = /^(ATOM|HETATM)/,
+  } = options;
+  let serial = startSerial;
+  const lines = [];
+  for (const line of String(text || '').split('\n')) {
+    if (!recordTypes.test(line)) continue;
+    const record = line.startsWith('HETATM') ? 'HETATM' : 'ATOM  ';
+    const atomName = line.slice(12, 16);
+    const element = (line.slice(76, 78).trim() || atomName.trim().slice(0, 2) || 'C').padStart(2);
+    const coords = line.slice(30, 54);
+    const occB = line.slice(54, 66).padEnd(12).slice(0, 12);
+    const res = String(residueName || 'LIG').replace(/[^A-Za-z0-9]/g, '').padEnd(3, ' ').slice(0, 3);
+    const chainId = String(chain || 'X').slice(0, 1);
+    const resNum = String(residueNumber ?? 1).padStart(4);
+    lines.push(`${record}${String(serial).padStart(5)} ${atomName} ${res} ${chainId}${resNum}    ${coords}${occB}          ${element}`);
+    serial += 1;
+  }
+  return { text: lines.join('\n'), nextSerial: serial };
+}
+function maxPdbSerial(text) {
+  let maxSerial = 0;
+  for (const line of String(text || '').split('\n')) {
+    if (!/^(ATOM|HETATM)/.test(line)) continue;
+    const serial = Number.parseInt(line.slice(6, 11), 10);
+    if (Number.isFinite(serial)) maxSerial = Math.max(maxSerial, serial);
+  }
+  return maxSerial;
+}
+function mergeRetrospectiveInteractionPdb({
+  pocketPdb,
+  ligandPdb,
+  chain = 'P',
+  residueName = 'PRD',
+}) {
+  const pocketRecords = atomRecords(String(pocketPdb || ''));
+  const parts = [pocketRecords];
+  if (typeof ligandPdb === 'string' && ligandPdb) {
+    parts.push(relabelPdbRecords(ligandPdb, {
+      chain,
+      residueName,
+      residueNumber: 1,
+      startSerial: maxPdbSerial(pocketRecords) + 1,
+    }).text);
+  }
+  return parts.filter(Boolean).join('\nTER\n') + '\nEND\n';
 }
 const prefetchedStructureUrls = new Set();
 async function prefetchQuestionAssets(questionIndex) {
@@ -382,12 +797,135 @@ async function addPose(struct, carbon, targetPlugin = plugin, {
     color: 'element-symbol', colorParams: { carbonColor: { name: 'uniform', params: { value: carbon } } },
   });
 }
+const addCrystalPose = (struct, targetPlugin = plugin) => addPose(
+  struct,
+  XTAL,
+  targetPlugin,
+  { sizeFactor: XTAL_POSE_SIZE },
+);
 async function addSticks(struct, sizeFactor, alpha, targetPlugin = plugin) {
   const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
   if (!comp) return null;
   return targetPlugin.builders.structure.representation.addRepresentation(comp, {
     type: 'ball-and-stick', typeParams: { sizeFactor, alpha }, color: 'element-symbol',
   });
+}
+async function addRetrospectiveCrystalPocketSticks(
+  choice,
+  targetPlugin = plugin,
+  onData = null,
+) {
+  const pocketPdb = choice?.answer_crystal_pocket_pdb;
+  if (typeof pocketPdb !== 'string' || !pocketPdb) {
+    throw new Error('Crystal pocket artifact is missing');
+  }
+  const displayPocketPdb = extractAlignedPocketPdb(
+    pocketPdb,
+    choice.answer_crystal_pdb,
+    5,
+  );
+  const pocket = await loadStructText(displayPocketPdb, 'pdb', targetPlugin);
+  onData?.(pocket.data);
+  await addSticks(pocket.struct, 0.16, 0.95, targetPlugin);
+  return pocket;
+}
+async function addReleasedCrystalLigand(struct, componentId, targetPlugin = plugin) {
+  const repParams = {
+    type: 'ball-and-stick',
+    typeParams: { sizeFactor: XTAL_POSE_SIZE, alpha: 1 },
+    color: 'element-symbol',
+    colorParams: { carbonColor: { name: 'uniform', params: { value: XTAL } } },
+  };
+  const MS = globalThis.molstar?.MolScriptBuilder;
+  if (MS && componentId) {
+    try {
+      const expression = MS.struct.generator.atomGroups({
+        'residue-test': MS.core.rel.eq([
+          MS.struct.atomProperty.macromolecular.label_comp_id(),
+          componentId,
+        ]),
+      });
+      const comp = await targetPlugin.builders.structure.tryCreateComponentFromExpression(
+        struct, expression, `released-ligand-${componentId}`, { label: componentId },
+      );
+      if (comp) {
+        return targetPlugin.builders.structure.representation.addRepresentation(comp, repParams);
+      }
+    } catch (error) {
+      console.warn('Released-crystal ligand selection failed; falling back to all ligands:', error.message);
+    }
+  }
+  return addPose(struct, XTAL, targetPlugin);
+}
+async function clearViewerScene() {
+  if (!proteinData.length && !layerData.length && !hbondData.length) return;
+  const b = plugin.build();
+  for (const x of proteinData) b.delete(x.ref || x);
+  for (const d of layerData) b.delete(d.ref || d);
+  for (const d of hbondData) b.delete(d.ref || d);
+  await b.commit();
+  proteinData = []; layerData = []; hbondData = [];
+  currentProteinKey = null;
+}
+async function addRetrospectiveCrystalContext(
+  targetPlugin = plugin,
+  onData = null,
+  crystalPdbs = [cur.item.answer_overlay?.crystal_ligand_pdb],
+  onCrystalRepresentation = null,
+) {
+  const released = cur.item.released_crystal;
+  const loaded = await loadStruct(
+    released.cif_url,
+    'mmcif',
+    targetPlugin,
+    { name: 'model', params: {} },
+  );
+  onData?.(loaded.data, 'protein');
+  await addRep(loaded.struct, 'polymer', 'cartoon', PROT, 0.5, targetPlugin);
+  if (showSurface) {
+    await addRep(loaded.struct, 'polymer', 'molecular-surface', PROT, 0.7, targetPlugin);
+  }
+  const uniqueCrystals = [...new Set(crystalPdbs)];
+  if (!uniqueCrystals.length || uniqueCrystals.some(pdb => typeof pdb !== 'string' || !pdb)) {
+    throw new Error('Retrospective crystal ligand overlay is missing');
+  }
+  for (const crystalPdb of uniqueCrystals) {
+    const crystal = await loadStructText(crystalPdb, 'pdb', targetPlugin);
+    onData?.(crystal.data, 'layer');
+    const representation = await addCrystalPose(crystal.struct, targetPlugin);
+    onCrystalRepresentation?.(representation, crystalPdb);
+    if (showSurface) {
+      await addRep(crystal.struct, 'all', 'molecular-surface', XTAL, 0.7, targetPlugin);
+    }
+  }
+}
+async function buildReleasedCrystalScene(preserveCamera = true) {
+  let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
+  nextCanonicalCameraSnapshot = null;
+  if (preserveCamera && !preservedCamera) {
+    try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  }
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    syncStageBadge();
+    await clearViewerScene();
+    const released = cur.item.released_crystal;
+    if (isPrivatePrecloseReview()) {
+      await addRetrospectiveCrystalContext(plugin, (data, kind) => {
+        (kind === 'protein' ? proteinData : layerData).push(data);
+      });
+    } else {
+      const loaded = await loadStruct(released.cif_url, 'mmcif');
+      proteinData.push(loaded.data);
+      await addRep(loaded.struct, 'polymer', 'cartoon', PROT, 0.5);
+      await addReleasedCrystalLigand(loaded.struct, released.ligand_component_id);
+    }
+    if (!preserveCamera) plugin.canvas3d?.requestCameraReset?.();
+    await pinCameraSnapshot(plugin, preservedCamera);
+    viewerTraceRecorder?.captureState();
+  } finally {
+    releaseCamera();
+  }
 }
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function decorateClusterMembers(members, label, source) {
@@ -455,15 +993,110 @@ function syncReviewState() {
 
 function oneReviewChoice() {
   if (!cur || displayMode !== 'one') return null;
-  const choices = visibleChoices();
+  const choices = retrospectiveNavChoices();
   return choices[Math.min(shownOne, Math.max(0, choices.length - 1))] || null;
+}
+
+const retrospectiveChoiceKey = choice => {
+  const choiceId = choice?._weeklyChoiceId || choice?.id || choice?.label || '';
+  return choiceId ? `${cur?.item?.id || ''}|${choiceId}` : '';
+};
+
+async function setRetrospectiveProteinFrame(frame) {
+  if (!retrospectiveAnswerActive() || !['xtal', 'folded'].includes(frame)
+      || frame === retrospectiveProteinFrame || viewerControlBlocked()) return;
+  const choice = oneReviewChoice();
+  if (frame === 'folded' && choice && isXtalReferenceChoice(choice)) return;
+  const cameraSnapshot = plugin.canvas3d?.camera?.getSnapshot?.() || null;
+  await viewerRebuild.enqueue(() => {
+    retrospectiveProteinFrame = frame;
+    currentProteinKey = null;
+    nextCanonicalCameraSnapshot = cameraSnapshot;
+    resetCameraOnNextBuild = !cameraSnapshot;
+    syncButtons();
+  }, async () => {
+    plugin.canvas3d?.requestDraw?.();
+    await nextAnimationFrame();
+    plugin.canvas3d?.requestDraw?.();
+    renderUI();
+    syncButtons();
+  });
+}
+
+async function setRetrospectiveGridProteinFrame(choice, frame) {
+  const key = retrospectiveChoiceKey(choice);
+  if (!retrospectiveAnswerActive() || displayMode !== 'grid' || !key
+      || isXtalReferenceChoice(choice) || !['xtal', 'folded'].includes(frame)
+      || (retrospectiveGridProteinFrames.get(key) || 'xtal') === frame
+      || viewerControlBlocked()) return;
+  const cell = gridViewers.find(candidate => sameChoice(candidate.entry.choice, choice));
+  if (!cell?.plugin || cell.disposed || cell.failed) return;
+  const previousFrame = cell.spec.retrospectiveProteinFrame || 'xtal';
+  const previousCamera = cell.plugin.canvas3d?.camera?.getSnapshot?.() || null;
+  const revision = gridBuildRevision;
+  const sceneRevision = (cell.sceneRevision || 0) + 1;
+  const releaseCamera = holdCameraSnapshot(cell.plugin, previousCamera);
+  cell.sceneRevision = sceneRevision;
+  viewerTransitionBusy = true;
+  setViewerControlsBusy(true);
+  if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
+  retrospectiveGridProteinFrames.set(key, frame);
+  cell.spec.retrospectiveProteinFrame = frame;
+  cell.card.classList.add('loading-frame');
+  syncGridFrameControls(cell);
+  try {
+    try { cell.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
+    cell.poseClickSubscription = null;
+    await cell.plugin.clear();
+    if (cell.disposed || revision !== gridBuildRevision || sceneRevision !== cell.sceneRevision) return;
+    cell.poseSphere = null;
+    cell.hbondStatus = '';
+    await populateGridCell(cell, revision, { preserveCamera: previousCamera });
+  } catch (error) {
+    if (!cell.disposed && revision === gridBuildRevision && sceneRevision === cell.sceneRevision) {
+      console.warn('Could not switch this Grid protein frame:', error.message);
+      retrospectiveGridProteinFrames.set(key, previousFrame);
+      cell.spec.retrospectiveProteinFrame = previousFrame;
+      syncGridFrameControls(cell);
+      try {
+        await cell.plugin.clear();
+        await populateGridCell(cell, revision, { preserveCamera: previousCamera });
+      } catch (restoreError) {
+        console.warn('Could not restore this Grid card:', restoreError.message);
+      }
+    }
+  } finally {
+    if (!cell.disposed && revision === gridBuildRevision && sceneRevision === cell.sceneRevision) {
+      cell.card.classList.remove('loading-frame');
+      refreshGridCameraSync();
+    }
+    viewerTransitionBusy = false;
+    setViewerControlsBusy(false);
+    releaseCamera();
+  }
+}
+
+function syncGridFrameControls(cell) {
+  const frame = cell.spec.retrospectiveProteinFrame || 'xtal';
+  cell.card.querySelectorAll('[data-frame]').forEach(button => {
+    const on = button.dataset.frame === frame;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function refreshGridCameraSync() {
+  if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
+  const active = gridViewers.filter(cell => !cell.disposed && cell.plugin?.canvas3d);
+  if (active.length) stopGridCameraSync = syncGridCameras(active);
 }
 
 function syncOneReviewState() {
   const actions = $('#one-review-actions');
   if (!actions) return;
   const choice = oneReviewChoice();
-  const visible = !!choice && cur.item.source === 'weekly' && !cur.revealed;
+  const retrospective = !!choice && retrospectiveAnswerActive();
+  const visible = !!choice && cur.item.source === 'weekly' && (!cur.revealed || retrospective);
   const rejected = visible && choiceRejected(choice);
   // Match Grid's whole-card rejection treatment in One-at-a-time. Applying
   // the shared class to the viewer shell mutes every molecular layer together
@@ -471,12 +1104,27 @@ function syncOneReviewState() {
   $('#app')?.classList.toggle('rejected', rejected);
   actions.hidden = !visible;
   if (!visible) return;
-  const selected = gridChoiceSelected(choice);
   const select = $('#one-select');
+  const reject = $('#one-reject');
+  if (retrospective) {
+    $('#app')?.classList.remove('rejected');
+    const effectiveFrame = isXtalReferenceChoice(choice) ? 'xtal' : retrospectiveProteinFrame;
+    select.textContent = 'Xtal';
+    select.classList.toggle('on', effectiveFrame === 'xtal');
+    select.setAttribute('aria-pressed', String(effectiveFrame === 'xtal'));
+    reject.classList.remove('reject');
+    reject.textContent = 'Folded';
+    reject.classList.toggle('on', effectiveFrame === 'folded');
+    reject.setAttribute('aria-pressed', String(effectiveFrame === 'folded'));
+    reject.disabled = isXtalReferenceChoice(choice);
+    return;
+  }
+  const selected = gridChoiceSelected(choice);
   select.classList.toggle('on', selected);
   select.textContent = selected ? 'Selected ✓' : 'Select';
   select.setAttribute('aria-pressed', String(selected));
-  const reject = $('#one-reject');
+  reject.classList.add('reject');
+  reject.disabled = false;
   reject.classList.toggle('on', rejected);
   reject.textContent = rejected ? 'Undo reject' : 'Reject';
   reject.setAttribute('aria-pressed', String(rejected));
@@ -507,7 +1155,8 @@ async function toggleChoiceRejected(choice) {
 }
 
 function inspectGridChoice(entry, paneId, reason = 'inspect') {
-  if (!cur || interactionBlocked()) return;
+  const retrospectiveInspection = retrospectiveAnswerActive() && displayMode === 'grid';
+  if (!cur || (retrospectiveInspection ? viewerControlBlocked() : interactionBlocked())) return;
   cur.contextChoice = entry.choice;
   cur.poseFocusChoice = entry.choice;
   selectedPaneId = paneId;
@@ -517,8 +1166,11 @@ function inspectGridChoice(entry, paneId, reason = 'inspect') {
 }
 
 function inspectCanonicalChoice(choice) {
-  if (!cur || interactionBlocked()) return;
-  const index = visibleIndexForChoice(choice);
+  const retrospectiveInspection = retrospectiveAnswerActive() && displayMode === 'one';
+  if (!cur || (retrospectiveInspection ? viewerControlBlocked() : interactionBlocked())) return;
+  const index = retrospectiveInspection && isXtalReferenceChoice(choice)
+    ? retrospectiveNavChoices().findIndex(candidate => sameChoice(candidate, choice))
+    : visibleIndexForChoice(choice);
   if (index < 0) return;
   shownOne = index;
   cur.contextChoice = choice;
@@ -557,7 +1209,38 @@ function restorePoseFocusAfterClusterToggle(exactChoice) {
 // choice ID), but the geometry shows every member: faint members first and the
 // representative last so its colour and silhouette stay visually dominant.
 function weeklyPoseLayers(choices) {
-  if (cur?.item?.source !== 'weekly' || cur.revealed && cur.showAnswer) {
+  if (cur?.item?.source !== 'weekly') {
+    return choices.map(choice => ({ choice, ghost: false }));
+  }
+  if (retrospectiveAnswerActive()) {
+    const focused = displayMode === 'all' ? cur.contextChoice : null;
+    if (displayMode === 'all') {
+      const visibleFocus = clustered && focused && !isXtalReferenceChoice(focused)
+        ? (clusterForChoice(focused)?.rep || focused)
+        : focused;
+      return choices.map(choice => ({
+        choice,
+        ghost: !!visibleFocus && !sameChoice(choice, visibleFocus),
+      }));
+    }
+    if (!clustered) return choices.map(choice => ({
+      choice,
+      ghost: false,
+    }));
+    return choices.flatMap(choice => {
+      const cluster = clusterForChoice(choice);
+      const members = !cluster || cluster.members.length < 2
+        ? [choice]
+        : [...cluster.members.filter(member => !sameChoice(member, choice)), choice];
+      return members.map(member => ({
+        choice: member,
+        ghost: focused
+          ? !sameChoice(member, focused)
+          : !sameChoice(member, choice),
+      }));
+    });
+  }
+  if (cur.revealed && cur.showAnswer) {
     return choices.map(choice => ({ choice, ghost: false }));
   }
   if (displayMode === 'all') {
@@ -732,8 +1415,9 @@ async function activateCanonicalPoseChoice(index, choice) {
   const revision = ++canonicalPoseActivationRevision;
   const item = cur?.item;
   const cameraSnapshot = await cameraSnapshotAfterInteraction(plugin);
+  const retrospective = retrospectiveAnswerActive();
   if (revision !== canonicalPoseActivationRevision || cur?.item !== item
-      || displayMode !== 'all' || cur?.revealed) return;
+      || displayMode !== 'all' || (cur?.revealed && !retrospective)) return;
   await viewerRebuild.enqueue(() => {
     shownOne = index;
     cur.contextChoice = choice;
@@ -752,6 +1436,9 @@ async function clearWeeklyShowAllContext() {
     cur.contextChoice = null;
     cur.poseFocusChoice = null;
     selectedPaneId = null;
+    resetCameraOnNextBuild = true;
+  }, () => {
+    plugin.canvas3d?.requestCameraReset?.();
   });
   recordAppEvent('pose_context_cleared');
 }
@@ -762,8 +1449,11 @@ function visibleIndexForChoice(choice) {
   return visible.findIndex(candidate => clusterForChoice(candidate) === cluster);
 }
 function onCanonicalPoseInteraction(event) {
-  if (interactionBlocked() || cur?.item?.source !== 'weekly'
-      || displayMode === 'grid' || cur.revealed) return;
+  const retrospectiveInteraction = retrospectiveAnswerActive()
+    && (displayMode === 'one' || displayMode === 'all');
+  if ((retrospectiveInteraction ? viewerControlBlocked() : interactionBlocked())
+      || cur?.item?.source !== 'weekly' || displayMode === 'grid'
+      || (cur.revealed && !retrospectiveInteraction)) return;
   const choice = choiceFromPoseInteraction(event);
   if (!choice) {
     canonicalPoseActivationRevision++;
@@ -775,12 +1465,13 @@ function onCanonicalPoseInteraction(event) {
     return;
   }
   clearTransientPoseSelection(plugin);
-  const index = visibleIndexForChoice(choice);
-  if (index < 0) return;
   if (displayMode === 'one') {
     inspectCanonicalChoice(choice);
     return;
   }
+  const xtalReference = isXtalReferenceChoice(choice);
+  const index = xtalReference ? -1 : visibleIndexForChoice(choice);
+  if (index < 0 && !xtalReference) return;
   if (sameChoice(choice, cur.contextChoice)) return;
   void activateCanonicalPoseChoice(index, choice).catch(error => {
     console.warn('Could not inspect the clicked pose:', error.message);
@@ -790,6 +1481,64 @@ function acceptedChoiceCorrect(choice) {
   return cur?.item?.source === 'weekly'
     ? choice?.clusterAccepted === true
     : choice?.correct === true;
+}
+function rawChoiceCorrect(choice) {
+  return choice?.correct === true;
+}
+function allItemChoices() {
+  return cur?.clusters?.flatMap(cluster => cluster.members) || [];
+}
+function bestRawCorrectPose(choices = allItemChoices()) {
+  return choices
+    .filter(choice => rawChoiceCorrect(choice) && Number.isFinite(choice.rmsd))
+    .sort((left, right) => left.rmsd - right.rmsd)[0] || null;
+}
+function weeklyResultsRevealActive() {
+  return quizSource === 'weekly'
+    && (WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview());
+}
+function retrospectiveAnswerActive() {
+  return weeklyResultsRevealActive() && !!cur?.revealed && !!cur.showAnswer;
+}
+function answerViewPoseCorrect(choice) {
+  if (!cur?.revealed || !cur.showAnswer || cur.item.source !== 'weekly') {
+    return acceptedChoiceCorrect(choice);
+  }
+  return rawChoiceCorrect(choice);
+}
+function answerPoseStatus(choice) {
+  if (rawChoiceCorrect(choice)) return 'Exact correct ✓';
+  if (choice?.clusterAccepted === true) return 'Cluster-accepted only';
+  return 'Incorrect';
+}
+function exactChoicesForEntry(entry) {
+  const choices = clustered && entry?.cluster
+    ? entry.cluster.members
+    : [entry?.choice].filter(Boolean);
+  return choices
+    .filter(rawChoiceCorrect)
+    .sort((left, right) => left.rmsd - right.rmsd);
+}
+function applyAnswerRevealView() {
+  const choices = allItemChoices();
+  const best = bestRawCorrectPose(choices);
+  cur.answerRevealBest = best;
+  releasedCrystalMode = false;
+  showXtal = false;
+  releasedCrystalError = '';
+  if (best && displayMode === 'one') {
+    const vis = visibleChoices();
+    const index = vis.findIndex(choice => sameChoice(choice, best));
+    shownOne = index >= 0 ? index : 0;
+    cur.contextChoice = best;
+    cur.poseFocusChoice = best;
+  } else {
+    if (displayMode === 'one') shownOne = 0;
+    cur.contextChoice = null;
+    cur.poseFocusChoice = null;
+  }
+  resetCameraOnNextBuild = true;
+  syncXtalRow();
 }
 function displayedPoseLabel(choice, asCluster = clustered) {
   if (!choice) return '';
@@ -804,18 +1553,32 @@ function gridPageMethod() {
 }
 function gridEntriesFor(method) {
   const vis = visibleChoices();
-  if (!method) return vis.map((choice, choiceIndex) => {
+  let entries;
+  if (!method) entries = vis.map((choice, choiceIndex) => {
     const cluster = cur.clusters.find(c => c.members.includes(choice));
     return { choice, choiceIndex, cluster, memberCount: clustered ? cluster.members.length : 1 };
   });
-  if (!clustered) return vis.map((choice, choiceIndex) => ({ choice, choiceIndex,
+  else if (!clustered) entries = vis.map((choice, choiceIndex) => ({ choice, choiceIndex,
     cluster: cur.clusters.find(c => c.members.includes(choice)), memberCount: 1 }))
     .filter(x => x.choice._method === method);
-  return cur.clusters.map((cluster, choiceIndex) => {
+  else entries = cur.clusters.map((cluster, choiceIndex) => {
     const members = cluster.members.filter(c => c._method === method);
     const choice = members.find(c => c.is_rep) || members[0];
     return choice ? { choice, choiceIndex, cluster, memberCount: members.length } : null;
   }).filter(Boolean);
+  if (retrospectiveAnswerActive() && itemHasReleasedCrystal(cur?.item)) {
+    entries = [
+      ...entries,
+      {
+        choice: buildXtalReferenceChoice(cur.item),
+        choiceIndex: entries.length,
+        cluster: null,
+        memberCount: 1,
+        xtalReference: true,
+      },
+    ];
+  }
+  return entries;
 }
 function weeklyGridPage() {
   const entries = gridEntriesFor(null);
@@ -850,7 +1613,7 @@ async function pickSidebarEntry(entry) {
   await onPick(entry.choiceIndex, displayMode === 'grid' ? entry.choice : null);
   if (displayMode !== 'grid' || cur?.item?.source !== 'weekly') return;
   const pageIndex = weeklyGridPageIndexForChoice(entry.choice);
-  if (pageIndex === gridMethodIndex || interactionBlocked()) return;
+  if (pageIndex === gridMethodIndex || viewerControlBlocked()) return;
   await viewerRebuild.enqueue(
     () => { gridMethodIndex = pageIndex; },
     () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
@@ -864,6 +1627,34 @@ function syncGridSelection() {
   for (const cell of gridViewers) {
     cell.card?.classList.toggle('selected', !cell.failed && gridChoiceSelected(cell.entry.choice));
   }
+}
+
+function applyPrivateRetrospectiveAnswer() {
+  if (!isPrivatePrecloseReview() || cur?.item?.source !== 'weekly') return false;
+  const choices = allItemChoices();
+  const best = window.foldariumPrivateReview?.selectRetrospectiveAnswer?.({ choices })
+    || bestRawCorrectPose(choices);
+  cur.selected = best || {
+    none: true,
+    correct: true,
+    label: 'None of these',
+  };
+  cur.selectionExact = true;
+  cur.selectedAsCluster = false;
+  cur.answerChoices = choices;
+  cur.revealed = true;
+  cur.showAnswer = true;
+  applyAnswerRevealView();
+  if (displayMode === 'all') {
+    cur.contextChoice = null;
+    cur.poseFocusChoice = null;
+  }
+  if (itemHasReleasedCrystal(cur.item)) {
+    releasedCrystalMode = false;
+    showXtal = true;
+    releasedCrystalError = '';
+  }
+  return true;
 }
 function renderGridPages() {
   const nav = $('#gridpages'), methods = cur?.gridMethods || [];
@@ -880,7 +1671,7 @@ function renderGridPages() {
       const end = Math.min((i + 1) * GRID_PAGE_SIZE, allGridEntries().length);
       b.textContent = `${start}–${end}`;
       b.onclick = async () => {
-        if (i === gridMethodIndex || interactionBlocked()) return;
+        if (i === gridMethodIndex || viewerControlBlocked()) return;
         await viewerRebuild.enqueue(
           () => { gridMethodIndex = i; },
           () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
@@ -897,7 +1688,7 @@ function renderGridPages() {
     b.classList.toggle('on', i === gridMethodIndex);
     b.textContent = cur.showAnswer ? methodName(method) : `Set ${i + 1}`;
     b.onclick = async () => {
-      if (i === gridMethodIndex || interactionBlocked()) return;
+      if (i === gridMethodIndex || viewerControlBlocked()) return;
       await viewerRebuild.enqueue(
         () => { gridMethodIndex = i; },
         () => { renderGridPages(); renderUI(); recordAppEvent('grid_page_changed'); },
@@ -923,22 +1714,65 @@ function gridProteinUrls(choice, spec) {
 }
 function gridHeader(entry) {
   const c = entry.choice, answer = cur.revealed && cur.showAnswer;
+  if (isXtalReferenceChoice(c)) {
+    return `<span class="grid-dot" style="background:${hex(XTAL)}"></span><span class="grid-title">Xtal reference</span>`;
+  }
   const bits = [];
   if (clustered && entry.memberCount > 1) bits.push(`${entry.memberCount} poses`);
   if (cur.item.source === 'weekly') {
-    const confidence = weeklyLigandPlddt(c);
-    if (confidence) bits.push(confidence);
+    if (answer) {
+      const members = clustered && entry.cluster ? entry.cluster.members : [c];
+      const votes = members.reduce(
+        (total, choice) => total + Number(choice._weeklyVoteCount || 0),
+        0,
+      );
+      bits.push(`${votes} votes`);
+    } else {
+      const confidence = weeklyLigandPlddt(c);
+      if (confidence) bits.push(confidence.replace(/^ligand /, ''));
+    }
   }
   if (answer) {
-    bits.push(`${c.rmsd.toFixed(2)} Å`);
     if (cur.item.source === 'rnp' && c._method) bits.push(methodName(c._method));
-    if (cur.item.source === 'weekly') bits.push(`${c._weeklyVoteCount || 0} votes`);
     if (gridChoiceSelected(c)) bits.push('YOU');
     if (c.af3_sample === cur.item.plddt_pick_sample) bits.push('AI');
   }
-  const color = answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color;
-  return `<span class="grid-dot" style="background:${hex(color)}"></span><span>Pose ${displayedPoseLabel(c)}</span>`
-    + (bits.length ? `<span class="grid-meta">· ${bits.join(' · ')}</span>` : '');
+  const color = answer ? (answerViewPoseCorrect(c) ? GOOD : BAD) : c.color;
+  const rmsd = answer && Number.isFinite(c.rmsd)
+    ? `<span class="grid-rmsd ${answerViewPoseCorrect(c) ? 'correct' : 'wrong'}">RMSD ${c.rmsd.toFixed(2)} Å</span>`
+    : '';
+  return `<span class="grid-dot" style="background:${hex(color)}"></span><span class="grid-title">Pose ${displayedPoseLabel(c)}</span>`
+    + rmsd
+    + (bits.length ? `<span class="grid-meta">${bits.join(' · ')}</span>` : '');
+}
+function viewerQuestionIdentity() {
+  const released = cur?.item?.released_crystal;
+  if (isPrivatePrecloseReview() && released?.pdb_id && released?.structure_page_url) {
+    return {
+      label: released.pdb_id.toUpperCase(),
+      url: released.structure_page_url,
+    };
+  }
+  return { label: cur?.item?.ligand || '', url: null };
+}
+function renderViewerQuestionTitle(poseSummary) {
+  const host = $('#ligand');
+  const identity = viewerQuestionIdentity();
+  host.replaceChildren();
+  if (identity.url) {
+    const link = document.createElement('a');
+    link.href = identity.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = `${identity.label} ↗`;
+    link.setAttribute('aria-label', `Open ${identity.label} in RCSB`);
+    host.appendChild(link);
+  } else {
+    host.append(identity.label);
+  }
+  const summary = document.createElement('small');
+  summary.textContent = `· ${poseSummary}`;
+  host.append(' ', summary);
 }
 function attachPoseInfo(root, evidence) {
   if (!evidence) return;
@@ -1042,11 +1876,17 @@ function layoutGrid() {
   for (let columns = 1; columns <= Math.min(3, n); columns++) {
     const rows = Math.ceil(n / columns);
     const tileWidth = Math.min((width - gap * (columns - 1)) / columns, (height - gap * (rows - 1)) / rows * aspect);
-    if (!best || tileWidth > best.tileWidth) best = { tileWidth, tileHeight: tileWidth / aspect };
+    if (!best || tileWidth > best.tileWidth) {
+      best = { columns, tileWidth, tileHeight: tileWidth / aspect };
+    }
   }
   if (!best || best.tileWidth <= 0) return;
-  box.style.setProperty('--grid-card-w', `${Math.floor(best.tileWidth * 10) / 10}px`);
-  box.style.setProperty('--grid-card-h', `${Math.floor(best.tileHeight * 10) / 10}px`);
+  const cardWidth = Math.floor(best.tileWidth * 10) / 10;
+  const cardHeight = Math.floor(best.tileHeight * 10) / 10;
+  const gridWidth = Math.floor((cardWidth * best.columns + gap * (best.columns - 1)) * 10) / 10;
+  box.style.setProperty('--grid-card-w', `${cardWidth}px`);
+  box.style.setProperty('--grid-card-h', `${cardHeight}px`);
+  box.style.maxWidth = `${gridWidth}px`;
   for (const cell of gridViewers) cell.viewer?.handleResize?.();
 }
 function reserveGridControlClearance() {
@@ -1110,22 +1950,173 @@ function syncGridCameras(cells) {
   raf = requestAnimationFrame(tick);
   return () => { enabled = false; cancelAnimationFrame(raf); };
 }
-async function buildGridCell(cell, revision) {
-  try {
-    const gridViewer = await molstar.Viewer.create(cell.host, { ...OPTS, extensions: [] });
-    cell.viewer = gridViewer; cell.plugin = gridViewer.plugin;
-    if (revision !== gridBuildRevision || cell.disposed) return gridViewer.dispose();
-    configurePlugin(cell.plugin);
-    try {
-      cell.detachReplay = viewerTraceRecorder?.attachPane?.({
-        plugin: cell.plugin,
-        paneId: cell.paneId,
-        element: cell.card,
-      }) || null;
-    } catch (error) {
-      console.warn('Grid pane replay attachment omitted:', error.message);
+async function buildRetrospectiveXtalGridCell(cell) {
+  const xtal = cell.entry.choice;
+  await addRetrospectiveCrystalContext(
+    cell.plugin,
+    null,
+    [xtal.answer_crystal_pdb],
+    representation => registerPoseClickTarget(representation, xtal),
+  );
+  await addRetrospectiveCrystalPocketSticks(xtal, cell.plugin);
+  if (cell.spec.showHbonds) {
+    const pocketPdb = xtal.answer_crystal_pocket_pdb;
+    if (typeof pocketPdb !== 'string' || !pocketPdb) {
+      cell.hbondStatus = 'H-bonds unavailable: crystal pocket artifact is missing.';
+    } else {
+      try {
+        await buildRetrospectiveInteractions(
+          pocketPdb,
+          null,
+          xtal.answer_crystal_pdb,
+          cell.plugin,
+          null,
+          { includePredicted: false },
+        );
+      } catch (error) {
+        cell.hbondStatus = `H-bonds unavailable: ${error.message}`;
+      }
     }
-    const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
+  }
+  cell.poseSphere = null;
+}
+async function buildRetrospectiveGridCell(cell, c) {
+  if (isXtalReferenceChoice(c)) {
+    await buildRetrospectiveXtalGridCell(cell);
+    return;
+  }
+  const poseMembers = cell.spec.clustered
+    ? [
+        ...(cell.entry.cluster?.members || []).filter(member => !sameChoice(member, c))
+          .map(choice => ({ choice, ghost: true })),
+        { choice: c, ghost: false },
+      ]
+    : [{ choice: c, ghost: false }];
+  await addRetrospectiveCrystalContext(
+    cell.plugin,
+    null,
+    poseMembers.map(layer => layer.choice.answer_crystal_pdb),
+  );
+  await addRetrospectiveCrystalPocketSticks(c, cell.plugin);
+  for (const layer of poseMembers) {
+    if (typeof layer.choice.answer_overlay_pdb !== 'string' || !layer.choice.answer_overlay_pdb) {
+      throw new Error(`Retrospective pose overlay is missing for ${
+        layer.choice._weeklyChoiceId || layer.choice.id
+      }`);
+    }
+    const pose = await loadStructText(layer.choice.answer_overlay_pdb, 'pdb', cell.plugin);
+    const poseColor = answerViewPoseCorrect(layer.choice) ? GOOD : BAD;
+    const poseRepresentation = await addPose(
+      pose.struct,
+      poseColor,
+      cell.plugin,
+      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined,
+    );
+    let surfaceRepresentation = null;
+    if (cell.spec.showSurface && !layer.ghost) {
+      surfaceRepresentation = await addRep(
+        pose.struct, 'all', 'molecular-surface', poseColor, 0.7, cell.plugin,
+      );
+    }
+    registerPoseClickTarget(poseRepresentation, layer.choice);
+    registerPoseClickTarget(surfaceRepresentation, layer.choice);
+    if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
+  }
+  if (cell.spec.showHbonds && itemHasReleasedCrystal(cell.spec.item)) {
+    const pocketPdb = c.answer_crystal_pocket_pdb;
+    if (typeof pocketPdb !== 'string' || !pocketPdb) {
+      cell.hbondStatus = 'H-bonds unavailable: crystal pocket artifact is missing.';
+    } else {
+      try {
+        await buildRetrospectiveInteractions(
+          pocketPdb,
+          c.answer_overlay_pdb,
+          c.answer_crystal_pdb,
+          cell.plugin,
+          null,
+        );
+      } catch (error) {
+        cell.hbondStatus = `H-bonds unavailable: ${error.message}`;
+        console.warn('Retrospective grid H-bonds omitted:', error.message);
+      }
+    }
+  }
+}
+async function buildRetrospectiveFoldedGridCell(cell, c, urls) {
+  const aligned = await alignedFoldedAssets(c, urls);
+  const protein = await loadStructText(aligned.proteinPdb, 'pdb', cell.plugin);
+  await addRep(protein.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
+  if (cell.spec.showSurface) {
+    await addRep(protein.struct, 'polymer', 'molecular-surface', urls.color, 0.7, cell.plugin);
+  }
+  if (aligned.pocketPdb) {
+    const pocket = await loadStructText(aligned.pocketPdb, 'pdb', cell.plugin);
+    await addSticks(pocket.struct, 0.16, 0.95, cell.plugin);
+  }
+  const poseMembers = cell.spec.clustered
+    ? [
+        ...(cell.entry.cluster?.members || []).filter(member => !sameChoice(member, c))
+          .map(choice => ({ choice, ghost: true })),
+        { choice: c, ghost: false },
+      ]
+    : [{ choice: c, ghost: false }];
+  const crystalChoiceByPdb = new Map();
+  for (const layer of poseMembers) {
+    if (!crystalChoiceByPdb.has(layer.choice.answer_crystal_pdb)) {
+      crystalChoiceByPdb.set(layer.choice.answer_crystal_pdb, layer.choice);
+    }
+  }
+  for (const [crystalPdb, crystalChoice] of crystalChoiceByPdb) {
+    const crystal = await loadStructText(crystalPdb, 'pdb', cell.plugin);
+    const representation = await addCrystalPose(crystal.struct, cell.plugin);
+    registerPoseClickTarget(representation, crystalChoice);
+    if (cell.spec.showSurface) {
+      await addRep(crystal.struct, 'all', 'molecular-surface', XTAL, 0.7, cell.plugin);
+    }
+  }
+  for (const layer of poseMembers) {
+    const pose = await loadStructText(layer.choice.answer_overlay_pdb, 'pdb', cell.plugin);
+    const poseColor = answerViewPoseCorrect(layer.choice) ? GOOD : BAD;
+    const representation = await addPose(
+      pose.struct,
+      poseColor,
+      cell.plugin,
+      layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined,
+    );
+    let surfaceRepresentation = null;
+    if (cell.spec.showSurface && !layer.ghost) {
+      surfaceRepresentation = await addRep(
+        pose.struct, 'all', 'molecular-surface', poseColor, 0.7, cell.plugin,
+      );
+    }
+    registerPoseClickTarget(representation, layer.choice);
+    registerPoseClickTarget(surfaceRepresentation, layer.choice);
+    if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
+  }
+  if (cell.spec.showHbonds && aligned.pocketPdb) {
+    try {
+      await buildRetrospectiveInteractions(
+        aligned.pocketPdb,
+        c.answer_overlay_pdb,
+        c.answer_crystal_pdb,
+        cell.plugin,
+      );
+    } catch (error) {
+      cell.hbondStatus = `H-bonds unavailable: ${error.message}`;
+      console.warn('Folded-protein Grid H-bonds omitted:', error.message);
+    }
+  }
+}
+async function populateGridCell(cell, revision, { preserveCamera = null } = {}) {
+  const c = cell.entry.choice, urls = gridProteinUrls(c, cell.spec);
+  const crystalFrame = cell.spec.retrospectiveProteinFrame !== 'folded'
+    || isXtalReferenceChoice(c);
+  if (cell.spec.privateReview && cell.spec.answer && !crystalFrame) {
+    await buildRetrospectiveFoldedGridCell(cell, c, urls);
+  } else if (cell.spec.privateReview && cell.spec.answer && crystalFrame
+      && itemHasReleasedCrystal(cell.spec.item)) {
+    await buildRetrospectiveGridCell(cell, c);
+  } else {
     const pr = await loadStruct(urls.prot, 'pdb', cell.plugin);
     await addRep(pr.struct, 'polymer', 'cartoon', urls.color, 0.5, cell.plugin);
     if (cell.spec.showSurface) {
@@ -1151,35 +2142,63 @@ async function buildGridCell(cell, revision) {
       : [{ choice: c, ghost: false }];
     for (const layer of poseMembers) {
       const pose = await loadStruct(layer.choice.pose_file, 'pdb', cell.plugin);
+      const poseColor = cell.spec.answer
+        ? ((cell.spec.privateReview ? answerViewPoseCorrect(layer.choice) : acceptedChoiceCorrect(layer.choice))
+          ? GOOD : BAD)
+        : c.color;
       const poseRepresentation = await addPose(pose.struct,
-        cell.spec.answer ? (acceptedChoiceCorrect(layer.choice) ? GOOD : BAD) : c.color,
+        poseColor,
         cell.plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
       let surfaceRepresentation = null;
       if (cell.spec.showSurface && !layer.ghost) {
         surfaceRepresentation = await addRep(
-          pose.struct, 'all', 'molecular-surface', c.color, 0.7, cell.plugin);
+          pose.struct, 'all', 'molecular-surface', poseColor, 0.7, cell.plugin);
       }
       registerPoseClickTarget(poseRepresentation, c);
       registerPoseClickTarget(surfaceRepresentation, c);
       if (!layer.ghost) cell.poseSphere = structureSphere(pose.struct);
     }
-    cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
-      if (locked() || !sameChoice(choiceFromPoseInteraction(event), c)) return;
-      clearTransientPoseSelection(cell.plugin);
-      inspectGridChoice(cell.entry, cell.paneId, 'ligand-click');
-    }) || null;
     if (cell.spec.showHbonds && urls.pocket) {
       await buildInteractions(urls.pocket, [c.pose_file], cell.plugin);
     }
-    if (revision === gridBuildRevision && !cell.disposed) {
-      cell.viewer.handleResize?.();
-      await window.waitForCameraSettled({
-        cameraChanged: cameraChanges(cell.plugin),
-        requestReset: () => cell.plugin.canvas3d?.requestCameraReset?.(),
-      });
-      cell.cameraEnvelope = cell.plugin.canvas3d?.camera?.getSnapshot?.() || null;
+  }
+  if (cell.spec.item.source === 'weekly') {
+    cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
+      if ((locked() && !cell.spec.privateReview)
+          || !sameChoice(choiceFromPoseInteraction(event), c)) return;
+      clearTransientPoseSelection(cell.plugin);
+      inspectGridChoice(cell.entry, cell.paneId, 'ligand-click');
+    }) || null;
+  }
+  if (revision !== gridBuildRevision || cell.disposed) return;
+  cell.viewer.handleResize?.();
+  if (preserveCamera) {
+    await pinCameraSnapshot(cell.plugin, preserveCamera);
+  } else {
+    await window.waitForCameraSettled({
+      cameraChanged: cameraChanges(cell.plugin),
+      requestReset: () => cell.plugin.canvas3d?.requestCameraReset?.(),
+    });
+  }
+  cell.cameraEnvelope = cell.plugin.canvas3d?.camera?.getSnapshot?.() || null;
+}
+async function buildGridCell(cell, revision) {
+  try {
+    const gridViewer = await molstar.Viewer.create(cell.host, { ...OPTS, extensions: [] });
+    cell.viewer = gridViewer; cell.plugin = gridViewer.plugin;
+    if (revision !== gridBuildRevision || cell.disposed) return gridViewer.dispose();
+    configurePlugin(cell.plugin);
+    try {
+      cell.detachReplay = viewerTraceRecorder?.attachPane?.({
+        plugin: cell.plugin,
+        paneId: cell.paneId,
+        element: cell.card,
+      }) || null;
+    } catch (error) {
+      console.warn('Grid pane replay attachment omitted:', error.message);
     }
+    await populateGridCell(cell, revision);
   } catch (e) {
     try { cell.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
     cell.poseClickSubscription = null;
@@ -1209,8 +2228,17 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
   const cells = gridEntries().map((entry, paneIndex) => {
     const paneId = `pane-${gridMethodIndex}-${paneIndex}`;
     const card = document.createElement('div');
+    const xtalReference = isXtalReferenceChoice(entry.choice);
+    const answerActive = cur.revealed && cur.showAnswer;
+    const entryProteinFrame = xtalReference
+      ? 'xtal'
+      : (retrospectiveGridProteinFrames.get(retrospectiveChoiceKey(entry.choice)) || 'xtal');
+    const exactEntryChoices = answerActive && !xtalReference
+      ? exactChoicesForEntry(entry) : [];
     card.className = 'grid-card'
-      + ((cur.revealed && cur.showAnswer) ? (acceptedChoiceCorrect(entry.choice) ? ' correct' : ' wrong') : '')
+      + ((answerActive && !xtalReference)
+        ? (exactEntryChoices.length ? ' correct' : ' wrong') : '')
+      + (xtalReference ? ' xtal-reference' : '')
       + (choiceRejected(entry.choice) ? ' rejected' : '')
       + (sameChoice(cur.contextChoice, entry.choice) ? ' inspecting' : '');
     card.dataset.paneId = paneId;
@@ -1218,38 +2246,67 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       card.addEventListener(eventName, () => activatePane(paneId, reason), { passive: true });
     }
     const head = document.createElement('button');
-    head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry); head.disabled = locked();
+    const canInspect = !locked() || (answerActive && isPrivatePrecloseReview());
+    head.type = 'button'; head.className = 'grid-head'; head.innerHTML = gridHeader(entry);
+    head.disabled = !canInspect;
     attachPoseInfo(head, weeklyEntryEvidence(entry));
     head.onclick = () => {
-      if (locked()) return;
+      if (!canInspect) return;
       inspectGridChoice(entry, paneId, 'header-click');
     };
     const actions = document.createElement('div'); actions.className = 'grid-review-actions';
     const select = document.createElement('button');
-    select.type = 'button'; select.dataset.review = 'select'; select.textContent = 'Select';
-    select.setAttribute('aria-label', `Select Pose ${displayedPoseLabel(entry.choice)}`);
-    select.onclick = event => {
-      event.stopPropagation();
-      selectedPaneId = paneId;
-      void onPick(entry.choiceIndex, entry.choice);
-    };
     const reject = document.createElement('button');
-    reject.type = 'button'; reject.dataset.review = 'reject'; reject.className = 'reject';
-    reject.textContent = choiceRejected(entry.choice) ? 'Undo reject' : 'Reject';
-    reject.classList.toggle('on', choiceRejected(entry.choice));
-    reject.setAttribute('aria-pressed', String(choiceRejected(entry.choice)));
-    reject.onclick = event => {
-      event.stopPropagation();
-      void toggleChoiceRejected(entry.choice);
-    };
+    select.type = 'button';
+    reject.type = 'button';
+    select.disabled = viewerTransitionBusy;
+    reject.disabled = viewerTransitionBusy;
+    if (answerActive && isPrivatePrecloseReview()) {
+      select.dataset.frame = 'xtal';
+      select.textContent = 'Xtal';
+      select.classList.toggle('on', entryProteinFrame === 'xtal');
+      select.setAttribute('aria-pressed', String(entryProteinFrame === 'xtal'));
+      select.onclick = event => {
+        event.stopPropagation();
+        void setRetrospectiveGridProteinFrame(entry.choice, 'xtal');
+      };
+      reject.dataset.frame = 'folded';
+      reject.textContent = 'Folded';
+      reject.classList.toggle('on', entryProteinFrame === 'folded');
+      reject.setAttribute('aria-pressed', String(entryProteinFrame === 'folded'));
+      reject.onclick = event => {
+        event.stopPropagation();
+        void setRetrospectiveGridProteinFrame(entry.choice, 'folded');
+      };
+    } else {
+      select.dataset.review = 'select'; select.textContent = 'Select';
+      select.setAttribute('aria-label', `Select Pose ${displayedPoseLabel(entry.choice)}`);
+      select.onclick = event => {
+        event.stopPropagation();
+        selectedPaneId = paneId;
+        void onPick(entry.choiceIndex, entry.choice);
+      };
+      reject.dataset.review = 'reject'; reject.className = 'reject';
+      reject.textContent = choiceRejected(entry.choice) ? 'Undo reject' : 'Reject';
+      reject.classList.toggle('on', choiceRejected(entry.choice));
+      reject.setAttribute('aria-pressed', String(choiceRejected(entry.choice)));
+      reject.onclick = event => {
+        event.stopPropagation();
+        void toggleChoiceRejected(entry.choice);
+      };
+    }
     actions.append(select, reject);
+    if (xtalReference) actions.hidden = true;
     const host = document.createElement('div'); host.className = 'grid-host';
-    card.append(host, head, actions); cellsBox.appendChild(card);
+    card.append(host, head);
+    card.appendChild(actions);
+    cellsBox.appendChild(card);
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null,
       cameraEnvelope: null, disposed: false,
       detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
-        clustered, showHbonds, showProteinEnsemble, showSurface } };
+        clustered, showHbonds, showProteinEnsemble, showSurface,
+        privateReview: isPrivatePrecloseReview(), retrospectiveProteinFrame: entryProteinFrame } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
@@ -1285,6 +2342,13 @@ function protUrls() {
         prot: context.afprotein_file || cur.item.protein_file,
         pocket: context.afpocket_file || null,
       } : { prot: cur.item.protein_file, pocket: null };
+    }
+    if (answer && retrospectiveAnswerActive() && retrospectiveProteinFrame === 'folded'
+        && displayMode === 'one' && shown && !isXtalReferenceChoice(shown)) {
+      return {
+        prot: shown.afprotein_file || cur.item.protein_file,
+        pocket: shown.afpocket_file || cur.item.pocket_file,
+      };
     }
     if (displayMode !== 'one' || answer) {
       return { prot: cur.item.protein_file, pocket: cur.item.pocket_file };
@@ -1334,31 +2398,301 @@ async function clearLayer() {
   await b.commit();
   layerData = []; hbondData = [];
 }
-// H-bond overlay: interactions are computed WITHIN a single structure, but our pocket and each pose are
-// separate structures, so we merge the pocket PDB + the shown pose PDB(s) into ONE combined structure and
-// render Mol*'s built-in 'interactions' representation over it (dashed cylinders). This is treated as an
-// "H-bonds" affordance; Mol*'s default provider set is H-bond-dominated (see report note). Poses stay
-// anonymised (geometry only) and correctness is never revealed — all shown poses are treated equally.
-async function buildInteractions(pocket, poseUrls, targetPlugin = plugin, onData = null) {
-  if (!pocket || !poseUrls.length) return;
-  const parts = [atomRecords(await fetchPdbText(pocket))];
-  for (const u of poseUrls) parts.push(atomRecords(await fetchPdbText(u)));
-  const pdb = parts.filter(Boolean).join('\nTER\n') + '\nEND\n';
+// Mol* computes interactions within one structure. Build one pocket+ligand structure per pose and render
+// only contacts crossing from that ligand component to its parent pocket. Combining poses, or rendering
+// the whole structure, creates artificial pose↔pose and pocket↔pocket interaction networks.
+async function renderLigandInteractions(pdb, targetPlugin = plugin, onData = null) {
   const data = await targetPlugin.builders.data.rawData({ data: pdb });
   onData?.(data);
   const traj = await targetPlugin.builders.structure.parseTrajectory(data, 'pdb');
   const model = await targetPlugin.builders.structure.createModel(traj);
   const struct = await targetPlugin.builders.structure.createStructure(model);
-  const comp = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'all');
-  if (!comp) return;
-  await targetPlugin.builders.structure.representation.addRepresentation(comp, { type: 'interactions' });
+  const ligand = await targetPlugin.builders.structure.tryCreateComponentStatic(struct, 'ligand');
+  if (!ligand) throw new Error('Interaction ligand component could not be built');
+  await targetPlugin.builders.structure.representation.addRepresentation(ligand, {
+    type: 'interactions',
+    typeParams: { includeParent: true, parentDisplay: 'between' },
+  });
+}
+async function buildInteractions(pocket, poseUrls, targetPlugin = plugin, onData = null) {
+  if (!pocket || !poseUrls.length) return;
+  const pocketPdb = await fetchPdbText(pocket);
+  for (const poseUrl of poseUrls) {
+    const pdb = mergeRetrospectiveInteractionPdb({
+      pocketPdb,
+      ligandPdb: await fetchPdbText(poseUrl),
+    });
+    await renderLigandInteractions(pdb, targetPlugin, onData);
+  }
 }
 async function buildHbonds(poseUrls) {
   if (!showHbonds || !poseUrls.length) return;
   const { pocket } = protUrls();
   await buildInteractions(pocket, poseUrls, plugin, data => hbondData.push(data));
 }
+async function buildRetrospectiveInteractions(
+  pocketPdb,
+  poseOverlayPdb,
+  crystalLigandPdb,
+  targetPlugin = plugin,
+  onData = null,
+  { includePredicted = true } = {},
+) {
+  if (typeof pocketPdb !== 'string' || !pocketPdb.trim()) {
+    throw new Error('Retrospective crystal pocket is missing');
+  }
+  const ligands = [];
+  if (includePredicted && typeof poseOverlayPdb === 'string' && poseOverlayPdb) {
+    ligands.push({ ligandPdb: poseOverlayPdb, chain: 'P', residueName: 'PRD' });
+  }
+  if (typeof crystalLigandPdb === 'string' && crystalLigandPdb) {
+    ligands.push({ ligandPdb: crystalLigandPdb, chain: 'Q', residueName: 'XTL' });
+  }
+  if (!ligands.length) throw new Error('Retrospective interaction ligand is missing');
+  for (const ligand of ligands) {
+    await renderLigandInteractions(
+      mergeRetrospectiveInteractionPdb({ pocketPdb, ...ligand }),
+      targetPlugin,
+      onData,
+    );
+  }
+}
+async function buildRetrospectiveHbonds(shown, targetPlugin = plugin, onData = data => hbondData.push(data)) {
+  retrospectiveHbondStatus = '';
+  if (!showHbonds || !itemHasReleasedCrystal(cur?.item)) return;
+  let built = 0;
+  for (const layer of weeklyPoseLayers(shown).filter(entry => !entry.ghost)) {
+    const choice = layer.choice;
+    if (isXtalReferenceChoice(choice)) {
+      const pocketPdb = choice.answer_crystal_pocket_pdb;
+      if (typeof pocketPdb !== 'string' || !pocketPdb) {
+        retrospectiveHbondStatus = 'H-bonds unavailable: crystal pocket artifact is missing.';
+        continue;
+      }
+      try {
+        await buildRetrospectiveInteractions(
+          pocketPdb,
+          null,
+          choice.answer_crystal_pdb,
+          targetPlugin,
+          onData,
+          { includePredicted: false },
+        );
+        built += 1;
+      } catch (error) {
+        retrospectiveHbondStatus = `H-bonds unavailable: ${error.message}`;
+        console.warn('Retrospective Xtal H-bonds omitted:', error.message);
+      }
+      continue;
+    }
+    const pocketPdb = choice.answer_crystal_pocket_pdb;
+    if (typeof pocketPdb !== 'string' || !pocketPdb) {
+      retrospectiveHbondStatus = 'H-bonds unavailable: crystal pocket artifact is missing.';
+      continue;
+    }
+    try {
+      await buildRetrospectiveInteractions(
+        pocketPdb,
+        choice.answer_overlay_pdb,
+        choice.answer_crystal_pdb,
+        targetPlugin,
+        onData,
+      );
+      built += 1;
+    } catch (error) {
+      retrospectiveHbondStatus = `H-bonds unavailable: ${error.message}`;
+      console.warn('Retrospective H-bonds omitted:', error.message);
+    }
+  }
+  if (showHbonds && !built && !retrospectiveHbondStatus) {
+    retrospectiveHbondStatus = 'H-bonds unavailable: no interaction data could be built.';
+  }
+}
+async function buildRetrospectiveXtalLayer(preserveCamera = true) {
+  let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
+  nextCanonicalCameraSnapshot = null;
+  if (preserveCamera && !preservedCamera) {
+    try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  }
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    syncStageBadge();
+    await clearViewerScene();
+    const xtal = buildXtalReferenceChoice(cur.item);
+    poseChoiceByRepresentation = new WeakMap();
+    await addRetrospectiveCrystalContext(
+      plugin,
+      (data, kind) => { (kind === 'protein' ? proteinData : layerData).push(data); },
+      [xtal.answer_crystal_pdb],
+      representation => registerPoseClickTarget(representation, xtal),
+    );
+    await addRetrospectiveCrystalPocketSticks(xtal, plugin, data => proteinData.push(data));
+    await buildRetrospectiveHbonds([xtal]);
+    await pinCameraSnapshot(plugin, preservedCamera);
+    viewerTraceRecorder?.captureState();
+  } finally {
+    releaseCamera();
+  }
+}
+async function buildRetrospectiveCanonicalLayer(shown, preserveCamera = true) {
+  if (shown.length === 1 && isXtalReferenceChoice(shown[0])) {
+    return buildRetrospectiveXtalLayer(preserveCamera);
+  }
+  let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
+  nextCanonicalCameraSnapshot = null;
+  if (preserveCamera && !preservedCamera) {
+    try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  }
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    syncStageBadge();
+    await clearViewerScene();
+    poseChoiceByRepresentation = new WeakMap();
+    const poseLayers = weeklyPoseLayers(shown);
+    const crystalChoiceByPdb = new Map();
+    for (const layer of poseLayers) {
+      if (!crystalChoiceByPdb.has(layer.choice.answer_crystal_pdb)) {
+        crystalChoiceByPdb.set(layer.choice.answer_crystal_pdb, layer.choice);
+      }
+    }
+    const xtalClickChoice = displayMode === 'all' ? buildXtalReferenceChoice(cur.item) : null;
+    await addRetrospectiveCrystalContext(plugin, (data, kind) => {
+      (kind === 'protein' ? proteinData : layerData).push(data);
+    }, poseLayers.map(layer => layer.choice.answer_crystal_pdb), (representation, crystalPdb) => {
+      registerPoseClickTarget(representation, xtalClickChoice || crystalChoiceByPdb.get(crystalPdb));
+    });
+    const contextChoice = displayMode === 'all' ? cur.contextChoice : null;
+    if (displayMode !== 'all' || contextChoice) {
+      const pocketChoice = contextChoice
+        || poseLayers.find(layer => !layer.ghost)?.choice
+        || poseLayers[0]?.choice;
+      await addRetrospectiveCrystalPocketSticks(
+        pocketChoice,
+        plugin,
+        data => proteinData.push(data),
+      );
+    }
+    for (const layer of poseLayers) {
+      const c = layer.choice;
+      if (typeof c.answer_overlay_pdb !== 'string' || !c.answer_overlay_pdb) {
+        throw new Error(`Retrospective pose overlay is missing for ${c._weeklyChoiceId || c.id}`);
+      }
+      const pose = await loadStructText(c.answer_overlay_pdb, 'pdb');
+      layerData.push(pose.data);
+      const poseColor = answerViewPoseCorrect(c) ? GOOD : BAD;
+      const representation = await addPose(
+        pose.struct,
+        poseColor,
+        plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined,
+      );
+      let surfaceRepresentation = null;
+      if (showSurface && !layer.ghost) {
+        surfaceRepresentation = await addRep(pose.struct, 'all', 'molecular-surface', poseColor, 0.7);
+      }
+      registerPoseClickTarget(representation, c);
+      registerPoseClickTarget(surfaceRepresentation, c);
+    }
+    const hbondChoices = displayMode === 'all'
+      ? (contextChoice ? [contextChoice] : [])
+      : shown;
+    await buildRetrospectiveHbonds(hbondChoices);
+    await pinCameraSnapshot(plugin, preservedCamera);
+    viewerTraceRecorder?.captureState();
+  } finally {
+    releaseCamera();
+  }
+}
+async function buildRetrospectiveFoldedCanonicalLayer(shown, preserveCamera = true) {
+  const contextChoice = displayMode === 'all' && cur.contextChoice
+    && !isXtalReferenceChoice(cur.contextChoice) ? cur.contextChoice : null;
+  const c = contextChoice || shown.find(choice => !isXtalReferenceChoice(choice));
+  if (!c) return buildRetrospectiveCanonicalLayer(shown, preserveCamera);
+  let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
+  nextCanonicalCameraSnapshot = null;
+  if (preserveCamera && !preservedCamera) {
+    try { preservedCamera = plugin.canvas3d?.camera?.getSnapshot?.() || null; } catch (e) {}
+  }
+  const releaseCamera = holdCameraSnapshot(plugin, preservedCamera);
+  try {
+    syncStageBadge();
+    await clearViewerScene();
+    poseChoiceByRepresentation = new WeakMap();
+    const urls = gridProteinUrls(c, { item: cur.item, proteinMode });
+    const aligned = await alignedFoldedAssets(c, urls);
+    const protein = await loadStructText(aligned.proteinPdb, 'pdb');
+    proteinData.push(protein.data);
+    await addRep(protein.struct, 'polymer', 'cartoon', urls.color, 0.5);
+    if (showSurface) {
+      await addRep(protein.struct, 'polymer', 'molecular-surface', urls.color, 0.7);
+    }
+    if (aligned.pocketPdb) {
+      const pocket = await loadStructText(aligned.pocketPdb, 'pdb');
+      proteinData.push(pocket.data);
+      await addSticks(pocket.struct, 0.16, 0.95);
+    }
+    const poseLayers = weeklyPoseLayers(shown);
+    const crystalPdbs = [...new Set(poseLayers.map(layer => layer.choice.answer_crystal_pdb))];
+    const xtalClickChoice = buildXtalReferenceChoice(cur.item);
+    for (const crystalPdb of crystalPdbs) {
+      const crystal = await loadStructText(crystalPdb, 'pdb');
+      layerData.push(crystal.data);
+      const representation = await addCrystalPose(crystal.struct);
+      registerPoseClickTarget(representation, xtalClickChoice);
+      if (showSurface) await addRep(crystal.struct, 'all', 'molecular-surface', XTAL, 0.7);
+    }
+    const poseSpheres = [];
+    for (const layer of poseLayers) {
+      const pose = await loadStructText(layer.choice.answer_overlay_pdb, 'pdb');
+      layerData.push(pose.data);
+      const poseColor = answerViewPoseCorrect(layer.choice) ? GOOD : BAD;
+      const representation = await addPose(
+        pose.struct,
+        poseColor,
+        plugin,
+        layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined,
+      );
+      registerPoseClickTarget(representation, layer.choice);
+      if (showSurface && !layer.ghost) {
+        const surface = await addRep(pose.struct, 'all', 'molecular-surface', poseColor, 0.7);
+        registerPoseClickTarget(surface, layer.choice);
+      }
+      if (!layer.ghost) poseSpheres.push(structureSphere(pose.struct));
+    }
+    if (showHbonds && aligned.pocketPdb) {
+      try {
+        await buildRetrospectiveInteractions(
+          aligned.pocketPdb,
+          c.answer_overlay_pdb,
+          c.answer_crystal_pdb,
+          plugin,
+          data => hbondData.push(data),
+        );
+      } catch (error) {
+        retrospectiveHbondStatus = `H-bonds unavailable: ${error.message}`;
+        console.warn('Folded-protein H-bonds omitted:', error.message);
+      }
+    }
+    if (!preservedCamera) focusLigandSpheres(plugin, poseSpheres);
+    await pinCameraSnapshot(plugin, preservedCamera);
+    viewerTraceRecorder?.captureState();
+  } finally {
+    releaseCamera();
+  }
+}
 async function buildCanonicalLayer(shown, preserveCamera = true) {
+  const retrospective = retrospectiveAnswerActive();
+  const foldedOne = displayMode === 'one' && retrospectiveProteinFrame === 'folded';
+  const foldedShowAll = displayMode === 'all' && cur.contextChoice
+    && !isXtalReferenceChoice(cur.contextChoice);
+  const foldedRetrospective = retrospective && (foldedOne || foldedShowAll)
+    && shown.some(choice => !isXtalReferenceChoice(choice));
+  if (foldedRetrospective && itemHasReleasedCrystal(cur.item)) {
+    return buildRetrospectiveFoldedCanonicalLayer(shown, preserveCamera);
+  }
+  if (retrospective && itemHasReleasedCrystal(cur.item) && !foldedRetrospective) {
+    return buildRetrospectiveCanonicalLayer(shown, preserveCamera);
+  }
   let preservedCamera = preserveCamera ? nextCanonicalCameraSnapshot : null;
   nextCanonicalCameraSnapshot = null;
   if (preserveCamera && !preservedCamera) {
@@ -1371,12 +2705,14 @@ async function buildCanonicalLayer(shown, preserveCamera = true) {
     await clearLayer();
     poseChoiceByRepresentation = new WeakMap();
     const answer = cur.revealed && cur.showAnswer;      // green/red reveal vs the anonymised "my view"
-    for (const layer of weeklyPoseLayers(shown)) {
+    for (const layer of weeklyPoseLayers(shown).filter(
+      entry => !isXtalReferenceChoice(entry.choice),
+    )) {
       const c = layer.choice;
       const s = await loadStruct(c.pose_file, 'pdb');
       layerData.push(s.data);
       const poseColor = layer.rejected ? REJECTED_POSE
-        : (answer ? (acceptedChoiceCorrect(c) ? GOOD : BAD) : c.color);
+        : (answer ? (answerViewPoseCorrect(c) ? GOOD : BAD) : c.color);
       const representation = await addPose(s.struct,
         poseColor, plugin,
         layer.ghost ? { alpha: GHOST_POSE_ALPHA, sizeFactor: GHOST_POSE_SIZE } : undefined);
@@ -1392,8 +2728,9 @@ async function buildCanonicalLayer(shown, preserveCamera = true) {
     const weeklyOverlayContext = cur.item.source === 'weekly' && displayMode === 'all' && !answer;
     const hbondPoses = weeklyOverlayContext
       ? (cur.contextChoice ? [cur.contextChoice.pose_file] : [])
-      : shown.map(c => c.pose_file);
-    if (cur.revealed && showXtal && cur.item.xtal_lig_file) {
+      : shown.filter(c => !isXtalReferenceChoice(c)).map(c => c.pose_file);
+    if (cur.revealed && showXtal && itemHasXtalOverlay(cur.item) && !viewingReleasedCrystal()
+        && !retrospectiveAnswerActive()) {
       const xl = await loadStruct(cur.item.xtal_lig_file, 'pdb');
       layerData.push(xl.data);
       await addPose(xl.struct, XTAL);
@@ -1409,13 +2746,32 @@ async function buildCanonicalLayer(shown, preserveCamera = true) {
 }
 async function buildSingleLayer(preserveCamera = true) {
   const answer = cur.revealed && cur.showAnswer;
-  const vis = visibleChoices();
-  const shown = answer || displayMode === 'all' ? vis : [vis[Math.min(shownOne, vis.length - 1)]];
+  const vis = retrospectiveNavChoices();
+  const showAnswerEnsemble = answer && !weeklyResultsRevealActive();
+  const shown = showAnswerEnsemble || displayMode === 'all'
+    ? visibleChoices()
+    : [vis[Math.min(shownOne, vis.length - 1)]];
   return buildCanonicalLayer(shown, preserveCamera);
 }
 async function buildLayer() {
   const resetCamera = resetCameraOnNextBuild;
   resetCameraOnNextBuild = false;
+  if (viewingReleasedCrystal()) {
+    hideGrid();
+    $('#stage')?.classList.remove('grid-active');
+    try {
+      await buildReleasedCrystalScene(!resetCamera);
+      return;
+    } catch (error) {
+      console.warn('Released crystal could not be loaded:', error.message);
+      releasedCrystalMode = false;
+      showXtal = false;
+      releasedCrystalError = 'Could not load the in-app crystal. Use “Open in RCSB” or try again.';
+      syncXtalRow();
+      syncButtons();
+      return buildSingleLayer(false);
+    }
+  }
   if (displayMode === 'grid') {
     // On the first question the canonical viewer has no framed scene yet. Its
     // default camera points at empty space, so it must not override the camera
@@ -1432,7 +2788,10 @@ async function buildLayer() {
     try {
       // Visible panes load first. The hidden canonical scene still completes
       // before the rebuild coordinator enables interaction and starts tracing.
-      await buildCanonicalLayer(gridEntries().map(entry => entry.choice), !resetCamera);
+      const canonicalChoices = gridEntries()
+        .map(entry => entry.choice)
+        .filter(choice => !isXtalReferenceChoice(choice));
+      await buildCanonicalLayer(canonicalChoices, !resetCamera);
       if (resetCamera) await pinCameraSnapshot(plugin, freshGridCamera);
     } catch (error) {
       console.warn('Canonical Grid scene could not be built:', error.message);
@@ -1455,7 +2814,14 @@ function requestQuestionCameraReset() {
 async function loadQuestion(i) {
   const item = ITEMS[i];
   const loadStartedAt = Date.now();
+  const wrap = $('#wrap');
+  wrap.classList.add('question-loading');
   $('#stage').classList.add('loading-system');
+  $('#choices').style.display = 'none';
+  $('#choices').replaceChildren();
+  $('#answer-details').hidden = true;
+  $('#answer-details').open = false;
+  $('#answer-choices').replaceChildren();
   const savedWeeklyState = item.source === 'weekly' ? WEEKLY_ITEM_STATES.get(item.id) : null;
   // Keep a Weekly question's randomised labels and all local review state stable when navigating away/back.
   const byCluster = {};
@@ -1468,7 +2834,8 @@ async function loadQuestion(i) {
     });
     return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
   });
-  await viewerRebuild.enqueue(
+  try {
+    await viewerRebuild.enqueue(
     async () => {
       viewerTraceRecorder?.stop();
       void weeklyTraceStream?.endVisit?.('navigation');
@@ -1486,8 +2853,11 @@ async function loadQuestion(i) {
         rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null,
         pendingWeeklyVote: null };
       cur.item = item;
-      cur.revealed = false;
-      cur.showAnswer = false;
+      const restoreWeeklyResult = !!(savedWeeklyState?.revealed && weeklyResultsRevealActive());
+      if (!restoreWeeklyResult) {
+        cur.revealed = false;
+        cur.showAnswer = false;
+      }
       if (item.source === 'weekly' && !savedWeeklyState) {
         const prior = WEEKLY_VOTES.get(item.id);
         if (prior?.picked_none) {
@@ -1522,15 +2892,24 @@ async function loadQuestion(i) {
       // then reset question-specific navigation/reveal state.
       applyUserView();
       shownOne = savedWeeklyState?.savedShownOne || 0;
+      resetCrystalViewState();
+      if (applyPrivateRetrospectiveAnswer()) {
+        // A retrospective is an answer browser, not an unanswered ballot.
+      } else if (restoreWeeklyResult && cur.showAnswer) {
+        applyAnswerRevealView();
+      } else if (restoreWeeklyResult) {
+        cur.answerRevealBest = bestRawCorrectPose();
+      } else if (!cur.revealed) {
+        cur.answerRevealBest = null;
+      }
       $('#myview').style.display = 'none'; $('#start').style.display = 'none';
-      $('#xtalrow').style.display = 'none'; $('#showXtal').checked = false;
-      $('#instruction').style.display = ''; $('#choices').style.display = '';
+      $('#instruction').style.display = isPrivatePrecloseReview() ? 'none' : '';
+      $('#choices').style.display = '';
       $('#answer-details').hidden = true; $('#answer-details').open = false;
       $('#answer-choices').replaceChildren(); $('#answer-ai').textContent = '';
       try { await plugin.clear(); } catch (e) {}
       proteinData = []; layerData = []; hbondData = [];
       currentProteinKey = null;
-      showXtal = false;
       syncButtons();
     },
     async () => {
@@ -1544,24 +2923,32 @@ async function loadQuestion(i) {
         question_load_ms: Math.max(0, Date.now() - loadStartedAt),
       });
       renderUI();
+      if (cur.revealed && weeklyResultsRevealActive()) renderRevealedQuestionUi();
       saveWeeklyResumePosition(i);
       requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
       void prefetchQuestionAssets(i + 1);
     },
-  );
+    );
+  } finally {
+    wrap.classList.remove('question-loading');
+  }
 }
 
 function renderUI() {
   hideActivePoseInfoTooltip();
-  $('#progress').textContent = DEV ? `item ${idx + 1} / ${ITEMS.length} · dev`
-                                   : `question ${idx + 1} / ${ITEMS.length}`;
+  const filteredIndexes = retrospectiveQuestionIndexes();
+  const filteredPosition = filteredIndexes.indexOf(idx);
+  const questionOrdinal = isPrivatePrecloseReview() && filteredPosition >= 0
+    ? `${filteredPosition + 1} / ${filteredIndexes.length}`
+    : `${idx + 1} / ${ITEMS.length}`;
+  $('#progress').textContent = DEV ? `item ${questionOrdinal} · dev` : `question ${questionOrdinal}`;
   const rawPoseCount = cur.clusters.reduce((total, cluster) => total + cluster.members.length, 0);
   const poseSummary = cur.item.source === 'weekly'
     ? (cur.item.clustering_available
       ? `${rawPoseCount} predicted poses · ${cur.clusters.length} pose clusters`
       : `${rawPoseCount} predicted poses`)
     : `${cur.clusters.length} distinct pose clusters`;
-  $('#ligand').innerHTML = `${cur.item.ligand} <small>· ${poseSummary}</small>`;
+  renderViewerQuestionTitle(poseSummary);
   const alignmentWarning = cur.item.source === 'weekly'
     ? cur.item.alignment_warning?.message
     : null;
@@ -1570,16 +2957,26 @@ function renderUI() {
       ? weeklyViewerInstruction()
       : 'Pick the pose that best fits the binding pocket.');
   $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
+  $('#instruction').style.display = alignmentWarning || !isPrivatePrecloseReview() ? '' : 'none';
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = choiceEntriesForSidebar();
+  const retrospectiveAnswer = retrospectiveAnswerActive();
   uiEntries.forEach(entry => {
     const c = entry.choice, k = entry.choiceIndex;
     const b = document.createElement('button');
-    b.className = 'choice' + (choiceRejected(c) ? ' rejected' : '');
+    const xtalReference = isXtalReferenceChoice(c);
+    const exactEntryChoices = retrospectiveAnswer && !xtalReference
+      ? exactChoicesForEntry(entry) : [];
+    b.className = 'choice'
+      + (choiceRejected(c) ? ' rejected' : '')
+      + (retrospectiveAnswer && !xtalReference
+        ? (exactEntryChoices.length ? ' correct' : ' wrong') : '');
     b.dataset.k = k; b.disabled = viewerTransitionBusy;
     b.style.setProperty('--choice-color', hex(c.color));
     let nm;
-    if (clustered) {
+    if (xtalReference) {
+      nm = 'Xtal reference';
+    } else if (clustered) {
       const cl = entry.cluster;
       const label = cl.label;
       const count = displayMode === 'grid' ? entry.memberCount : cl.members.length;
@@ -1587,15 +2984,30 @@ function renderUI() {
         ? ` <span class="pose-count">${count} poses</span>` : '');
     } else nm = `Pose ${c.label}`;
     b.innerHTML = `<span class="sw" style="background:${hex(c.color)}"></span><span class="nm">${nm}</span><span class="tag" data-tag></span>`;
+    if (retrospectiveAnswer) {
+      const tag = b.querySelector('[data-tag]');
+      tag.classList.add('answer-status');
+      tag.textContent = xtalReference
+        ? 'REFERENCE'
+        : (exactEntryChoices.length ? 'CORRECT' : 'WRONG');
+    }
     attachPoseInfo(b, weeklyEntryEvidence(entry));
     b.onclick = () => pickSidebarEntry(entry);
     box.appendChild(b);
   });
   if (difficulty === 'hard') {                          // the detect-game option
     const nb = document.createElement('button');
-    nb.className = 'choice none'; nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
+    const noneCorrect = retrospectiveAnswer && !allItemChoices().some(rawChoiceCorrect);
+    nb.className = 'choice none'
+      + (retrospectiveAnswer ? (noneCorrect ? ' correct' : ' wrong') : '');
+    nb.dataset.k = 'none'; nb.disabled = viewerTransitionBusy;
     nb.style.setProperty('--choice-color', '#5a6675');
     nb.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">None are correct</span><span class="tag" data-tag></span>`;
+    if (retrospectiveAnswer) {
+      const tag = nb.querySelector('[data-tag]');
+      tag.classList.add('answer-status');
+      tag.textContent = noneCorrect ? 'CORRECT' : 'WRONG';
+    }
     nb.onclick = () => onPick('none');
     box.appendChild(nb);
   }
@@ -1613,14 +3025,18 @@ function renderUI() {
   }
   box.style.display = cur.revealed && cur.showAnswer ? 'none' : '';
   $('#vote-comment-enabled').checked = weeklyCommentPromptEnabled;
-  $('#vote-comment-option').style.display = quizSource === 'weekly' && !DEV && !cur.revealed ? 'flex' : 'none';
+  $('#vote-comment-option').style.display = quizSource === 'weekly' && !DEV && !isPrivatePrecloseReview()
+    && !cur.revealed ? 'flex' : 'none';
+  if (isPrivatePrecloseReview()) renderWeeklyLeaderboard();
   if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
-    $('#lock').textContent = WEEKLY_VOTES.has(cur.item.id) ? 'Update vote' : 'Record vote';
+    $('#lock').textContent = isPrivatePrecloseReview()
+      ? 'Show result'
+      : (WEEKLY_VOTES.has(cur.item.id) ? 'Update vote' : 'Record vote');
   }
   syncQuestionNavigation();
   if (DEV) { renderDevNav(); return; }                  // dev: free browse, no vote/lock/score
   $('#lock').disabled = viewerTransitionBusy || cur.selected == null; $('#lock').style.display = cur.revealed ? 'none' : '';
-  $('#verdict').style.display = cur.revealed ? '' : 'none';
+  $('#verdict').style.display = cur.revealed && !isPrivatePrecloseReview() ? '' : 'none';
   if (!cur.revealed) delete $('#verdict').dataset.state;
   $('#next').style.display = quizSource !== 'weekly' && cur.revealed ? '' : 'none';
   updateScore();
@@ -1638,7 +3054,7 @@ function renderDevNav() {
   syncQuestionNavigation();
   $('#myview').style.display = '';
   $('#myview').textContent = cur.showAnswer ? '← Hide answer (my view)' : 'Reveal answer →';
-  $('#xtalrow').style.display = (cur.showAnswer && cur.item.xtal_lig_file) ? '' : 'none';
+  syncXtalRow();
   $('#answer-details').hidden = !cur.showAnswer;
 }
 
@@ -1679,7 +3095,7 @@ function showIntro() {
     ? 'reference available Wednesday · pose details on hover'
     : 'crystal reference hidden · poses anonymised';
   $('#setup').style.display = '';
-  $('#participant-setup').style.display = DEV ? 'none' : '';
+  $('#participant-setup').style.display = DEV || isPrivatePrecloseReview() ? 'none' : '';
   $('#vote-comment-option').style.display = 'none';
   $('#mode').style.display = 'none'; $('#protmode').style.display = 'none'; $('#modehint').style.display = 'none';
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#uncluster').style.display = 'none';
@@ -1697,12 +3113,15 @@ function showIntro() {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
     $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
-    $('#setuphint').innerHTML = status === 'revealed'
-      ? `${pool.length} prospective weekly ensembles · Wednesday results are available.`
-      : (status === 'open'
-        ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
-        : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`);
-    $('#start').style.display = pool.length && status !== 'closed' ? '' : 'none';
+    $('#setuphint').innerHTML = isPrivatePrecloseReview()
+      ? `${pool.length} retrospective questions.`
+      : (status === 'revealed'
+        ? `${pool.length} prospective weekly ensembles · Wednesday results are available.`
+        : (status === 'open'
+          ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
+          : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`));
+    $('#start').style.display = pool.length
+      && (isPrivatePrecloseReview() || status !== 'closed') ? '' : 'none';
     syncStartGate();
     return;
   }
@@ -1715,13 +3134,390 @@ function renderWeeklyResultsStatus() {
   if (!WEEKLY_ONLY) return;
   const panel = $('#weekly-results');
   const copy = $('#weekly-results-copy');
+  const heading = $('#weekly-results-heading');
   if (!panel || !copy) return;
+  if (isPrivatePrecloseReview()) {
+    if (heading) heading.textContent = 'Question result';
+    panel.dataset.status = 'private-review';
+    copy.hidden = true;
+    copy.textContent = '';
+    renderWeeklyLeaderboard();
+    return;
+  }
+  copy.hidden = false;
+  if (heading) heading.textContent = 'Results & leaderboard';
   const revealed = WEEKLY_ROUND?.public_status === 'revealed';
   panel.dataset.status = revealed ? 'revealed' : 'pending';
-  copy.textContent = revealed
-    ? 'Results are available. Reveal a choice for scores and vote totals.'
-    : (DEV2_FEEDBACK.formatReleaseCountdown?.(WEEKLY_ROUND?.closes_at)
-      || 'Results Wednesday.');
+  if (WEEKLY_LEADERBOARD_ERROR) {
+    copy.textContent = WEEKLY_LEADERBOARD_ERROR;
+  } else if (revealed && WEEKLY_LEADERBOARD) {
+    copy.textContent = 'Wednesday results loaded. Reveal choices to update your local score.';
+  } else {
+    copy.textContent = revealed
+      ? 'Results are available. Reveal a choice for scores and vote totals.'
+      : (DEV2_FEEDBACK.formatReleaseCountdown?.(WEEKLY_ROUND?.closes_at)
+        || 'Results Wednesday.');
+  }
+  renderWeeklyLeaderboard();
+}
+
+function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null }) {
+  const name = escapeLeaderboardText(displayName || 'Participant');
+  const score = `${correct}/${answered}`;
+  const pct = Number.isFinite(accuracy) ? `${Math.round(accuracy)}%` : '—';
+  const cov = Number.isFinite(coverage) ? `${Math.round(coverage)}% cov` : '';
+  const rankLabel = rank == null ? '' : `#${rank} · `;
+  return `${rankLabel}<b>${name}</b> · ${score} · ${pct}${cov ? ` · ${cov}` : ''}`;
+}
+
+function escapeLeaderboardText(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+}
+
+function summarizePrivateRetrospective(items) {
+  const metricValue = metric => (Number.isFinite(metric?.value) ? metric.value : null);
+  const topChoice = (choices, valueForChoice, descending = true) => choices
+    .map(choice => ({ choice, value: valueForChoice(choice) }))
+    .filter(row => Number.isFinite(row.value))
+    .sort((left, right) => {
+      const scoreOrder = descending ? right.value - left.value : left.value - right.value;
+      if (scoreOrder) return scoreOrder;
+      return String(left.choice._weeklyChoiceId || left.choice.id || '')
+        .localeCompare(String(right.choice._weeklyChoiceId || right.choice.id || ''));
+    })[0]?.choice || null;
+  const rows = (items || []).map(item => {
+    const choices = (item.choices || []).filter(choice => !isXtalReferenceChoice(choice));
+    const methods = {};
+    for (const method of ['openfold3', 'boltz2']) {
+      const methodChoices = choices.filter(choice => choice._method === method);
+      const top = topChoice(methodChoices, choice => metricValue(choice._confidence));
+      methods[method] = {
+        generatedExact: methodChoices.some(choice => choice.correct === true),
+        topExact: top?.correct === true,
+        topAccepted: top?.accepted_correct === true,
+        maxConfidence: top ? metricValue(top._confidence) : null,
+      };
+    }
+    const sminaTop = topChoice(
+      choices,
+      choice => metricValue(choice._sminaScore),
+      false,
+    );
+    const bestSmina = sminaTop ? metricValue(sminaTop._sminaScore) : null;
+    return {
+      hasExact: choices.some(choice => choice.correct === true),
+      methods,
+      sminaTopExact: sminaTop?.correct === true,
+      sminaTopAccepted: sminaTop?.accepted_correct === true,
+      sminaStrength: Number.isFinite(bestSmina) ? -bestSmina : null,
+    };
+  });
+  const exactRows = rows.filter(row => row.hasExact);
+  const noneRows = rows.filter(row => !row.hasExact);
+  const percent = (count, total) => total ? Math.round(1000 * count / total) / 10 : 0;
+  const mean = (group, valueForRow) => {
+    const values = group.map(valueForRow).filter(Number.isFinite);
+    return values.length
+      ? Math.round(10 * values.reduce((sum, value) => sum + value, 0) / values.length) / 10
+      : null;
+  };
+  const auc = valueForRow => {
+    if (!exactRows.length || !noneRows.length) return null;
+    let comparisons = 0;
+    let wins = 0;
+    for (const exact of exactRows) {
+      const exactValue = valueForRow(exact);
+      if (!Number.isFinite(exactValue)) continue;
+      for (const none of noneRows) {
+        const noneValue = valueForRow(none);
+        if (!Number.isFinite(noneValue)) continue;
+        comparisons += 1;
+        wins += exactValue > noneValue ? 1 : (exactValue === noneValue ? 0.5 : 0);
+      }
+    }
+    return comparisons ? Math.round(100 * wins / comparisons) / 100 : null;
+  };
+  const methods = {};
+  for (const method of ['openfold3', 'boltz2']) {
+    const generatedExact = exactRows.filter(row => row.methods[method].generatedExact).length;
+    const topExact = exactRows.filter(row => row.methods[method].topExact).length;
+    const topAccepted = exactRows.filter(row => row.methods[method].topAccepted).length;
+    methods[method] = {
+      generatedExact,
+      generatedExactPercent: percent(generatedExact, exactRows.length),
+      topExact,
+      topExactPercent: percent(topExact, exactRows.length),
+      topExactWhenGeneratedPercent: percent(topExact, generatedExact),
+      topAccepted,
+      topAcceptedPercent: percent(topAccepted, exactRows.length),
+      exactMeanMaxConfidence: mean(exactRows, row => row.methods[method].maxConfidence),
+      noneMeanMaxConfidence: mean(noneRows, row => row.methods[method].maxConfidence),
+      availabilityAuc: auc(row => row.methods[method].maxConfidence),
+    };
+  }
+  const sminaTopExact = exactRows.filter(row => row.sminaTopExact).length;
+  const sminaTopAccepted = exactRows.filter(row => row.sminaTopAccepted).length;
+  return {
+    total: rows.length,
+    exactSystems: exactRows.length,
+    exactSystemsPercent: percent(exactRows.length, rows.length),
+    noneSystems: noneRows.length,
+    noneSystemsPercent: percent(noneRows.length, rows.length),
+    methods,
+    smina: {
+      topExact: sminaTopExact,
+      topExactPercent: percent(sminaTopExact, exactRows.length),
+      topAccepted: sminaTopAccepted,
+      topAcceptedPercent: percent(sminaTopAccepted, exactRows.length),
+      availabilityAuc: auc(row => row.sminaStrength),
+    },
+  };
+}
+
+function renderPrivateRetrospectiveSummary(summary) {
+  if (!summary?.total) {
+    return '<p class="weekly-scorecard-empty">Benchmark summary is unavailable.</p>';
+  }
+  const denominator = summary.exactSystems;
+  const of3 = summary.methods.openfold3;
+  const boltz = summary.methods.boltz2;
+  const methodRow = (label, detail, result) => `<div class="weekly-benchmark-row">
+    <div><b>${label}</b><span>${detail}</span></div>
+    <strong>${result.topExact}/${denominator} · ${result.topExactPercent}%</strong>
+  </div>`;
+  return `<div class="weekly-scorecard-section weekly-benchmark">
+    <div class="weekly-scorecard-heading">Ensemble result</div>
+    <div class="weekly-benchmark-hero">
+      <strong>${summary.exactSystems}/${summary.total} · ${summary.exactSystemsPercent}%</strong>
+      <span>systems had at least one exact pose (RMSD &lt; 1.5 Å)</span>
+    </div>
+    <p class="weekly-scorecard-note">${summary.noneSystems}/${summary.total} · ${summary.noneSystemsPercent}% had no exact pose in the ten-pose ensemble.</p>
+    <div class="weekly-scorecard-heading">Exact top-ranked pose · among those ${denominator} systems</div>
+    ${methodRow(
+      'OpenFold3 confidence',
+      `ranks its five poses; generated an exact pose in ${of3.generatedExact}/${denominator}`,
+      of3,
+    )}
+    ${methodRow(
+      'Boltz-2 confidence',
+      `ranks its five poses; generated an exact pose in ${boltz.generatedExact}/${denominator}`,
+      boltz,
+    )}
+    ${methodRow('Smina', 'ranks all ten poses by affinity', summary.smina)}
+    <p class="weekly-scorecard-note">Cluster-accepted top-1 (the leaderboard rule): OpenFold3 ${of3.topAccepted}/${denominator} · ${of3.topAcceptedPercent}%; Boltz-2 ${boltz.topAccepted}/${denominator} · ${boltz.topAcceptedPercent}%; Smina ${summary.smina.topAccepted}/${denominator} · ${summary.smina.topAcceptedPercent}%.</p>
+    <div class="weekly-scorecard-heading">Signal for “None”</div>
+    <div class="weekly-scorecard-row signal"><b>Yes—strongest in OpenFold3 confidence.</b><br>
+      Maximum ligand pLDDT averaged ${of3.exactMeanMaxConfidence} when an exact pose existed vs ${of3.noneMeanMaxConfidence} when none did (AUROC ${of3.availabilityAuc?.toFixed(2)}).
+      Boltz-2: ${boltz.exactMeanMaxConfidence} vs ${boltz.noneMeanMaxConfidence} (AUROC ${boltz.availabilityAuc?.toFixed(2)}).
+    </div>
+    <p class="weekly-scorecard-note">Exploratory separation on these same 29 systems, not a held-out estimate.</p>
+  </div>`;
+}
+
+function privateQuestionResult() {
+  const itemId = cur?.item?.id;
+  return itemId
+    ? WEEKLY_QUESTION_RESULTS?.items?.find(item => item.item_id === itemId) || null
+    : null;
+}
+
+function privateQuestionAnswerChoice(answer) {
+  if (answer?.picked_none) return null;
+  return allItemChoices().find(candidate => (
+    candidate._weeklyChoiceId === answer?.choice_id || candidate.id === answer?.choice_id
+  )) || null;
+}
+
+function privateQuestionAnswerLabel(answer) {
+  if (answer?.picked_none) return 'None are correct';
+  const choice = privateQuestionAnswerChoice(answer);
+  if (!choice) return 'Unknown choice';
+  if (answer.selection_kind === 'cluster') {
+    return `Cluster ${clusterForChoice(choice)?.label || displayedPoseLabel(choice, true)}`;
+  }
+  if (answer.selection_kind === 'exact') return `Pose ${displayedPoseLabel(choice, false)}`;
+  return `Choice ${displayedPoseLabel(choice, false)} (scope unknown)`;
+}
+
+function privateQuestionAnswerState(answer) {
+  if (answer?.correct) return 'correct';
+  const choice = privateQuestionAnswerChoice(answer);
+  return choice?.clusterAccepted === true ? 'cluster-accepted' : '';
+}
+
+function renderPrivateQuestionResult(result) {
+  if (!result) {
+    return '<p class="weekly-scorecard-empty">Question votes are unavailable.</p>';
+  }
+  if (!result.answered_count) {
+    return '<p class="weekly-scorecard-empty">No players answered this question.</p>';
+  }
+  const playerLabel = count => `${count} ${count === 1 ? 'player' : 'players'}`;
+  const popular = result.answers.slice(0, 3);
+  const names = values => values.length
+    ? values.map(escapeLeaderboardText).join(', ')
+    : 'None';
+  const detailRows = popular.map(answer => `<div>
+    <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}:</b>
+    ${names(answer.display_names)}
+  </div>`).join('');
+  return `<div class="weekly-question-result">
+    <div class="weekly-question-result-summary">
+      <div><strong>${result.correct_count}/${result.answered_count}</strong>
+        <span>players got this question right</span>
+      </div>
+      <details class="weekly-question-result-info">
+        <summary aria-label="Show player names">Players</summary>
+        <div class="weekly-question-result-popover">
+          <div><b>Correct:</b> ${names(result.correct_display_names)}</div>
+          ${detailRows}
+        </div>
+      </details>
+    </div>
+    <div class="weekly-question-result-heading">Most popular answers</div>
+    <div class="weekly-question-result-ranking">
+      ${popular.map((answer, index) => {
+        const state = privateQuestionAnswerState(answer);
+        return `<div class="weekly-question-result-answer">
+          <span class="weekly-question-result-rank">${index + 1}</span>
+          <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
+          <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+          <span>${playerLabel(answer.vote_count)}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderWeeklyLeaderboard() {
+  if (!WEEKLY_ONLY) return;
+  const host = $('#weekly-leaderboard');
+  if (!host) return;
+  const revealed = WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview();
+  if (!revealed) {
+    host.hidden = true;
+    host.replaceChildren();
+    return;
+  }
+  host.hidden = false;
+  if (isPrivatePrecloseReview()) {
+    host.innerHTML = renderPrivateQuestionResult(privateQuestionResult());
+    return;
+  }
+  if (WEEKLY_LEADERBOARD_ERROR && !WEEKLY_LEADERBOARD) {
+    host.innerHTML = `<p class="weekly-scorecard-empty">${escapeLeaderboardText(WEEKLY_LEADERBOARD_ERROR)}</p>`;
+    return;
+  }
+  const total = WEEKLY_LEADERBOARD?.item_count || ITEMS.length || 0;
+  const localName = participantDisplayName || 'You';
+  const localAnswered = localWeeklyScore.answered;
+  const localCorrect = localWeeklyScore.correct;
+  const localAccuracy = localAnswered ? Math.round(100 * localCorrect / localAnswered) : null;
+  const localCoverage = total ? Math.round(100 * localAnswered / total) : null;
+  const sections = [];
+  sections.push(`<div class="weekly-scorecard-section">
+      <div class="weekly-scorecard-heading">Your session</div>
+      <div class="weekly-scorecard-row local">${formatWeeklyScoreLine({
+        displayName: `${localName} (local, not ranked)`,
+        correct: localCorrect,
+        answered: localAnswered,
+        total,
+        accuracy: localAccuracy ?? 0,
+        coverage: localCoverage ?? 0,
+      })}</div>
+      <p class="weekly-scorecard-note">Updates as you reveal answers. Not saved to the leaderboard.</p>
+    </div>`);
+  const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
+  const partial = WEEKLY_LEADERBOARD?.partial_runs || [];
+  if (!WEEKLY_LEADERBOARD) {
+    sections.push('<p class="weekly-scorecard-empty">Leaderboard is loading…</p>');
+  } else if (!complete.length && !partial.length) {
+    sections.push('<p class="weekly-scorecard-empty">No leaderboard runs are available yet.</p>');
+  } else {
+    if (complete.length) {
+      sections.push(`<div class="weekly-scorecard-section">
+        <div class="weekly-scorecard-heading">Complete runs</div>
+        ${complete.map(row => `<div class="weekly-scorecard-row">${formatWeeklyScoreLine({
+          displayName: row.display_name,
+          correct: row.correct,
+          answered: row.answered,
+          total: row.total,
+          accuracy: row.accuracy,
+          coverage: row.coverage,
+          rank: row.rank,
+        })}</div>`).join('')}
+      </div>`);
+    } else {
+      sections.push('<p class="weekly-scorecard-empty">No complete runs yet.</p>');
+    }
+    if (partial.length) {
+      sections.push(`<div class="weekly-scorecard-section">
+        <div class="weekly-scorecard-heading">Partial runs (beta)</div>
+        ${partial.map(row => `<div class="weekly-scorecard-row partial">${formatWeeklyScoreLine({
+          displayName: row.display_name,
+          correct: row.correct,
+          answered: row.answered,
+          total: row.total,
+          accuracy: row.accuracy,
+          coverage: row.coverage,
+        })}</div>`).join('')}
+      </div>`);
+    }
+  }
+  host.innerHTML = `<div class="weekly-scorecard">${sections.join('')}</div>`;
+}
+
+async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
+  WEEKLY_LEADERBOARD_ERROR = '';
+  if (bundleLeaderboard != null) {
+    try {
+      window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
+        bundleLeaderboard,
+        { roundId: WEEKLY_ROUND?.round_id },
+      );
+      WEEKLY_LEADERBOARD = bundleLeaderboard;
+    } catch (error) {
+      WEEKLY_LEADERBOARD = null;
+      WEEKLY_LEADERBOARD_ERROR = error.message;
+    }
+    renderWeeklyResultsStatus();
+    return;
+  }
+  if (!WEEKLY_ROUND?.round_id || WEEKLY_ROUND.public_status !== 'revealed') {
+    WEEKLY_LEADERBOARD = null;
+    renderWeeklyResultsStatus();
+    return;
+  }
+  try {
+    const backend = researchBackend();
+    if (!backend?.getWeeklyResults) throw new Error('Weekly results are unavailable.');
+    WEEKLY_LEADERBOARD = await backend.getWeeklyResults(WEEKLY_ROUND.round_id);
+    window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
+      WEEKLY_LEADERBOARD,
+      { roundId: WEEKLY_ROUND.round_id },
+    );
+  } catch (error) {
+    WEEKLY_LEADERBOARD = null;
+    WEEKLY_LEADERBOARD_ERROR = `Leaderboard could not be loaded. ${error.message}`;
+    console.warn('Weekly leaderboard unavailable:', error.message);
+  }
+  renderWeeklyResultsStatus();
+}
+
+function bumpLocalWeeklyScore(youRight) {
+  if (!weeklyResultsRevealActive()) return;
+  const itemId = cur?.item?.id;
+  if (!itemId || localWeeklyScoredItems.has(itemId)) return;
+  localWeeklyScoredItems.add(itemId);
+  localWeeklyScore.answered += 1;
+  if (youRight) localWeeklyScore.correct += 1;
+  renderWeeklyLeaderboard();
 }
 
 function startWeeklyCountdown() {
@@ -1762,6 +3558,8 @@ function drawSession() {
 function beginQuiz(initialQuestionIndex = 0) {
   ITEMS = drawSession();
   WEEKLY_ITEM_STATES = new Map();
+  localWeeklyScore = { correct: 0, answered: 0 };
+  localWeeklyScoredItems = new Set();
   weeklyCommentPromptEnabled = true;
   $('#vote-comment-enabled').checked = true;
   if (quizSource === 'rnp' || quizSource === 'weekly') proteinMode = 'crystal';
@@ -1770,14 +3568,15 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
-  $('#instruction').style.display = ''; $('#view-options').hidden = false;
+  $('#instruction').style.display = isPrivatePrecloseReview() ? 'none' : '';
+  $('#view-options').hidden = false;
   $('#instruction').textContent = quizSource === 'weekly'
     ? weeklyViewerInstruction()
     : 'Pick the pose that best fits the binding pocket.';
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
-    ? (WEEKLY_ROUND?.public_status === 'revealed' ? 'Show result' : 'Record vote')
+    ? ((WEEKLY_ROUND?.public_status === 'revealed' || isPrivatePrecloseReview()) ? 'Show result' : 'Record vote')
     : 'Lock in answer';
   // Read-only Previews should still expose the dialog for visual/interaction
   // testing; only the database-backed Send action remains unavailable.
@@ -1788,7 +3587,8 @@ function beginQuiz(initialQuestionIndex = 0) {
 }
 
 async function resumeWeeklyQuizIfAvailable() {
-  if (DEV || isReadOnlyPreview() || quizSource !== 'weekly' || !WEEKLY_ROUND?.round_id) return false;
+  if (DEV || isReadOnlyPreview() || isPrivatePrecloseReview()
+    || quizSource !== 'weekly' || !WEEKLY_ROUND?.round_id) return false;
   const store = window.foldariumWeeklySessionResume;
   const token = store?.read?.();
   if (!token) return false;
@@ -1827,14 +3627,14 @@ function normalizedParticipantName() {
 
 function syncStartGate() {
   const button = $('#start');
-  if (DEV) { button.disabled = false; return; }
+  if (DEV || isPrivatePrecloseReview()) { button.disabled = false; return; }
   const input = $('#participant-name');
   const displayName = normalizedParticipantName();
   button.disabled = !displayName || displayName.length > 80 || !input.checkValidity();
 }
 
 async function startQuiz() {
-  if (DEV) {
+  if (DEV || isPrivatePrecloseReview()) {
     remoteSessionId = null;
     participantDisplayName = '';
     beginQuiz();
@@ -1850,7 +3650,8 @@ async function startQuiz() {
     input.focus();
     return;
   }
-  if (isReadOnlyPreview()) {
+  if (isReadOnlyPreview() || isPrivatePrecloseReview()
+    || (quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed')) {
     remoteSessionId = null;
     participantDisplayName = displayName;
     beginQuiz();
@@ -1866,7 +3667,13 @@ async function startQuiz() {
       difficulty,
       weeklyRoundId: quizSource === 'weekly' ? WEEKLY_ROUND?.round_id : null,
       displayName,
-      initialAppState: currentReplayableAppState(),
+      initialAppState: quizSource === 'weekly'
+        ? {
+          ...currentReplayableAppState(),
+          leaderboard_opt_in: true,
+          leaderboard_name_version: 1,
+        }
+        : currentReplayableAppState(),
     });
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
@@ -2058,6 +3865,7 @@ async function onPick(k, exactChoice = null, {
 function shouldPromptForVoteComment() {
   return quizSource === 'weekly'
     && WEEKLY_ROUND?.public_status !== 'revealed'
+    && !isPrivatePrecloseReview()
     && weeklyCommentPromptEnabled
     && !cur?.voteCommentHandled;
 }
@@ -2105,7 +3913,7 @@ async function reveal() {
   $('#lock').disabled = true;
   syncQuestionNavigation();
   try {
-    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
+    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isPrivatePrecloseReview()) {
       setVoteStatus('Recording…', 'recording');
       await finalizeReveal();
     } else {
@@ -2120,7 +3928,7 @@ async function reveal() {
 
 async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
-  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed') {
+  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isPrivatePrecloseReview()) {
     await finalizeWeeklyVote();
     return;
   }
@@ -2128,7 +3936,9 @@ async function finalizeReveal() {
   await viewerRebuild.enqueue(() => {
     const keepGrid = displayMode === 'grid';
     cur.revealed = true; cur.showAnswer = true;
-    if (!keepGrid) { displayMode = 'all'; clustered = false; }
+    if (weeklyResultsRevealActive()) {
+      applyAnswerRevealView();
+    } else if (!keepGrid) { displayMode = 'all'; clustered = false; }
     syncButtons();
   });
   const picked = cur.selected;
@@ -2136,18 +3946,44 @@ async function finalizeReveal() {
   const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
   const af3Right = !!(af3 && acceptedChoiceCorrect(af3));
   score.n++; score.you += youRight; score.af3 += af3Right;
+  bumpLocalWeeklyScore(youRight);
   const answerChoices = cur.answerChoices.length ? cur.answerChoices : cur.clusters.map(c => c.rep);
   const nCorrect = answerChoices.filter(acceptedChoiceCorrect).length;
   const opts = answerChoices.length + (difficulty === 'hard' ? 1 : 0);
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
+  renderRevealedQuestionUi();
+  updateScore();
+  if (!isPrivatePrecloseReview()) logAnswer(picked, af3, viewerTrace);
+}
+
+function renderRevealedQuestionUi() {
+  const picked = cur.selected;
+  if (!picked) return;
+  const af3 = cur.clusters.flatMap(c => c.members)
+    .find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
+  const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
+  const af3Right = !!(af3 && acceptedChoiceCorrect(af3));
   renderRevealList(picked, af3);
   $('#lock').style.display = 'none'; $('#choices').style.display = 'none';
-  const correct = cur.clusters.flatMap(c => c.members)
-    .filter(acceptedChoiceCorrect).sort((a, b) => a.rmsd - b.rmsd)[0];
+  const bestMatch = cur.answerRevealBest ?? bestRawCorrectPose();
+  if (isPrivatePrecloseReview()) {
+    const v = $('#verdict');
+    v.style.display = 'none';
+    v.textContent = '';
+    $('#answer-ai').textContent = '';
+    const details = $('#answer-details');
+    details.hidden = false;
+    details.open = true;
+    details.dataset.privateReview = 'true';
+    $('#next').style.display = 'none';
+    $('#myview').style.display = 'none';
+    syncXtalRow();
+    return;
+  }
   const detail = youRight
     ? (picked.none ? 'None of these poses was correct.'
                    : `Pose ${displayedPoseLabel(picked, cur.selectedAsCluster)} is ${picked.rmsd.toFixed(2)} Å from the crystal pose.`)
-    : (correct ? `Correct pose: ${displayedPoseLabel(correct, false)} (${correct.rmsd.toFixed(2)} Å).`
+    : (bestMatch ? `Best crystal match: ${displayedPoseLabel(bestMatch, false)} (${bestMatch.rmsd.toFixed(2)} Å).`
                : 'None of these poses was correct.');
   const afMethod = (cur.item.source === 'rnp' && af3 && af3._method) ? ` (${methodName(af3._method)})` : '';
   const afMsg = af3
@@ -2157,11 +3993,15 @@ async function finalizeReveal() {
   const v = $('#verdict'); v.style.display = '';
   v.innerHTML = `<strong style="color:${youRight ? 'var(--good)' : 'var(--bad)'}">${youRight ? 'Correct' : 'Not quite'}</strong>${detail}`;
   $('#answer-ai').textContent = afMsg;
-  $('#answer-details').hidden = false; $('#answer-details').open = false;
+  $('#answer-details').hidden = !cur.showAnswer;
+  if (cur.showAnswer) $('#answer-details').open = false;
   $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next question →' : 'View final score →';
-  $('#myview').style.display = ''; $('#myview').textContent = '← Back to my view (hide answer)';
-  if (cur.item.xtal_lig_file) $('#xtalrow').style.display = '';
-  updateScore(); logAnswer(picked, af3, viewerTrace);
+  $('#myview').style.display = '';
+  $('#myview').textContent = cur.showAnswer
+    ? '← Back to my view (hide answer)'
+    : 'Show answer →';
+  if (!cur.showAnswer) $('#choices').style.display = '';
+  syncXtalRow();
 }
 
 async function finalizeWeeklyVote() {
@@ -2249,10 +4089,11 @@ async function toggleAnswer() {
     () => {
       cur.showAnswer = !cur.showAnswer;
       if (cur.showAnswer) {
-        if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
+        if (weeklyResultsRevealActive()) applyAnswerRevealView();
+        else if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
         else { clustered = false; displayMode = 'all'; }
       }
-      else { applyUserView(); shownOne = 0; }                          // restore the user's remembered view
+      else { applyUserView(); shownOne = 0; resetCrystalViewState(); }
       syncButtons();
     },
     () => {
@@ -2260,6 +4101,7 @@ async function toggleAnswer() {
         renderRevealList(cur.selected, cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null);
       } else { renderUI(); }
       $('#myview').textContent = cur.showAnswer ? '← Back to my view (hide answer)' : 'Show answer →';
+      syncXtalRow();
     },
   );
 }
@@ -2269,29 +4111,104 @@ function renderRevealList(picked, af3) {
   if ((picked && picked.none) || cur.item.source === 'weekly') {
     const selectedNone = !!(picked && picked.none);
     const noneCorrect = !cur.item.has_correct;
-    const el = document.createElement('div');
+    const el = document.createElement('button');
+    el.type = 'button';
     el.className = 'choice ' + (noneCorrect ? 'correct' : 'wrong');
-    const voteText = cur.item.source === 'weekly'
-      ? ` · ${WEEKLY_TOTALS.get(`${cur.item.id}|none`) || 0} votes` : '';
-    el.innerHTML = `<span class="sw" style="background:#5a6675;border-style:dashed"></span><span class="nm">${selectedNone ? 'You: ' : ''}“None of these” ${noneCorrect ? '✓' : '✗'}${voteText}</span>`;
+    el.style.setProperty('--choice-color', noneCorrect ? 'var(--good)' : 'var(--bad)');
+    const voteText = cur.item.source === 'weekly' && !isPrivatePrecloseReview()
+      ? `${WEEKLY_TOTALS.get(`${cur.item.id}|none`) || 0} votes` : '';
+    const status = [
+      selectedNone && !isPrivatePrecloseReview() ? 'You' : '',
+      voteText,
+    ].filter(Boolean).join(' · ');
+    el.innerHTML = '<span class="sw" style="background:#5a6675;border-style:dashed"></span>'
+      + '<span class="nm"><span class="answer-choice-title">None of these</span>'
+      + `<span class="answer-choice-status">${status}</span></span>`;
     box.appendChild(el);
   }
-  cur.clusters.flatMap(c => c.members).sort((a, b) => a.rmsd - b.rmsd).forEach(c => {
-    const accepted = acceptedChoiceCorrect(c);
-    const el = document.createElement('div');
-    el.className = 'choice ' + (accepted ? 'correct' : 'wrong');
-    // RnP reveals its anonymised method here; Weekly repeats the method that was already public during play.
-    // Render it as a small metadata tag so it reads as provenance, not a choice label. CAMEO = all AF3.
-    const methodTag = ((cur.item.source === 'rnp' || cur.item.source === 'weekly') && c._method)
-      ? ` <span class="method" style="color:var(--faint);font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">· ${methodName(c._method)}</span>`
-      : '';
-    const voteTag = cur.item.source === 'weekly'
-      ? ` <span class="method" style="color:var(--faint);font-size:11px">· ${c._weeklyVoteCount || 0} votes</span>`
-      : '';
-    el.innerHTML = `<span class="sw" style="background:${hex(c === picked ? (accepted ? GOOD : BAD) : c.color)}"></span>`
-      + `<span class="nm">Pose ${c.label}${c === picked ? ' ← you' : ''}${c === af3 ? ' ⟨AI⟩' : ''}${methodTag}${voteTag}</span>`
-      + `<span class="rmsd" style="color:${accepted ? 'var(--good)' : 'var(--bad)'}">${c.rmsd.toFixed(2)} Å</span>`;
+  answerRevealEntries().forEach(entry => {
+    const c = entry.choice;
+    const exact = entry.exact;
+    const clusterAccepted = entry.clusterAccepted === true;
+    const bestMatch = cur.answerRevealBest ?? bestRawCorrectPose();
+    const isBestMatch = !!(bestMatch && sameChoice(c, bestMatch));
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = `choice ${exact ? 'correct' : (clusterAccepted ? 'cluster-accepted' : 'wrong')}`;
+    el.style.setProperty(
+      '--choice-color',
+      exact ? 'var(--good)' : (clusterAccepted ? 'var(--gold)' : 'var(--bad)'),
+    );
+    const label = entry.grouped ? entry.cluster.label : c.label;
+    const count = entry.grouped && entry.memberCount > 1
+      ? `<span class="answer-choice-count">· ${entry.memberCount} poses</span>` : '';
+    const status = isPrivatePrecloseReview() ? '' : [
+        isBestMatch ? 'Best match' : '',
+        c === picked ? 'You' : '',
+        c === af3 ? 'AI' : '',
+        cur.item.source === 'rnp' && c._method ? methodName(c._method) : '',
+        cur.item.source === 'weekly' ? `${c._weeklyVoteCount || 0} votes` : '',
+      ].filter(Boolean).join(' · ');
+    const swColor = exact ? hex(GOOD) : (clusterAccepted ? '#b77900' : hex(BAD));
+    el.innerHTML = `<span class="sw" style="background:${swColor}"></span>`
+      + `<span class="nm"><span class="answer-choice-title">Pose ${label}</span>${count}`
+      + `<span class="answer-choice-status">${status}</span></span>`
+      + `<span class="rmsd answer-rmsd">RMSD ${c.rmsd.toFixed(2)} Å</span>`;
+    attachPoseInfo(el, weeklyEntryEvidence(entry));
     box.appendChild(el);
+  });
+}
+
+function answerRevealEntries() {
+  if (cur.item.source !== 'weekly') {
+    return cur.clusters.flatMap(cluster => cluster.members.map(choice => ({
+      choice,
+      cluster,
+      members: [choice],
+      exact: answerViewPoseCorrect(choice),
+      clusterAccepted: false,
+      grouped: false,
+      memberCount: 1,
+    }))).sort((left, right) => left.choice.rmsd - right.choice.rmsd);
+  }
+  if (!clustered) {
+    return cur.clusters.flatMap(cluster => cluster.members.map(choice => ({
+      choice,
+      cluster,
+      members: [choice],
+      exact: answerViewPoseCorrect(choice),
+      clusterAccepted: false,
+      grouped: false,
+      memberCount: 1,
+    })));
+  }
+  return cur.clusters.flatMap(cluster => {
+    const correct = cluster.members
+      .filter(answerViewPoseCorrect)
+      .sort((left, right) => left.rmsd - right.rmsd);
+    if (correct.length) {
+      return cluster.members.map(choice => {
+        const exact = answerViewPoseCorrect(choice);
+        return {
+          choice,
+          cluster,
+          members: [choice],
+          exact,
+          clusterAccepted: !exact,
+          grouped: false,
+          memberCount: 1,
+        };
+      });
+    }
+    return [{
+      choice: cluster.rep,
+      cluster,
+      members: cluster.members,
+      exact: false,
+      clusterAccepted: false,
+      grouped: true,
+      memberCount: cluster.members.length,
+    }];
   });
 }
 
@@ -2342,12 +4259,20 @@ function syncButtons() {
   uc.style.display = cur && cur.clusters.some(c => c.members.length > 1) ? '' : 'none';
   const hb = $('#hbonds');                       // H-bond overlay toggle (mirrors #uncluster styling/gating)
   hb.classList.toggle('on', showHbonds);
-  hb.style.display = inPlay ? '' : 'none';
+  hb.style.display = inPlay && !viewingReleasedCrystal() ? '' : 'none';
   hb.setAttribute('aria-pressed', String(showHbonds));
+  hb.disabled = viewingReleasedCrystal();
+  const hbondStatus = $('#hbond-status');
+  if (hbondStatus) {
+    hbondStatus.textContent = retrospectiveAnswerActive() && showHbonds
+      ? retrospectiveHbondStatus
+      : '';
+  }
   const surface = $('#surface');
   surface.classList.toggle('on', showSurface);
-  surface.style.display = inPlay ? '' : 'none';
+  surface.style.display = inPlay && !viewingReleasedCrystal() ? '' : 'none';
   surface.setAttribute('aria-pressed', String(showSurface));
+  surface.disabled = viewingReleasedCrystal();
   const proteinEnsemble = $('#protein-ensemble');
   const canShowProteinEnsemble = inPlay && cur.item.source === 'weekly'
     && ENABLE_PROTEIN_ENSEMBLE_EXPERIMENT && clustered
@@ -2355,22 +4280,79 @@ function syncButtons() {
   proteinEnsemble.classList.toggle('on', showProteinEnsemble);
   proteinEnsemble.textContent = showProteinEnsemble ? 'Hide ghost proteins' : 'Ghost proteins';
   proteinEnsemble.style.display = canShowProteinEnsemble ? '' : 'none';
-  $('#modehint').textContent = '';
-  $('#modehint').style.display = 'none';
+  const modehint = $('#modehint');
+  if (modehint) {
+    modehint.textContent = '';
+    modehint.style.display = 'none';
+  }
   syncOneReviewState();
   syncStageBadge();
+  document.querySelectorAll(
+    '#mode button, #protmode button, #uncluster, #hbonds, #surface, #protein-ensemble',
+  ).forEach(control => { control.disabled = viewerTransitionBusy || viewingReleasedCrystal(); });
 }
 
 function syncStageBadge() {
   if (DEV) return;
   const badge = $('#badge');
   if (!badge) return;
+  if (typeof isPrivatePrecloseReview === 'function'
+    && isPrivatePrecloseReview() && showXtal && itemHasReleasedCrystal(cur?.item)
+    && !retrospectiveAnswerActive()) {
+    badge.style.display = '';
+    badge.textContent = `Predictions aligned to crystal protein · blue = experimental reference · RCSB ${
+      cur.item.released_crystal.pdb_id
+    }`;
+    return;
+  }
+  if (viewingReleasedCrystal()) {
+    const released = cur.item.released_crystal;
+    badge.style.display = '';
+    badge.textContent = isPrivatePrecloseReview()
+      ? `Answer overlay · predictions aligned to crystal protein · RCSB ${released.pdb_id}`
+      : `Released crystal · ${cur.item.ligand} · RCSB ${released.pdb_id}`;
+    return;
+  }
+  if (retrospectiveAnswerActive()) {
+    badge.style.display = displayMode === 'one' ? '' : 'none';
+    if (displayMode !== 'one') return;
+    if (displayMode === 'one') {
+      const choices = retrospectiveNavChoices();
+      const choice = choices[Math.min(shownOne, choices.length - 1)];
+      if (isXtalReferenceChoice(choice)) {
+        badge.textContent = 'Xtal reference · crystal protein · experimental · not scored';
+        return;
+      }
+      const evidence = [
+        `${choice.rmsd.toFixed(2)} Å`,
+        answerPoseStatus(choice),
+        weeklyLigandPlddt(choice),
+        weeklyHbondCount(choice),
+      ].filter(Boolean);
+      badge.textContent = `Pose ${displayedPoseLabel(choice)} · ${evidence.join(' · ')}`;
+      return;
+    }
+  }
+  if (cur?.revealed && cur.showAnswer && weeklyResultsRevealActive() && cur.answerRevealBest) {
+    badge.style.display = '';
+    badge.textContent = `Best crystal match · Pose ${displayedPoseLabel(cur.answerRevealBest, false)} · ${cur.answerRevealBest.rmsd.toFixed(2)} Å`;
+    return;
+  }
+  if (cur?.revealed && cur.showAnswer && weeklyResultsRevealActive() && !cur.answerRevealBest) {
+    badge.style.display = '';
+    badge.textContent = 'No correct predicted pose';
+    return;
+  }
   const hideWeeklyOverlayBadge = cur?.item?.source === 'weekly' && displayMode !== 'one';
   badge.style.display = hideWeeklyOverlayBadge ? 'none' : '';
   if (hideWeeklyOverlayBadge) return;
   if (cur?.item?.source === 'weekly' && displayMode === 'one') {
-    const choices = visibleChoices();
+    const choices = retrospectiveNavChoices();
     const choice = choices[Math.min(shownOne, choices.length - 1)];
+    if (isXtalReferenceChoice(choice)) {
+      badge.textContent = 'Xtal reference · experimental · not scored';
+      return;
+    }
     const evidence = [weeklyLigandPlddt(choice), weeklyHbondCount(choice)].filter(Boolean);
     badge.textContent = `Pose ${displayedPoseLabel(choice)}${evidence.length ? ` · ${evidence.join(' · ')}` : ''}`;
     return;
@@ -2388,10 +4370,11 @@ async function toggleAnswerDev() {
       cur.showAnswer = !cur.showAnswer;
       cur.revealed = cur.showAnswer;
       if (cur.showAnswer) {
-        if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
+        if (weeklyResultsRevealActive()) applyAnswerRevealView();
+        else if (userView.displayMode === 'grid') { displayMode = 'grid'; clustered = userView.clustered; }
         else { clustered = false; displayMode = 'all'; }
       }
-      else { applyUserView(); shownOne = 0; showXtal = false; $('#showXtal').checked = false; }   // restore remembered view
+      else { applyUserView(); shownOne = 0; resetCrystalViewState(); }
       syncButtons();
     },
     () => {
@@ -2425,6 +4408,11 @@ function finish() {
   $('#xtalrow').style.display = 'none'; $('#myview').style.display = 'none';
   $('#verdict').style.display = '';
   if (quizSource === 'weekly') {
+    if (isPrivatePrecloseReview()) {
+      $('#verdict').style.display = 'none';
+      $('#verdict').textContent = '';
+      return;
+    }
     $('#verdict').innerHTML = isReadOnlyPreview()
       ? '<b>Read-only Preview complete.</b> No names or votes were saved.'
       : WEEKLY_ROUND?.public_status === 'revealed'
@@ -2560,7 +4548,7 @@ async function init() {
     return { ...it, source, choices: ch, has_correct: hasC, bucket,
       easyPlayable: easyPlayable(ch, source) };
   };
-  const normalizeWeekly = round => {
+  const normalizeWeekly = (round, voteTotals = WEEKLY_TOTALS) => {
     const blindItems = round?.blind_manifest?.items;
     if (!Array.isArray(blindItems)) return [];
     const revealItems = new Map((round?.reveal_manifest?.items || []).map(item => [item.id, item]));
@@ -2578,7 +4566,7 @@ async function init() {
         return {
           ...choice,
           _weeklyChoiceId: choice.id,
-          _weeklyVoteCount: Number(WEEKLY_TOTALS.get(`${item.id}|${choice.id}`) || 0),
+          _weeklyVoteCount: Number(voteTotals.get(`${item.id}|${choice.id}`) || 0),
           af3_sample: index + 1,
           pose_file: choice.pose_uri,
           afprotein_file: choice.protein_uri || item.protein_uri,
@@ -2654,13 +4642,18 @@ async function init() {
       ]));
     }
     POOLS.weekly = normalizeWeekly(WEEKLY_ROUND);
+    if (WEEKLY_ROUND?.public_status === 'revealed') {
+      void loadWeeklyLeaderboard();
+    }
   } catch (error) {
     console.warn('Weekly quiz unavailable:', error.message);
   }
   const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
   if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
   if (WEEKLY_ONLY) {
-    document.title = 'Foldarium · Weekly blind';
+    document.title = isPrivatePrecloseReview()
+      ? 'Foldarium · Private pre-close review'
+      : 'Foldarium · Weekly blind';
     document.querySelectorAll('#quizsrc button').forEach(button => {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
@@ -2693,11 +4686,17 @@ async function init() {
     });
   }
   document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     const mode = b.dataset.m;
     const wasGrid = displayMode === 'grid';
     await viewerRebuild.enqueue(() => {
       displayMode = mode;
+      if (retrospectiveAnswerActive() && displayMode === 'all' && clustered
+          && cur.contextChoice && !isXtalReferenceChoice(cur.contextChoice)) {
+        const representative = clusterForChoice(cur.contextChoice)?.rep || cur.contextChoice;
+        cur.contextChoice = representative;
+        cur.poseFocusChoice = representative;
+      }
       if (displayMode === 'one') {
         const focus = cur.contextChoice || (!cur.selected?.none ? cur.selected : null);
         const index = focus ? visibleIndexForChoice(focus) : -1;
@@ -2709,7 +4708,7 @@ async function init() {
     }, () => { renderUI(); recordAppEvent('display_mode_changed'); });
   });
   document.querySelectorAll('#protmode button').forEach(b => b.onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     const mode = b.dataset.p;
     await viewerRebuild.enqueue(() => {
       proteinMode = mode;
@@ -2719,7 +4718,7 @@ async function init() {
     recordAppEvent('protein_mode_changed');
   });
   $('#uncluster').onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     await viewerRebuild.enqueue(() => {
       const focusedChoice = poseFocusBeforeClusterToggle();
       const preferredChoice = cur.selected?.none ? null : cur.selected;
@@ -2736,11 +4735,12 @@ async function init() {
       if (!cur.revealed) rememberView();
       syncButtons();
       renderUI();
+      if (cur.revealed && weeklyResultsRevealActive()) renderRevealedQuestionUi();
     });
     recordAppEvent('cluster_mode_changed');
   };
   $('#hbonds').onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     await viewerRebuild.enqueue(() => {
       showHbonds = !showHbonds;
       if (!cur.revealed) rememberView();       // persist across questions like the other view choices
@@ -2749,7 +4749,7 @@ async function init() {
     recordAppEvent('hbonds_toggled');
   };
   $('#protein-ensemble').onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     await viewerRebuild.enqueue(() => {
       showProteinEnsemble = !showProteinEnsemble;
       if (!cur.revealed) rememberView();
@@ -2758,7 +4758,7 @@ async function init() {
     recordAppEvent('protein_ensemble_toggled');
   };
   $('#surface').onclick = async () => {
-    if (interactionBlocked()) return;
+    if (viewerControlBlocked()) return;
     await viewerRebuild.enqueue(() => {
       showSurface = !showSurface;
       if (!cur.revealed) rememberView();
@@ -2768,11 +4768,19 @@ async function init() {
   };
   $('#one-select').onclick = () => {
     const choice = oneReviewChoice();
+    if (retrospectiveAnswerActive()) {
+      void setRetrospectiveProteinFrame('xtal');
+      return;
+    }
     if (!choice || interactionBlocked()) return;
     void onPick(shownOne);
   };
   $('#one-reject').onclick = () => {
     const choice = oneReviewChoice();
+    if (retrospectiveAnswerActive()) {
+      void setRetrospectiveProteinFrame('folded');
+      return;
+    }
     if (!choice || interactionBlocked()) return;
     void toggleChoiceRejected(choice);
   };
@@ -2780,10 +4788,15 @@ async function init() {
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
   $('#question-prev').onclick = () => {
-    void navigateWeeklyQuestion(idx - 1, 'question_previous');
+    const target = isPrivatePrecloseReview() ? adjacentRetrospectiveQuestionIndex(-1) : idx - 1;
+    if (target != null) void navigateWeeklyQuestion(target, 'question_previous');
   };
   $('#question-next').onclick = () => {
-    void navigateWeeklyQuestion(idx + 1, 'question_next');
+    const target = isPrivatePrecloseReview() ? adjacentRetrospectiveQuestionIndex(1) : idx + 1;
+    if (target != null) void navigateWeeklyQuestion(target, 'question_next');
+  };
+  $('#retrospective-question-filter-select').onchange = event => {
+    void setRetrospectiveQuestionFilter(event.target.value);
   };
   $('#quick-start-open').onclick = () => { openWeeklyQuickStart('manual'); };
   $('#quick-start-dialog').addEventListener('close', () => {
@@ -2817,7 +4830,19 @@ async function init() {
   $('#showXtal').onchange = async (e) => {
     if (viewerTransitionBusy) return;
     const checked = e.target.checked;
-    await viewerRebuild.enqueue(() => { showXtal = checked; });
+    await viewerRebuild.enqueue(() => {
+      if (itemHasReleasedCrystal(cur?.item)) {
+        releasedCrystalMode = checked;
+        releasedCrystalError = '';
+        if (!checked && cur?.revealed && cur?.showAnswer && weeklyResultsRevealActive()) {
+          applyAnswerRevealView();
+        } else {
+          resetCameraOnNextBuild = true;
+        }
+      } else showXtal = checked;
+      syncXtalRow();
+      syncButtons();
+    });
     recordAppEvent('crystal_reference_toggled');
   };
   document.addEventListener('keydown', async e => {
@@ -2825,19 +4850,20 @@ async function init() {
       if (e.key === 'ArrowUp') { e.preventDefault(); prevDev(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); nextDev(); return; }
     }
-    if (!cur || interactionBlocked() || displayMode !== 'one') return;
+    if (!cur || viewerControlBlocked() || displayMode !== 'one') return;
     if (e.key === 'ArrowRight') {
       await viewerRebuild.enqueue(() => {
-        shownOne = (shownOne + 1) % visibleChoices().length;
-        cur.poseFocusChoice = visibleChoices()[shownOne];
+        const nav = retrospectiveNavChoices();
+        shownOne = (shownOne + 1) % nav.length;
+        cur.poseFocusChoice = nav[shownOne];
       }, syncOneReviewState);
       recordAppEvent('pose_navigated');
     }
     if (e.key === 'ArrowLeft') {
       await viewerRebuild.enqueue(() => {
-        const n = visibleChoices().length;
-        shownOne = (shownOne - 1 + n) % n;
-        cur.poseFocusChoice = visibleChoices()[shownOne];
+        const nav = retrospectiveNavChoices();
+        shownOne = (shownOne - 1 + nav.length) % nav.length;
+        cur.poseFocusChoice = nav[shownOne];
       }, syncOneReviewState);
       recordAppEvent('pose_navigated');
     }
@@ -2846,5 +4872,59 @@ async function init() {
     $('#ligand').textContent = 'no quiz items'; return;
   }
   if (!await resumeWeeklyQuizIfAvailable()) showIntro();
+  window.foldariumApplyPrivateReviewBundle = async (bundle) => {
+    if (!bundle) {
+      window.foldariumPrivateReview?.deactivatePrivateReview?.();
+      location.reload();
+      return;
+    }
+    const synthetic = window.foldariumPrivateReview.buildSyntheticReviewRound(bundle);
+    if (!synthetic) throw new Error('Private evaluation bundle is invalid.');
+    const privateVoteTotals = new Map();
+    for (const item of bundle.weekly_question_results?.items || []) {
+      for (const answer of item.answers || []) {
+        const answerId = answer.picked_none ? 'none' : answer.choice_id;
+        privateVoteTotals.set(
+          `${item.item_id}|${answerId}`,
+          Number(answer.vote_count || 0),
+        );
+      }
+    }
+    const pool = window.foldariumPrivateReview.enrichPrivateWeeklyPool(
+      normalizeWeekly(synthetic, privateVoteTotals),
+      bundle,
+    );
+    window.foldariumPrivateReview.validatePrivateReviewRendering(bundle, pool);
+    WEEKLY_ROUND = synthetic;
+    window.foldariumPrivateReview.activatePrivateReview(bundle);
+    WEEKLY_VOTES = new Map();
+    WEEKLY_TOTALS = privateVoteTotals;
+    WEEKLY_ITEM_STATES = new Map();
+    remoteSessionId = null;
+    weeklyTraceSessionSeed = null;
+    retrospectiveQuestionFilter = 'all';
+    POOLS.weekly = pool;
+    WEEKLY_QUESTION_RESULTS = bundle.weekly_question_results || null;
+    if (bundle.weekly_leaderboard != null) {
+      await loadWeeklyLeaderboard({ bundleLeaderboard: bundle.weekly_leaderboard });
+    } else {
+      WEEKLY_LEADERBOARD = null;
+      WEEKLY_LEADERBOARD_ERROR = '';
+    }
+    const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
+    if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
+    renderWeeklyResultsStatus();
+    if (WEEKLY_ONLY) {
+      document.title = isPrivatePrecloseReview()
+        ? 'Foldarium · Private pre-close review'
+        : 'Foldarium · Weekly blind';
+    }
+    cur = null;
+    if (WEEKLY_ONLY) {
+      showIntro();
+      await startQuiz();
+    }
+  };
+  window.dispatchEvent(new Event('foldarium-private-review-ready'));
 }
 init().catch(e => { $('#ligand').textContent = 'error: ' + e.message; console.error(e); });

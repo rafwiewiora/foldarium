@@ -73,6 +73,9 @@ const disabledBackend = {
   getWeeklyRound: async () => null,
   getWeeklyVotes: async () => [],
   getWeeklyVoteTotals: async () => [],
+  getWeeklyResults: async () => {
+    throw new Error('Weekly results are unavailable.');
+  },
   submitWeeklyVote: async () => {
     throw new Error('Weekly quiz persistence is unavailable.');
   },
@@ -107,6 +110,7 @@ function readOnlyBackend(readBackend) {
     // totals and round remain available; viewer inspection uses ?dev=1.
     getWeeklyVotes: async () => [],
     getWeeklyVoteTotals: (...args) => readBackend.getWeeklyVoteTotals(...args),
+    getWeeklyResults: (...args) => readBackend.getWeeklyResults(...args),
     submitWeeklyVote: async () => unavailable(),
     submitWeeklyVoteAttempt: async () => unavailable(),
     submitWeeklyTraceBatch: async () => unavailable(),
@@ -179,6 +183,9 @@ export function createDeferredBackend({
     },
     async getWeeklyVoteTotals(...args) {
       return (await requireTarget()).getWeeklyVoteTotals(...args);
+    },
+    async getWeeklyResults(...args) {
+      return (await requireTarget()).getWeeklyResults(...args);
     },
     async submitWeeklyVote(...args) {
       return (await requireTarget()).submitWeeklyVote(...args);
@@ -497,6 +504,20 @@ export function createQuizBackend({
       return (await leaderboardRpc('get_weekly_quiz_vote_totals', {
         p_round_id: roundId,
       })) ?? [];
+    },
+    async getWeeklyResults(roundId) {
+      if (!roundId) throw new Error('Weekly round identity is invalid.');
+      let response;
+      try {
+        response = await fetch(`/api/weekly-results?round_id=${encodeURIComponent(roundId)}`);
+      } catch (error) {
+        throw new Error(`Weekly results are unavailable: ${error.message}`, { cause: error });
+      }
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Weekly results request failed');
+      }
+      return payload;
     },
     async submitWeeklyVote(roundId, itemId, choiceId, pickedNone) {
       if (!roundId || !itemId || typeof pickedNone !== 'boolean') {

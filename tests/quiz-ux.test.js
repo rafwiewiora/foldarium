@@ -69,13 +69,14 @@ test('viewer controls form an always-visible bottom toolbar', async () => {
   assert.match(html, /<span class="control-label">View<\/span>/);
 });
 
-test('One at a time exposes Select and Reject review controls without adding them to Show all', async () => {
+test('One at a time exposes review controls during voting and retrospective review', async () => {
   const [html, app] = await Promise.all([readHtml(), readApp()]);
 
   assert.match(html, /id="one-review-actions" hidden/);
   assert.match(html, /id="one-select"[^>]*>Select<\/button>/);
   assert.match(html, /id="one-reject"[^>]*>Reject<\/button>/);
-  assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly' && !cur\.revealed/);
+  assert.match(app, /const retrospective = !!choice && retrospectiveAnswerActive\(\)/);
+  assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly' && \(!cur\.revealed \|\| retrospective\)/);
   assert.match(app, /if \(!cur \|\| displayMode !== 'one'\) return null/);
   assert.match(app, /Click a ligand to zoom in; click white space to/);
   assert.match(app, /setVoteStatus\('Recording…', 'recording'\)/);
@@ -94,16 +95,17 @@ test('question context is arranged at the top of the viewer', async () => {
   const instruction = html.indexOf('id="instruction"', context);
 
   assert.ok(stage < context && context < ligand && ligand < instruction);
-  assert.match(html, /#viewer-question\{position:absolute;[\s\S]*?top:16px/);
-  assert.match(html, /max-width:min\(760px,calc\(100% - 240px\)\)/);
-  assert.match(html, /\.badge\{[\s\S]*?right:64px/);
+  assert.match(html, /#stage-topbar\{position:absolute;[\s\S]*?top:14px/);
+  assert.match(html, /#viewer-question\{position:static;[\s\S]*?flex:1 1 620px/);
+  assert.match(html, /max-width:760px/);
+  assert.match(html, /#stage-topbar\{[\s\S]*?right:64px/);
   assert.match(html, /#gridview\.on\{display:block;top:var\(--grid-top-clearance\);bottom:var\(--grid-controls-clearance\)\}/);
 });
 
 test('active-pose badge is legible and clears the Molstar reset control', async () => {
   const html = await readHtml();
 
-  assert.match(html, /\.badge\{position:absolute;top:14px;right:64px;[\s\S]*?font-size:13px;[\s\S]*?padding:7px 12px/);
+  assert.match(html, /\.badge\{position:static;[\s\S]*?font-size:13px;[\s\S]*?padding:7px 12px/);
 });
 
 test('quiz chrome uses Geist Sans without changing the molecular viewer', async () => {
@@ -128,8 +130,8 @@ test('Foldarium branding is present and the name intro starts centered', async (
   const html = await readHtml();
   const logo = await readFile(new URL('../assets/foldarium-mark.svg', import.meta.url), 'utf8');
 
-  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="assets\/foldarium-mark\.svg\?v=\d+"/);
-  assert.match(html, /<img class="brand-mark" src="assets\/foldarium-mark\.svg\?v=\d+" alt=""/);
+  assert.match(html, /<link rel="icon" type="image\/svg\+xml" href="\/assets\/foldarium-mark\.svg\?v=\d+"/);
+  assert.match(html, /<img class="brand-mark" src="\/assets\/foldarium-mark\.svg\?v=\d+" alt=""/);
   assert.match(html, /<h1>Foldarium<\/h1>/);
   assert.match(html, /<div id="wrap" class="intro" hidden>/);
   assert.match(html, /#wrap\.intro #side\{width:100%;max-width:480px;margin:auto/);

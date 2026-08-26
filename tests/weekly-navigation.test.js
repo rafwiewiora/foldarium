@@ -59,6 +59,10 @@ test('weekly vote completion releases question arrows after the next question re
       idx: 14,
       ITEMS: Array.from({ length: 29 }, (_, index) => ({ id: `item-${index}` })),
       WEEKLY_ROUND: { public_status: 'open' },
+      isPrivatePrecloseReview: () => false,
+      syncRetrospectiveQuestionFilter() {},
+      syncWeeklyGuideContent() {},
+      retrospectiveQuestionIndexes: () => sandbox.ITEMS.map((_, index) => index),
       $: selector => elements.get(selector),
       setVoteStatus(message, state) {
         const verdict = elements.get('#verdict');
@@ -108,6 +112,40 @@ test('weekly vote completion releases question arrows after the next question re
       elements.get('#question-next').disabled,
     ], [false, false], `${commentState.name}: both arrows are resynchronized after advancing`);
   }
+});
+
+test('retrospective question filters combine pose availability and player success', async () => {
+  const app = await readApp();
+  const items = [
+    { id: 'pose-solved', choices: [{ correct: true }] },
+    { id: 'pose-unsolved', choices: [{ correct: true }, { correct: false }] },
+    { id: 'none-solved', choices: [{ correct: false }] },
+    { id: 'none-unsolved', choices: [{ correct: false }] },
+  ];
+  const context = installDeclarations(app, [
+    'function weeklyItemHasCorrectPose(item)',
+    'function weeklyQuestionResultForItem(item)',
+    'function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter)',
+    'function retrospectiveQuestionIndexes(filter = retrospectiveQuestionFilter)',
+  ], {
+    ITEMS: items,
+    WEEKLY_QUESTION_RESULTS: {
+      items: [
+        { item_id: 'pose-solved', correct_count: 1 },
+        { item_id: 'pose-unsolved', correct_count: 0 },
+        { item_id: 'none-solved', correct_count: 2 },
+        { item_id: 'none-unsolved', correct_count: 0 },
+      ],
+    },
+    isPrivatePrecloseReview: () => true,
+  });
+
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('pose')), [0, 1]);
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('none')), [2, 3]);
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('pose-solved')), [0]);
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('pose-unsolved')), [1]);
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('none-solved')), [2]);
+  assert.deepEqual(Array.from(context.retrospectiveQuestionIndexes('none-unsolved')), [3]);
 });
 
 test('weekly navigation skips unanswered questions and restores revisable per-question state', async () => {

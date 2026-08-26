@@ -206,6 +206,75 @@ def _weekly_ligand_eligibility(
     }
 
 
+def ligand_eligibility_from_target(target: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive weekly ligand eligibility from one canonical target package."""
+
+    component_id, heavy_atoms, _chain_ids, smiles = _selected_ligand(target)
+    return _weekly_ligand_eligibility(component_id, heavy_atoms, smiles)
+
+
+def legacy_ligand_topology_audit(ligand_smiles: str) -> dict[str, Any]:
+    """Recompute the clustering topology audit fields for one task SMILES."""
+
+    if not isinstance(ligand_smiles, str) or not ligand_smiles.strip():
+        raise WeeklyQuizAssemblyError(
+            "selected ligand requires canonical task SMILES for clustering"
+        )
+    _, _, Chem = _dependencies()
+    source_molecule = Chem.MolFromSmiles(ligand_smiles.strip())
+    if source_molecule is None:
+        raise WeeklyQuizAssemblyError(
+            "selected ligand task SMILES could not be parsed for clustering"
+        )
+    source_molecule = Chem.RemoveHs(source_molecule)
+    expected_elements = [atom.GetAtomicNum() for atom in source_molecule.GetAtoms()]
+    if not expected_elements:
+        raise WeeklyQuizAssemblyError("selected ligand task SMILES has no heavy atoms")
+    topology_builder = Chem.RWMol()
+    for atomic_number in expected_elements:
+        atom = Chem.Atom(int(atomic_number))
+        atom.SetNoImplicit(True)
+        topology_builder.AddAtom(atom)
+    topology_edges: list[list[int]] = []
+    for bond in source_molecule.GetBonds():
+        left, right = sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+        topology_builder.AddBond(left, right, Chem.BondType.SINGLE)
+        topology_edges.append([int(left), int(right)])
+    topology_edges.sort()
+    topology = topology_builder.GetMol()
+    mappings = topology.GetSubstructMatches(
+        topology,
+        uniquify=False,
+        useChirality=False,
+        maxMatches=LIGAND_AUTOMORPHISM_CAP + 1,
+    )
+    if not mappings:
+        raise WeeklyQuizAssemblyError(
+            "canonical ligand graph has no self mapping for clustering"
+        )
+    if len(mappings) > LIGAND_AUTOMORPHISM_CAP:
+        raise WeeklyQuizAssemblyError(
+            "canonical ligand graph exceeds the clustering automorphism limit"
+        )
+    topology_payload = {
+        "atomic_numbers": expected_elements,
+        "edges": topology_edges,
+    }
+    return {
+        "policy": LEGACY_LIGAND_ORDER_POLICY,
+        "source_smiles_sha256": hashlib.sha256(
+            ligand_smiles.encode("utf-8")
+        ).hexdigest(),
+        "source_topology_sha256": hashlib.sha256(
+            canonical_json(topology_payload).encode("utf-8")
+        ).hexdigest(),
+        "heavy_atom_count": len(expected_elements),
+        "automorphism_count": len(mappings),
+        "automorphism_cap": LIGAND_AUTOMORPHISM_CAP,
+        "rdkit_version": str(Chem.rdBase.rdkitVersion),
+    }
+
+
 def _weekly_presentation_group(cluster_count: int) -> str:
     if isinstance(cluster_count, bool) or not isinstance(cluster_count, int) or cluster_count < 1:
         raise WeeklyQuizAssemblyError("weekly presentation requires a positive cluster count")
@@ -2364,6 +2433,7 @@ def publish_staged_weekly_quiz(
             "target_id": item.get("target_id"),
             "week": item.get("week"),
             "ligand": item.get("ligand"),
+            "ligand_eligibility": item.get("ligand_eligibility"),
             "protein_uri": protein_object["object_uri"],
             "pocket_uri": pocket_object["object_uri"],
             "clustering": item.get("clustering"),

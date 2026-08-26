@@ -129,8 +129,74 @@ manifest digests, and fails closed before opening if any pose cannot be scored.
 
 ### Wednesday reveal
 
+#### Exact private pre-close catch-up
+
+`materialize_private_weekly_evaluation` is a manual, unscheduled, CPU-only path
+for the one explicitly allow-listed production replacement round
+`weekly-2026-08-08-beta-v5-global-tm-29`. It exists so released-coordinate
+results can be materialized privately for interface development without ending
+the published voting window or exposing answers.
+
+The additive migration
+`supabase/migrations/20260815020000_add_private_weekly_evaluations.sql` must be
+reviewed and applied before the function can catalog an artifact. The migration
+adds an append-only descriptor table with no anon/authenticated grants, policy,
+view, or public RPC. Its insert trigger locks the exact round and requires it to
+remain production, open, unrevealed, inside its voting window, and bound to the
+same blind/private-index digests. The artifact itself is stored by digest in the
+configured private prediction-results bucket; the function verifies that the
+bucket is not public before downloading or scoring anything.
+
+After a separate code/migration/deployment review, the only supported operator
+command is the exact no-publish invocation:
+
+```bash
+MODAL_PROFILE=molspace-production modal run --env main \
+  pipeline/deploy/modal_app.py::materialize_private_weekly_evaluation \
+  --round-id weekly-2026-08-08-beta-v5-global-tm-29 \
+  --no-publish
+```
+
+Both `--round-id` and `--no-publish` are mandatory. Omitting `--no-publish`,
+passing `--publish`, naming another round, selecting a public Storage bucket,
+running before open/after close, or observing any existing reveal field aborts
+before catalog insertion. The path has no reveal callback and never updates
+`weekly_quiz_rounds`, `closes_at`, or reveal fields. Repetition with identical
+scientific inputs verifies/reuses the same content-addressed object and exact
+catalog row.
+
+The returned report contains only the private object descriptor and integrity
+digests, not the reveal manifest. Retrieve the artifact only with a service-role
+operator for local/Preview fixture generation. Do not add its table or content
+to a browser view/RPC, copy it into the public quiz bucket, or treat successful
+materialization as approval for an early public reveal.
+
+#### Automatic post-close retrospective
+
+`weekly_retrospective_tick` is a separate CPU-only job that never calls the
+weekly reveal RPC. It is absent from a deployment unless
+`FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE=1` is set at deploy time. Its default
+`FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON` is `15 0-5 * * 3`, giving six bounded
+hourly attempts beginning fifteen minutes after the voting deadline.
+
+The job resolves the newest immutable round for the latest Saturday campaign,
+requires the production voting window to be closed, and writes the deterministic
+v5 artifact plus its service-role-only catalog descriptor. It accepts a round
+immediately before or after the independent atomic reveal transition. An
+existing row for the round short-circuits before coordinate downloads or
+rescoring, so retries are idempotent. Retrospective failures do not block public
+reveal and reveal failures do not block retrospective retries.
+
+Both catalog migrations must be reviewed and applied before enabling the job:
+`20260815020000_add_private_weekly_evaluations.sql` creates the inaccessible
+append-only catalog, and
+`20260825235500_upgrade_private_weekly_evaluations_v5.sql` binds v5 inserts to
+the post-close state on either side of reveal. Keep
+`FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE` unset until that migration and the
+deployment are explicitly approved.
+
 The Wednesday evaluator is a CPU-only Modal function. Its image pins
-`gemmi==0.7.3`, `numpy==2.3.2`, and `rdkit==2025.3.6`; it neither reserves a GPU
+`gemmi==0.7.5`, `numpy==2.3.2`, and `rdkit==2025.3.6`; it neither reserves a GPU
 nor uses either prediction cache Volume. The schedule is absent unless
 `FOLDARIUM_ENABLE_WEDNESDAY_REVEAL=1` is set at deploy time. When enabled, the
 default `FOLDARIUM_WEDNESDAY_REVEAL_CRON` is `5 0-5 * * 3`: six hourly attempts

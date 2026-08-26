@@ -16,6 +16,14 @@ outputs remain in Foldarium-controlled object storage; rows refer to immutable o
 checksums. The normalized task hash makes run creation retry-safe regardless of whether execution happens
 locally, on Modal, or on GCP.
 
+Later timestamped-only migrations under `../../supabase/migrations/` extend the
+application schema without rewriting these five foundational mirrors. In
+particular, `20260815020000_add_private_weekly_evaluations.sql` and its
+`20260825235500_upgrade_private_weekly_evaluations_v5.sql` successor are
+unapplied review drafts for an append-only, service-role-only post-close
+retrospective integrity catalog. They store no result payload and create no
+browser view or RPC; applying them is a separate production decision.
+
 Workers use `claim_prediction_run` for a bounded lease. After running a model, a worker uploads every
 verified artifact to Storage and calls `finish_prediction_run`; artifact metadata and the terminal result
 are committed in one database transaction. A dead Modal worker can therefore be reclaimed by a GCP worker

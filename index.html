@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Foldarium · Pose Quiz</title>
-<link rel="icon" type="image/svg+xml" href="assets/foldarium-mark.svg?v=2026080911"/>
+<link rel="icon" type="image/svg+xml" href="/assets/foldarium-mark.svg?v=2026082501"/>
 <style>
   @font-face{font-family:"Geist Sans";font-style:normal;font-display:swap;font-weight:100 900;
     src:url("https://cdn.jsdelivr.net/fontsource/fonts/geist:vf@5.3.0/latin-wght-normal.woff2") format("woff2-variations")}
@@ -54,6 +54,7 @@
     transition:opacity .14s ease-out}
   #gridview.on{display:block;top:var(--grid-top-clearance);bottom:var(--grid-controls-clearance)}
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
+    margin-inline:auto;
     min-height:100%;transition:opacity .14s ease-out}
   #gridview.loading-grid #gridcells{opacity:0;transition:none}
   .grid-card{position:relative;flex:0 0 var(--grid-card-w,300px);width:var(--grid-card-w,300px);
@@ -68,12 +69,18 @@
   .grid-card.wrong{border-color:var(--bad)}
   .grid-card.failed{border-color:var(--bad);background:#fff4f2}
   .grid-host{position:absolute;inset:0}
-  .grid-head{position:absolute;z-index:5;top:8px;left:8px;display:flex;align-items:center;gap:7px;
-    max-width:calc(100% - 16px);padding:5px 8px;border:1px solid #d5dde5;border-radius:6px;
-    background:#ffffffeb;color:#273444;font:600 11px/1.2 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  .grid-head{position:absolute;z-index:5;top:8px;left:8px;display:flex;align-items:center;gap:5px;
+    width:calc(100% - 16px);min-width:0;box-sizing:border-box;overflow:hidden;white-space:nowrap;
+    padding:5px 8px;border:1px solid #d5dde5;border-radius:6px;background:#ffffffeb;color:#273444;
+    font:600 11px/1.2 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
   .grid-head:disabled{cursor:default}
   .grid-dot{width:10px;height:10px;border-radius:3px;flex:none}
-  .grid-meta{color:#667587;font-weight:500;white-space:nowrap}
+  .grid-title{flex:none;white-space:nowrap}
+  .grid-rmsd{flex:none;font-size:inherit;font-weight:600;white-space:nowrap}
+  .grid-rmsd.correct{color:var(--good)}
+  .grid-rmsd.wrong{color:var(--bad)}
+  .grid-meta{flex:0 1 auto;min-width:0;overflow:hidden;text-align:left;text-overflow:ellipsis;color:#667587;
+    font-weight:500;white-space:nowrap}
   .pose-info{position:relative;display:inline-grid;place-items:center;flex:none;margin-left:auto;width:18px;height:18px;
     border:1px solid currentColor;border-radius:50%;color:var(--muted);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
     cursor:help;outline:none}
@@ -96,6 +103,7 @@
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
   .grid-review-actions{position:absolute;z-index:6;right:8px;bottom:8px;display:flex;gap:5px}
+  .grid-review-actions[hidden]{display:none}
   .grid-review-actions button{min-height:30px;padding:5px 9px;border:1px solid #d5dde5;border-radius:7px;
     background:#fffffff2;color:#425161;font:650 10.5px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;
     box-shadow:0 1px 4px #16202b16}
@@ -151,7 +159,18 @@
   .choice.sel .tag{color:var(--accent);font-weight:600}
   .choice.correct{border-color:var(--good);background:#eef8f1}
   .choice.wrong{border-color:var(--bad);background:#fff1f0}
-  .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px}
+  .choice .rmsd{flex:none;margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px;white-space:nowrap}
+  #answer-choices{gap:7px}
+  #answer-choices .choice{min-height:40px;padding:8px 10px;gap:9px}
+  #answer-choices .choice .nm{display:flex;align-items:center;gap:6px;flex:1;min-width:0;
+    overflow:hidden;white-space:nowrap}
+  #answer-choices .answer-choice-title{flex:none;font-weight:650}
+  #answer-choices .answer-choice-count{flex:none;color:var(--muted);font-size:11px;font-weight:500}
+  #answer-choices .answer-choice-status{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);
+    font-size:11px;font-weight:600}
+  #answer-choices .choice.correct .answer-choice-status{color:#287f3c}
+  #answer-choices .choice.wrong .answer-choice-status{color:#a64038}
+  #answer-choices .choice .rmsd{font-size:12px;font-weight:750}
   #choices{gap:8px;background:transparent}
   #choices .choice{min-height:50px;padding:9px 11px;gap:10px;border:1px solid var(--line);
     border-left:5px solid var(--choice-color);border-radius:9px;background:#fff;color:var(--ink);
@@ -186,6 +205,80 @@
   .score b{font-variant-numeric:tabular-nums}
   .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
   .weekly-results .hint{margin-top:6px}
+  .weekly-scorecard{display:flex;flex-direction:column;gap:10px;margin-top:8px;font-size:12px}
+  .weekly-scorecard-section{display:flex;flex-direction:column;gap:4px}
+  .weekly-scorecard-heading{font-size:11px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase}
+  .weekly-scorecard-row{padding:7px 9px;border-radius:6px;background:#f7f9fb;border:1px solid var(--line);
+    color:var(--ink);line-height:1.35;font-variant-numeric:tabular-nums}
+  .weekly-scorecard-row.local{border-color:#a8d7e9;background:#edf8fc}
+  .weekly-scorecard-row.partial{opacity:.92}
+  .weekly-scorecard-note,.weekly-scorecard-empty{margin:0;color:var(--muted);font-size:11px;line-height:1.4}
+  .weekly-question-result{display:flex;flex-direction:column;gap:7px;margin-top:8px;font-size:12px}
+  .weekly-question-result-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:9px 10px;border:1px solid #a8d7e9;border-radius:7px;background:#edf8fc}
+  .weekly-question-result-summary>div{display:flex;align-items:baseline;gap:6px;min-width:0}
+  .weekly-question-result-summary strong{font-size:18px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .weekly-question-result-summary span{font-size:11px;line-height:1.3}
+  .weekly-question-result-info{position:relative;flex:none}
+  .weekly-question-result-info summary{display:grid;place-items:center;width:auto;height:24px;min-height:0;padding:0 7px;
+    border:1px solid #76b7d3;border-radius:999px;color:#126f97;background:#fff;font-size:10px;font-weight:700;
+    cursor:pointer;list-style:none}
+  .weekly-question-result-info summary::-webkit-details-marker{display:none}
+  .weekly-question-result-info summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .weekly-question-result-popover{position:absolute;z-index:50;right:0;bottom:calc(100% + 7px);
+    width:min(300px,calc(100vw - 48px));padding:9px 10px;border:1px solid #bed1dd;border-radius:7px;
+    background:#fff;color:var(--ink);box-shadow:0 8px 22px #16202b24;line-height:1.45}
+  .weekly-question-result-popover div+div{margin-top:5px;padding-top:5px;border-top:1px solid #edf0f3}
+  .weekly-question-result-heading{color:var(--faint);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .weekly-question-result-ranking{display:flex;flex-direction:column;gap:4px}
+  .weekly-question-result-answer{display:grid;grid-template-columns:20px minmax(0,1fr) 52px 72px;align-items:center;
+    gap:6px;height:42px;box-sizing:border-box;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#f7f9fb}
+  .weekly-question-result-answer>span:last-child{color:var(--muted);font-variant-numeric:tabular-nums;
+    white-space:nowrap;text-align:right}
+  .weekly-question-result-rank{display:grid;place-items:center;width:18px;height:18px;border-radius:4px;background:#dfe8ee;
+    color:#445461;font-size:10px;font-weight:750}
+  .weekly-question-result-correct{color:var(--good);font-size:10px;font-weight:750;text-transform:uppercase}
+  .weekly-question-result-correct.cluster-accepted{color:var(--gold)}
+  #answer-details[data-private-review="true"]{border:0;border-radius:0;background:transparent}
+  #answer-details[data-private-review="true"]>summary,
+  #answer-details[data-private-review="true"] #answer-ai,
+  #answer-details[data-private-review="true"] #myview,
+  #answer-details[data-private-review="true"] #xtalrow,
+  #answer-details[data-private-review="true"] #score{display:none!important}
+  #answer-details[data-private-review="true"]>.details-body{padding:0}
+  #answer-details[data-private-review="true"] #answer-choices{gap:8px}
+  #answer-details[data-private-review="true"] #answer-choices .choice{min-height:50px;padding:9px 11px;
+    gap:8px;border:1px solid var(--line);border-left:5px solid var(--choice-color);border-radius:9px;
+    background:#fff;color:var(--ink);font-size:14px;font-weight:600;box-shadow:0 1px 2px #16202b0a}
+  #answer-details[data-private-review="true"] #answer-choices .choice:hover{background:#f8fafb;
+    border-color:#c7d0da;border-left-color:var(--choice-color)}
+  #answer-details[data-private-review="true"] #answer-choices .choice.correct{
+    border:2px solid var(--good);border-left-width:5px}
+  #answer-details[data-private-review="true"] #answer-choices .choice.cluster-accepted{
+    border-color:var(--line);border-left-color:var(--gold);background:#fff}
+  #answer-details[data-private-review="true"] #answer-choices .sw,
+  #answer-details[data-private-review="true"] #answer-choices .answer-choice-status{display:none}
+  #answer-details[data-private-review="true"] #answer-choices .nm{display:flex;flex:1;min-width:0;
+    align-items:center;gap:5px;overflow:hidden;white-space:nowrap}
+  #answer-details[data-private-review="true"] #answer-choices .answer-choice-count{font-size:12px}
+  #answer-details[data-private-review="true"] #answer-choices .rmsd{margin-left:auto;padding:5px 8px;
+    border-radius:6px;background:var(--choice-color);color:#fff;font-size:13px;font-weight:750;
+    line-height:1;letter-spacing:0;box-shadow:0 2px 7px #16202b28;font-variant-numeric:tabular-nums}
+  #answer-details[data-private-review="true"] #answer-choices .pose-info{width:20px;height:20px;
+    margin-left:3px;background:#f7f9fb;color:#6c7785}
+  #private-review-banner{display:none;margin:0;color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase}
+  #private-review-banner[data-active="true"]{display:block}
+  #private-review-banner[hidden]{display:none!important}
+  #private-review-control{display:none;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:#fff}
+  #private-review-control[hidden]{display:none!important}
+  #private-review-control .sub{margin:0}
+  #private-review-control input{width:100%;background:#fff;border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:10px 12px;font-size:14px}
+  #private-review-status{min-height:1.2em;margin:0;font-size:12px;color:var(--muted)}
+  #private-review-status[data-tone="error"]{color:var(--bad)}
+  #private-review-status[data-tone="active"]{color:#6f5712}
+  html[data-quiz-mode="weekly"] #private-review-control{display:flex;flex-direction:column}
   .vote-submit-row{display:flex;align-items:stretch;gap:8px}
   .vote-submit-row #lock{flex:1;min-width:0}
   .vote-comment-option{display:none;align-items:center;justify-content:center;gap:6px;margin:0;
@@ -198,6 +291,13 @@
     background:#fff;color:var(--muted);font-size:14px;font-weight:700;line-height:1;cursor:pointer}
   .question-nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
   .question-nav button:disabled{opacity:.3;cursor:default}
+  .retrospective-question-filter{display:flex;align-items:center;gap:7px}
+  .retrospective-question-filter[hidden]{display:none}
+  .retrospective-question-filter span{color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+  .retrospective-question-filter select{min-width:0;width:100%;height:30px;padding:0 28px 0 9px;
+    border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);
+    font-family:inherit;font-size:11px;font-weight:600}
   .quick-start-open{align-self:flex-start;min-height:27px;padding:4px 8px;border:1px solid var(--line);
     border-radius:7px;background:#fff;color:var(--muted);font-size:11px;font-weight:650;cursor:pointer}
   .quick-start-open:hover{border-color:var(--accent);color:var(--accent)}
@@ -247,15 +347,26 @@
   html[data-quiz-mode="weekly"] #lock:disabled{background:#dce7ec;color:#7d8a94;border-color:#d3dee4;box-shadow:none}
   html[data-quiz-mode="weekly"] #weekly-results{display:block}
   .hint{font-size:12px;color:var(--faint);line-height:1.55}
-  #viewer-question{position:absolute;z-index:30;top:16px;left:16px;display:flex;flex-direction:column;
-    gap:2px;max-width:min(760px,calc(100% - 240px));padding:10px 13px;background:#fffffff2;
+  #stage-topbar{position:absolute;z-index:30;top:14px;left:16px;right:64px;display:flex;
+    align-items:flex-start;gap:12px;min-width:0;pointer-events:none}
+  #viewer-question{position:static;display:flex;flex:1 1 620px;min-width:0;flex-direction:column;
+    gap:2px;max-width:760px;padding:10px 13px;background:#fffffff2;pointer-events:auto;
     border:1px solid var(--line);border-radius:9px}
   #viewer-question .lig{font-size:18px;line-height:1.3}
+  #viewer-question .lig a{color:inherit;text-decoration-color:#8a94a3;text-decoration-thickness:1px;
+    text-underline-offset:3px}
+  #viewer-question .lig a:hover{color:var(--accent);text-decoration-color:currentColor}
   #viewer-question .lig small{font-size:12px}
   #viewer-question .instruction{font-size:13px;line-height:1.4}
-  .badge{position:absolute;top:14px;right:64px;max-width:calc(100% - 96px);font-size:13px;font-weight:620;
-    color:#536172;background:#fffffff0;padding:7px 12px;border-radius:8px;border:1px solid #dbe3e9;
-    box-shadow:0 2px 9px #16202b14;backdrop-filter:blur(6px)}
+  #choices .choice.correct{border-color:var(--good);background:#eef9f1}
+  #choices .choice.wrong{border-color:#d7a2a7}
+  #choices .choice .tag.answer-status{font-weight:750;letter-spacing:.035em}
+  #choices .choice.correct .tag.answer-status{color:var(--good)}
+  #choices .choice.wrong .tag.answer-status{color:var(--bad)}
+  .badge{position:static;flex:0 1 auto;min-width:0;max-width:min(520px,45%);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:620;color:#536172;
+    background:#fffffff0;padding:7px 12px;border-radius:8px;border:1px solid #dbe3e9;
+    box-shadow:0 2px 9px #16202b14;backdrop-filter:blur(6px);pointer-events:auto}
   #view-options{position:absolute;z-index:30;left:50%;bottom:16px;transform:translateX(-50%);
     width:min(760px,calc(100% - 32px));display:flex;justify-content:center;align-items:center;
     background:transparent;border:0}
@@ -285,12 +396,15 @@
   #wrap.intro #lock,
   #wrap.intro #verdict,
   #wrap.intro #answer-details{display:none!important}
+  #wrap.question-loading #choices,
+  #wrap.question-loading #answer-details{display:none!important}
   @media (max-width: 760px){
     #wrap{height:100dvh;flex-direction:column}
     #stage{order:1;flex:1;min-height:50dvh}
     #side{order:2;width:100%;height:48dvh;max-height:48dvh;padding:20px;gap:14px;border-right:0;border-top:1px solid var(--line)}
     #wrap.intro #side{height:100dvh;max-height:none;justify-content:center}
-    #viewer-question{top:8px;left:8px;max-width:calc(100% - 16px);padding:8px 10px}
+    #stage-topbar{top:8px;left:8px;right:8px}
+    #viewer-question{max-width:none;padding:8px 10px}
     #view-options{bottom:8px;width:calc(100% - 16px)}
     .badge{display:none}
     #view-options .control-label{display:none}
@@ -301,7 +415,7 @@
 <div id="gate">
   <form class="card" id="gate-form" autocomplete="off">
     <div class="brand">
-      <img class="brand-mark" src="assets/foldarium-mark.svg?v=2026080911" alt=""/>
+      <img class="brand-mark" src="/assets/foldarium-mark.svg?v=2026082501" alt=""/>
       <div class="brand-copy"><h1>Foldarium</h1><p class="sub"><strong>Pose Quiz</strong></p></div>
     </div>
     <input id="gate-pw" type="password" name="password" placeholder="Password" aria-label="Password" autofocus/>
@@ -311,8 +425,11 @@
 </div>
 <div id="wrap" class="intro" hidden>
   <div id="side">
+    <div id="private-review-banner" hidden aria-live="polite">
+      Retrospective
+    </div>
     <div class="brand">
-      <img class="brand-mark" src="assets/foldarium-mark.svg?v=2026080911" alt=""/>
+      <img class="brand-mark" src="/assets/foldarium-mark.svg?v=2026082501" alt=""/>
       <div class="brand-copy">
         <h1>Foldarium</h1>
         <div class="sub"><strong>Pose Quiz</strong> · Pick the correct predicted pose.<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span></div>
@@ -320,9 +437,10 @@
     </div>
 
     <section class="participant-setup" id="participant-setup">
-      <label>Your name
+      <label>Leaderboard name
         <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
       </label>
+      <p class="hint">Shown on the results leaderboard after release.</p>
       <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
     </section>
 
@@ -357,6 +475,10 @@
       <button class="quick-start-open" id="quick-start-open" type="button"
         aria-haspopup="dialog" aria-controls="quick-start-dialog" hidden>Quick start</button>
     </div>
+    <label class="retrospective-question-filter" id="retrospective-question-filter" hidden>
+      <span>Show</span>
+      <select id="retrospective-question-filter-select" aria-label="Filter retrospective questions"></select>
+    </label>
 
     <div class="choices" id="choices"></div>
 
@@ -379,9 +501,14 @@
         <div class="choices" id="answer-choices"></div>
         <div class="hint" id="answer-ai"></div>
         <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
-        <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
-          <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span>
-        </label>
+        <div id="xtalrow" style="display:none;font-size:12px;color:var(--muted);padding:2px 0">
+          <label style="cursor:pointer">
+            <input type="checkbox" id="showXtal" style="vertical-align:middle"/>
+            <span id="xtal-label">Show crystal reference <span style="color:#8B5CF6">(true pose, violet)</span></span>
+          </label>
+          <a id="rcsb-link" href="#" target="_blank" rel="noopener noreferrer" style="display:none;margin-left:8px">Open in RCSB ↗</a>
+          <span id="xtal-status" role="status" style="display:block;color:var(--bad);margin-top:4px"></span>
+        </div>
         <div class="score" id="score">
           <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
           <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
@@ -390,17 +517,24 @@
       </div>
     </details>
     <section class="weekly-results" id="weekly-results" aria-live="polite">
-      <div class="q">Results &amp; leaderboard</div>
+      <div class="q" id="weekly-results-heading">Results &amp; leaderboard</div>
       <div class="hint" id="weekly-results-copy">Available Wednesday.</div>
+      <div id="weekly-leaderboard" hidden></div>
+    </section>
+
+    <section id="private-review-control" hidden>
+      <p class="dialog-status" id="private-review-status" role="status" aria-live="polite"></p>
     </section>
   </div>
   <div id="stage">
     <div id="app"></div>
-    <div id="viewer-question">
-      <div class="lig" id="ligand">—</div>
-      <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
+    <div id="stage-topbar">
+      <div id="viewer-question">
+        <div class="lig" id="ligand">—</div>
+        <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
+      </div>
+      <div class="badge" id="badge">crystal reference hidden · poses anonymised</div>
     </div>
-    <div class="badge" id="badge">crystal reference hidden · poses anonymised</div>
     <div id="one-review-actions" hidden>
       <button id="one-select" data-review="select" type="button">Select</button>
       <button id="one-reject" class="reject" data-review="reject" type="button">Reject</button>
@@ -426,6 +560,7 @@
           <div class="view-actions">
             <button class="ghost mini" id="surface" style="display:none">Surface</button>
             <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+            <span class="hint" id="hbond-status" role="status" aria-live="polite"></span>
             <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
             <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
           </div>
@@ -492,6 +627,7 @@ import './quiz-entry-mode.js';
 import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 import { createWeeklyTraceStream } from './weekly-trace-stream.js';
 import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
+import * as foldariumPrivateReview from './weekly-private-review.js';
 
 (function () {
   const PASS = 'deployquickly123';
@@ -507,6 +643,8 @@ import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
   window.foldariumBackend = createDeferredBackend();
   window.createWeeklyTraceStream = createWeeklyTraceStream;
   window.foldariumWeeklySessionResume = createWeeklySessionResumeStore(sessionStorage);
+  window.foldariumPrivateReview = foldariumPrivateReview;
+  window.FOLDARIUM_PRIVATE_REVIEW = Object.freeze({ active: false });
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -518,6 +656,26 @@ import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
     });
   }
 
+  async function applyPrivateReviewBundleWhenReady(bundle) {
+    if (typeof window.foldariumApplyPrivateReviewBundle !== 'function') {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          window.removeEventListener('foldarium-private-review-ready', ready);
+          reject(new Error('The crystal viewer did not finish loading. Please retry.'));
+        }, 30000);
+        const ready = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        window.addEventListener('foldarium-private-review-ready', ready, { once: true });
+      });
+    }
+    if (typeof window.foldariumApplyPrivateReviewBundle !== 'function') {
+      throw new Error('The crystal viewer is unavailable. Please reload.');
+    }
+    return window.foldariumApplyPrivateReviewBundle(bundle);
+  }
+
   async function initPersistence() {
     if (persistenceStarted) return;
     persistenceStarted = true;
@@ -527,6 +685,10 @@ import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
         ? await window.FOLDARIUM_CONFIG_READY
         : (window.FOLDARIUM_SUPABASE || {});
       window.foldariumBackend.attach(initQuizBackend(config));
+      foldariumPrivateReview.mountPrivateReviewUi({
+        config,
+        onBundleLoaded: applyPrivateReviewBundleWhenReady,
+      });
     } catch (e) {
       window.foldariumBackend.fail(e);
       console.warn('Remote quiz persistence disabled:', e.message);
@@ -571,7 +733,7 @@ import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608121');
+      await loadScript('app.js?v=202608240');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

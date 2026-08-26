@@ -16,8 +16,9 @@ import json
 import os
 import re
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -41,6 +42,30 @@ TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES = frozenset(
 )
 MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS = 10
 WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
+PRIVATE_WEEKLY_EVALUATION_FIELDS = (
+    "evaluation_id",
+    "round_id",
+    "campaign_id",
+    "environment",
+    "round_opens_at",
+    "round_closes_at",
+    "blind_manifest_sha256",
+    "private_index_sha256",
+    "reveal_manifest_sha256",
+    "reference_set_sha256",
+    "prediction_set_sha256",
+    "format_version",
+    "evaluator_versions",
+    "reveal_policy_version",
+    "acceptance_policy_version",
+    "correct_rmsd_threshold_angstrom",
+    "item_count",
+    "choice_count",
+    "artifact_object_uri",
+    "artifact_sha256",
+    "artifact_size_bytes",
+    "artifact_media_type",
+)
 
 
 class SupabaseConfigurationError(ValueError):
@@ -695,7 +720,7 @@ class SupabaseCoordinator(SupabasePublisher):
                 "select": (
                     "round_id,campaign_id,status,opens_at,closes_at,blind_manifest,"
                     "blind_manifest_sha256,reveal_manifest,reveal_manifest_sha256,metadata,"
-                    "environment,item_count,opened_at"
+                    "environment,item_count,opened_at,revealed_at"
                 ),
                 "round_id": f"eq.{round_id}",
                 "limit": "2",
@@ -816,6 +841,105 @@ class SupabaseCoordinator(SupabasePublisher):
         )
         return {**artifact, "content": content}
 
+    def fetch_campaign_target_packages(
+        self,
+        campaign_id: str,
+        target_ids: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Fetch and verify canonical target packages for one exact campaign subset."""
+
+        campaign_id = _safe_identifier(campaign_id, "campaign_id")
+        if isinstance(target_ids, (str, bytes)):
+            raise SupabasePublicationError("target_ids must be an iterable of identifiers")
+        requested = sorted(
+            {
+                _safe_identifier(target_id, "target_id").upper()
+                for target_id in target_ids
+                if isinstance(target_id, str) and target_id.strip()
+            }
+        )
+        if not requested:
+            raise SupabasePublicationError("target_ids must be a non-empty set")
+        query = urlencode(
+            {
+                "select": "target_id,campaign_id,package_uri,package_sha256",
+                "campaign_id": f"eq.{campaign_id}",
+                "target_id": "in.(" + ",".join(requested) + ")",
+                "order": "target_id.asc",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/targets?{query}", "campaign target package query"
+        )
+        by_target: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            target_id = _safe_identifier(row.get("target_id"), "target_id").upper()
+            if target_id in by_target:
+                raise SupabasePublicationError(
+                    "campaign target package query returned duplicate target rows"
+                )
+            row_campaign = _safe_identifier(row.get("campaign_id"), "campaign_id")
+            if row_campaign != campaign_id:
+                raise SupabasePublicationError(
+                    "campaign target package query crossed the campaign boundary"
+                )
+            package_uri = row.get("package_uri")
+            package_sha256 = row.get("package_sha256")
+            if not isinstance(package_uri, str) or not package_uri:
+                raise SupabasePublicationError("target package_uri is invalid")
+            if not isinstance(package_sha256, str) or not _SHA256.fullmatch(
+                package_sha256
+            ):
+                raise SupabasePublicationError("target package_sha256 is invalid")
+            by_target[target_id] = {
+                "target_id": target_id,
+                "campaign_id": row_campaign,
+                "package_uri": package_uri,
+                "package_sha256": package_sha256,
+            }
+        missing = [target_id for target_id in requested if target_id not in by_target]
+        if missing:
+            raise SupabasePublicationError(
+                "campaign target package query did not return every requested target: "
+                + ", ".join(missing)
+            )
+        if sorted(by_target) != requested:
+            raise SupabasePublicationError(
+                "campaign target package query returned an unexpected target set"
+            )
+        packages: dict[str, dict[str, Any]] = {}
+        for target_id in requested:
+            descriptor = by_target[target_id]
+            content = self.download_content_object(
+                descriptor["package_uri"],
+                expected_sha256=descriptor["package_sha256"],
+            )
+            try:
+                decoded = json.loads(content.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SupabasePublicationError(
+                    f"target package for {target_id} is not valid UTF-8 JSON"
+                ) from exc
+            if not isinstance(decoded, Mapping):
+                raise SupabasePublicationError(
+                    f"target package for {target_id} must be an object"
+                )
+            package = deepcopy(dict(decoded))
+            package_target_id = package.get("target_id")
+            if not isinstance(package_target_id, str) or not package_target_id:
+                raise SupabasePublicationError(
+                    f"target package for {target_id} has no target_id"
+                )
+            if package_target_id.strip().upper() != target_id:
+                raise SupabasePublicationError(
+                    f"target package for {target_id} disagrees with its row identity"
+                )
+            packages[target_id] = {
+                **descriptor,
+                "package": package,
+            }
+        return packages
+
     def download_content_object(
         self, object_uri: str, *, expected_sha256: str | None = None
     ) -> bytes:
@@ -881,29 +1005,38 @@ class SupabaseCoordinator(SupabasePublisher):
             "media_type": media_type,
         }
 
-    def require_public_bucket(self) -> None:
-        """Fail unless this Storage bucket is browser-readable without a token."""
-
+    def _storage_bucket_metadata(self, operation: str) -> dict[str, Any]:
         endpoint = "/storage/v1/bucket/" + quote(self.storage_bucket, safe="")
         body = self._request(
             endpoint,
             None,
-            operation="public storage bucket check",
+            operation=operation,
             method="GET",
         )
         try:
             bucket = json.loads((body or b"").decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise SupabasePublicationError(
-                "public storage bucket check returned invalid JSON"
-            ) from exc
-        if (
-            not isinstance(bucket, Mapping)
-            or bucket.get("id") != self.storage_bucket
-            or bucket.get("public") is not True
-        ):
+            raise SupabasePublicationError(f"{operation} returned invalid JSON") from exc
+        if not isinstance(bucket, Mapping) or bucket.get("id") != self.storage_bucket:
+            raise SupabasePublicationError(f"{operation} returned the wrong bucket")
+        return deepcopy(dict(bucket))
+
+    def require_public_bucket(self) -> None:
+        """Fail unless this Storage bucket is browser-readable without a token."""
+
+        bucket = self._storage_bucket_metadata("public storage bucket check")
+        if bucket.get("public") is not True:
             raise SupabasePublicationError(
                 f"storage bucket {self.storage_bucket!r} must be public for quiz assets"
+            )
+
+    def require_private_bucket(self) -> None:
+        """Fail unless this Storage bucket requires authenticated object access."""
+
+        bucket = self._storage_bucket_metadata("private storage bucket check")
+        if bucket.get("public") is not False:
+            raise SupabasePublicationError(
+                f"storage bucket {self.storage_bucket!r} must be private for evaluation results"
             )
 
     def authorize_transient_boltz_msa_retries(
@@ -1600,6 +1733,199 @@ class SupabaseCoordinator(SupabasePublisher):
             "p_reveal_manifest_sha256": manifest_sha256(reveal_manifest),
         }
         return self._rpc("reveal_weekly_quiz_round", payload)
+
+    def private_weekly_evaluation(
+        self, round_id: str
+    ) -> dict[str, Any] | None:
+        """Return the immutable private evaluation descriptor for one round."""
+
+        round_id = _safe_identifier(round_id, "round_id")
+        query = urlencode(
+            {
+                "select": ",".join(PRIVATE_WEEKLY_EVALUATION_FIELDS)
+                + ",created_at",
+                "round_id": f"eq.{round_id}",
+                "limit": "2",
+            }
+        )
+        rows = self._get_json_rows(
+            f"/rest/v1/weekly_quiz_evaluations?{query}",
+            "private weekly evaluation lookup",
+        )
+        if len(rows) > 1:
+            raise SupabasePublicationError(
+                "private weekly evaluation lookup returned duplicate rows"
+            )
+        return deepcopy(dict(rows[0])) if rows else None
+
+    def register_private_weekly_evaluation(
+        self, descriptor: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Insert or verify one immutable service-role-only evaluation descriptor.
+
+        The table has no browser grants or public read RPC.  Its database trigger
+        locks the exact weekly round and rechecks production/open/unrevealed and
+        post-close state plus the blind/private-index digests in the same
+        transaction as this insert.
+        """
+
+        from .private_evaluation import (
+            PRIVATE_EVALUATION_FORMAT_VERSION,
+            PRIVATE_EVALUATION_MEDIA_TYPE,
+        )
+        from .wednesday_reveal import (
+            ACCEPTANCE_POLICY_VERSION,
+            CORRECT_RMSD_ANGSTROM,
+            REVEAL_POLICY_VERSION,
+        )
+
+        payload = _json_object(descriptor, "private weekly evaluation descriptor")
+        if set(payload) != set(PRIVATE_WEEKLY_EVALUATION_FIELDS):
+            raise SupabasePublicationError(
+                "private weekly evaluation descriptor fields are not exact"
+            )
+        for field in ("evaluation_id", "round_id", "campaign_id"):
+            _safe_identifier(payload.get(field), f"evaluation descriptor {field}")
+        if payload.get("environment") != "production":
+            raise SupabasePublicationError(
+                "private weekly evaluation must bind the production environment"
+            )
+        if payload.get("format_version") != PRIVATE_EVALUATION_FORMAT_VERSION:
+            raise SupabasePublicationError("private evaluation format_version is invalid")
+        if payload.get("artifact_media_type") != PRIVATE_EVALUATION_MEDIA_TYPE:
+            raise SupabasePublicationError("private evaluation artifact media type is invalid")
+        if payload.get("reveal_policy_version") != REVEAL_POLICY_VERSION:
+            raise SupabasePublicationError("private evaluation reveal policy is invalid")
+        if payload.get("acceptance_policy_version") != ACCEPTANCE_POLICY_VERSION:
+            raise SupabasePublicationError("private evaluation acceptance policy is invalid")
+        if payload.get("correct_rmsd_threshold_angstrom") != CORRECT_RMSD_ANGSTROM:
+            raise SupabasePublicationError("private evaluation RMSD threshold is invalid")
+        for field in (
+            "blind_manifest_sha256",
+            "private_index_sha256",
+            "reveal_manifest_sha256",
+            "reference_set_sha256",
+            "prediction_set_sha256",
+            "artifact_sha256",
+        ):
+            digest = payload.get(field)
+            if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+                raise SupabasePublicationError(
+                    f"private evaluation {field} must be a lowercase SHA-256"
+                )
+        for field in ("item_count", "choice_count", "artifact_size_bytes"):
+            value = payload.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise SupabasePublicationError(
+                    f"private evaluation {field} must be a positive integer"
+                )
+        versions = payload.get("evaluator_versions")
+        if (
+            not isinstance(versions, list)
+            or not versions
+            or any(not isinstance(value, str) or not value for value in versions)
+        ):
+            raise SupabasePublicationError(
+                "private evaluation evaluator_versions must be a sorted unique list"
+            )
+        if versions != sorted(set(versions)):
+            raise SupabasePublicationError(
+                "private evaluation evaluator_versions must be a sorted unique list"
+            )
+        timestamps: dict[str, datetime] = {}
+        for field in ("round_opens_at", "round_closes_at"):
+            value = payload.get(field)
+            if not isinstance(value, str):
+                raise SupabasePublicationError(f"private evaluation {field} is invalid")
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"private evaluation {field} is invalid"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise SupabasePublicationError(
+                    f"private evaluation {field} must include a timezone"
+                )
+            timestamps[field] = parsed
+        if timestamps["round_closes_at"] <= timestamps["round_opens_at"]:
+            raise SupabasePublicationError("private evaluation voting window is invalid")
+
+        artifact_sha256 = payload["artifact_sha256"]
+        object_uri = payload.get("artifact_object_uri")
+        parsed_uri = urlsplit(object_uri) if isinstance(object_uri, str) else None
+        expected_path = f"/sha256/{artifact_sha256[:2]}/{artifact_sha256}"
+        if (
+            parsed_uri is None
+            or parsed_uri.scheme != "supabase"
+            or parsed_uri.netloc != self.storage_bucket
+            or parsed_uri.path != expected_path
+            or parsed_uri.query
+            or parsed_uri.fragment
+        ):
+            raise SupabasePublicationError(
+                "private evaluation artifact URI is not the exact content-addressed object"
+            )
+        expected_id = stable_id(
+            "weekly_eval",
+            {
+                "format_version": payload["format_version"],
+                "round_id": payload["round_id"],
+                "blind_manifest_sha256": payload["blind_manifest_sha256"],
+                "private_index_sha256": payload["private_index_sha256"],
+                "artifact_sha256": artifact_sha256,
+            },
+            length=32,
+        )
+        if payload["evaluation_id"] != expected_id:
+            raise SupabasePublicationError("private evaluation_id is not deterministic")
+
+        endpoint = "/rest/v1/weekly_quiz_evaluations?on_conflict=evaluation_id"
+        body = self._request(
+            endpoint,
+            self._encode_json(payload),
+            operation="private weekly evaluation catalog insert",
+            method="POST",
+            content_type="application/json",
+            extra_headers={
+                "Accept": "application/json",
+                "Prefer": "resolution=ignore-duplicates,return=representation",
+            },
+        )
+        try:
+            rows = json.loads((body or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "private weekly evaluation catalog insert returned invalid JSON"
+            ) from exc
+        if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
+            raise SupabasePublicationError(
+                "private weekly evaluation catalog insert returned an invalid row set"
+            )
+        if not rows:
+            query = urlencode(
+                {
+                    "select": ",".join(PRIVATE_WEEKLY_EVALUATION_FIELDS)
+                    + ",created_at",
+                    "evaluation_id": f"eq.{payload['evaluation_id']}",
+                    "limit": "2",
+                }
+            )
+            rows = self._get_json_rows(
+                f"/rest/v1/weekly_quiz_evaluations?{query}",
+                "private weekly evaluation idempotence query",
+            )
+        if len(rows) != 1:
+            raise SupabasePublicationError(
+                "private weekly evaluation catalog did not return one exact row"
+            )
+        row = deepcopy(dict(rows[0]))
+        for field, expected in payload.items():
+            if row.get(field) != expected:
+                raise SupabasePublicationError(
+                    f"private weekly evaluation catalog differs at {field}"
+                )
+        return row
 
     def register_external_prediction_set(
         self,

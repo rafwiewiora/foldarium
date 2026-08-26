@@ -10,11 +10,18 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
 
+from foldarium_pipeline.contracts import canonical_json, stable_id
+from foldarium_pipeline.private_evaluation import PRIVATE_EVALUATION_FORMAT_VERSION
 from foldarium_pipeline.supabase import (
     SupabaseConfigurationError,
     SupabaseCoordinator,
     SupabasePublicationError,
     SupabasePublisher,
+)
+from foldarium_pipeline.wednesday_reveal import (
+    ACCEPTANCE_POLICY_VERSION,
+    CORRECT_RMSD_ANGSTROM,
+    REVEAL_POLICY_VERSION,
 )
 
 
@@ -81,6 +88,48 @@ def successful_result(relative_path: str, content: bytes) -> dict:
     }
 
 
+def private_evaluation_descriptor() -> dict:
+    artifact_sha256 = "f" * 64
+    payload = {
+        "round_id": "weekly-2026-08-08-beta-v5-global-tm-29",
+        "campaign_id": "wwpdb-2026-08-08",
+        "environment": "production",
+        "round_opens_at": "2026-08-14T20:05:00Z",
+        "round_closes_at": "2026-08-17T20:00:00Z",
+        "blind_manifest_sha256": "a" * 64,
+        "private_index_sha256": "b" * 64,
+        "reveal_manifest_sha256": "c" * 64,
+        "reference_set_sha256": "d" * 64,
+        "prediction_set_sha256": "e" * 64,
+        "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+        "evaluator_versions": ["test-evaluator/v1"],
+        "reveal_policy_version": REVEAL_POLICY_VERSION,
+        "acceptance_policy_version": ACCEPTANCE_POLICY_VERSION,
+        "correct_rmsd_threshold_angstrom": CORRECT_RMSD_ANGSTROM,
+        "item_count": 29,
+        "choice_count": 290,
+        "artifact_object_uri": (
+            f"supabase://prediction-results/sha256/{artifact_sha256[:2]}/"
+            f"{artifact_sha256}"
+        ),
+        "artifact_sha256": artifact_sha256,
+        "artifact_size_bytes": 12345,
+        "artifact_media_type": "application/json",
+    }
+    payload["evaluation_id"] = stable_id(
+        "weekly_eval",
+        {
+            "format_version": payload["format_version"],
+            "round_id": payload["round_id"],
+            "blind_manifest_sha256": payload["blind_manifest_sha256"],
+            "private_index_sha256": payload["private_index_sha256"],
+            "artifact_sha256": payload["artifact_sha256"],
+        },
+        length=32,
+    )
+    return payload
+
+
 class SupabasePublisherTests(unittest.TestCase):
     def test_from_env_is_explicit_and_repr_redacts_service_role(self) -> None:
         opener = RecordingOpener()
@@ -137,6 +186,19 @@ class SupabasePublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(SupabasePublicationError, "must be public"):
             publisher.require_public_bucket()
 
+        private = BucketOpener(b'{"id":"prediction-results","public":false}')
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "key", "prediction-results", opener=private
+        )
+        publisher.require_private_bucket()
+
+        public = BucketOpener(b'{"id":"prediction-results","public":true}')
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "key", "prediction-results", opener=public
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "must be private"):
+            publisher.require_private_bucket()
+
     def test_claim_run_uses_the_atomic_claim_rpc(self) -> None:
         opener = RecordingOpener(
             claim_body=b'{"run_id":"run_test123","status":"running","lease_owner":"modal-worker-1"}'
@@ -157,6 +219,115 @@ class SupabasePublisherTests(unittest.TestCase):
             },
         )
         self.assertNotIn(b"service-role-key", request.data)
+
+    def test_private_evaluation_catalog_insert_is_append_only_and_service_role_only(self) -> None:
+        descriptor = private_evaluation_descriptor()
+
+        class CatalogOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                payload = json.loads(request.data)  # type: ignore[attr-defined]
+                return FakeResponse(
+                    json.dumps([{**payload, "created_at": "2026-08-15T02:00:00Z"}]).encode()
+                )
+
+        opener = CatalogOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        row = coordinator.register_private_weekly_evaluation(descriptor)
+
+        self.assertEqual(row["evaluation_id"], descriptor["evaluation_id"])
+        self.assertEqual(len(opener.calls), 1)
+        request = opener.calls[0][0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertTrue(
+            request.full_url.endswith(
+                "/rest/v1/weekly_quiz_evaluations?on_conflict=evaluation_id"
+            )
+        )
+        self.assertNotIn("/rpc/", request.full_url)
+        self.assertEqual(
+            request.get_header("Prefer"),
+            "resolution=ignore-duplicates,return=representation",
+        )
+        self.assertNotIn(b"service-role-key", request.data)
+
+    def test_private_evaluation_catalog_duplicate_reads_and_verifies_exact_row(self) -> None:
+        descriptor = private_evaluation_descriptor()
+
+        class DuplicateCatalogOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() == "POST":
+                    return FakeResponse(b"[]")
+                return FakeResponse(
+                    json.dumps(
+                        [{**descriptor, "created_at": "2026-08-15T02:00:00Z"}]
+                    ).encode()
+                )
+
+        opener = DuplicateCatalogOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        row = coordinator.register_private_weekly_evaluation(descriptor)
+
+        self.assertEqual(row["artifact_sha256"], descriptor["artifact_sha256"])
+        self.assertEqual([call[0].get_method() for call in opener.calls], ["POST", "GET"])
+        self.assertIn(
+            "evaluation_id=eq." + descriptor["evaluation_id"],
+            opener.calls[1][0].full_url,
+        )
+
+    def test_private_evaluation_lookup_is_exact_and_read_only(self) -> None:
+        descriptor = private_evaluation_descriptor()
+
+        class LookupOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(
+                    json.dumps(
+                        [{**descriptor, "created_at": "2026-08-18T02:00:00Z"}]
+                    ).encode()
+                )
+
+        opener = LookupOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        row = coordinator.private_weekly_evaluation(descriptor["round_id"])
+
+        self.assertEqual(row["evaluation_id"], descriptor["evaluation_id"])
+        request = opener.calls[0][0]
+        self.assertEqual(request.get_method(), "GET")
+        parsed = urlsplit(request.full_url)
+        query = parse_qs(parsed.query)
+        self.assertEqual(query["round_id"], ["eq." + descriptor["round_id"]])
+        self.assertEqual(query["limit"], ["2"])
+
+    def test_private_evaluation_descriptor_tampering_fails_before_request(self) -> None:
+        descriptor = private_evaluation_descriptor()
+        descriptor["evaluation_id"] = "weekly_eval_" + "0" * 32
+        opener = RecordingOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "not deterministic"):
+            coordinator.register_private_weekly_evaluation(descriptor)
+        self.assertEqual(opener.calls, [])
 
     def test_uploads_verified_digest_path_before_atomic_finish_rpc(self) -> None:
         content = b"data_foldarium\n#\n"
@@ -964,6 +1135,7 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     self.test_case.assertEqual(query["limit"], ["2"])
                     self.test_case.assertIn("metadata", query["select"][0].split(","))
                     self.test_case.assertIn("environment", query["select"][0].split(","))
+                    self.test_case.assertIn("revealed_at", query["select"][0].split(","))
                     return FakeResponse(json.dumps([round_row]).encode())
                 if "/storage/v1/object/authenticated/results/" in url:
                     return FakeResponse(private_content)
@@ -1133,6 +1305,169 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(SupabasePublicationError, "exactly one row"):
             coordinator.download_predicted_complex("run-of3", "sample-4")
         self.assertEqual(len(opener.calls), 1)
+
+
+class CampaignTargetPackageTests(unittest.TestCase):
+    @staticmethod
+    def target_package(target_id: str = "9XYZ") -> dict:
+        return {
+            "target_id": target_id,
+            "entities": [
+                {"type": "protein", "sequence": "MKT", "chain_ids": ["A"]},
+                {"type": "ligand", "smiles": "CCCCCCCCCCCCCCCCC", "chain_ids": ["B"]},
+            ],
+            "metadata": {
+                "selected_ligand": {"component_id": "DRG", "heavy_atoms": 17},
+            },
+        }
+
+    def test_fetch_campaign_target_packages_honors_exact_set_and_digest(self) -> None:
+        campaign_id = "wwpdb-2026-08-08"
+        package = self.target_package()
+        content = canonical_json(package).encode("utf-8")
+        digest = hashlib.sha256(content).hexdigest()
+        row = {
+            "target_id": "9XYZ",
+            "campaign_id": campaign_id,
+            "package_uri": f"supabase://results/sha256/{digest[:2]}/{digest}",
+            "package_sha256": digest,
+        }
+
+        class TargetPackageOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/targets?" in url:
+                    query = parse_qs(urlsplit(url).query)
+                    self.test_case.assertEqual(
+                        query["campaign_id"], [f"eq.{campaign_id}"]
+                    )
+                    self.test_case.assertEqual(query["target_id"], ["in.(9XYZ)"])
+                    return FakeResponse(json.dumps([row]).encode())
+                if "/storage/v1/object/authenticated/results/" in url:
+                    return FakeResponse(content)
+                raise AssertionError(url)
+
+        opener = TargetPackageOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=opener,
+        )
+        packages = coordinator.fetch_campaign_target_packages(campaign_id, ["9XYZ"])
+
+        self.assertEqual(set(packages), {"9XYZ"})
+        self.assertEqual(packages["9XYZ"]["package"], package)
+        self.assertEqual(packages["9XYZ"]["package_sha256"], digest)
+        self.assertEqual(len(opener.calls), 2)
+
+    def test_fetch_campaign_target_packages_rejects_incomplete_or_duplicate_sets(
+        self,
+    ) -> None:
+        class EmptyTargetOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(b"[]")
+
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=EmptyTargetOpener(),
+        )
+        with self.assertRaisesRegex(
+            SupabasePublicationError, "did not return every requested target"
+        ):
+            coordinator.fetch_campaign_target_packages("wwpdb-2026-08-08", ["9XYZ"])
+
+        row = {
+            "target_id": "9XYZ",
+            "campaign_id": "wwpdb-2026-08-08",
+            "package_uri": "supabase://results/sha256/aa/" + "a" * 64,
+            "package_sha256": "a" * 64,
+        }
+
+        class DuplicateTargetOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(json.dumps([row, row]).encode())
+
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=DuplicateTargetOpener(),
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "duplicate target rows"):
+            coordinator.fetch_campaign_target_packages("wwpdb-2026-08-08", ["9XYZ"])
+
+    def test_fetch_campaign_target_packages_rejects_campaign_cross_binding(self) -> None:
+        row = {
+            "target_id": "9XYZ",
+            "campaign_id": "wwpdb-2026-08-15",
+            "package_uri": "supabase://results/sha256/aa/" + "a" * 64,
+            "package_sha256": "a" * 64,
+        }
+
+        class CrossCampaignOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(json.dumps([row]).encode())
+
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=CrossCampaignOpener(),
+        )
+        with self.assertRaisesRegex(SupabasePublicationError, "campaign boundary"):
+            coordinator.fetch_campaign_target_packages("wwpdb-2026-08-08", ["9XYZ"])
+
+    def test_fetch_campaign_target_packages_rejects_digest_or_identity_tamper(
+        self,
+    ) -> None:
+        for package, expected_error in (
+            (self.target_package("9XYZ"), "digest"),
+            (self.target_package("8ABC"), "disagrees with its row identity"),
+        ):
+            with self.subTest(expected_error=expected_error):
+                content = canonical_json(package).encode("utf-8")
+                digest = hashlib.sha256(content).hexdigest()
+                row = {
+                    "target_id": "9XYZ",
+                    "campaign_id": "wwpdb-2026-08-08",
+                    "package_uri": (
+                        f"supabase://results/sha256/{digest[:2]}/{digest}"
+                    ),
+                    "package_sha256": "b" * 64
+                    if expected_error == "digest"
+                    else digest,
+                }
+
+                class TargetPackageOpener(RecordingOpener):
+                    def __call__(
+                        self, request: object, *, timeout: float
+                    ) -> FakeResponse:
+                        self.calls.append((request, timeout))
+                        url = request.full_url  # type: ignore[attr-defined]
+                        if "/targets?" in url:
+                            return FakeResponse(json.dumps([row]).encode())
+                        if "/storage/v1/object/authenticated/results/" in url:
+                            return FakeResponse(content)
+                        raise AssertionError(url)
+
+                coordinator = SupabaseCoordinator(
+                    "https://project.supabase.co",
+                    "service-role-key",
+                    "results",
+                    opener=TargetPackageOpener(),
+                )
+                with self.assertRaisesRegex(SupabasePublicationError, expected_error):
+                    coordinator.fetch_campaign_target_packages(
+                        "wwpdb-2026-08-08", ["9XYZ"]
+                    )
 
 
 if __name__ == "__main__":

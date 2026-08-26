@@ -241,6 +241,13 @@ def build_blind_manifest(
             "ligand": item.get("ligand"),
             "choices": private_choices,
         }
+        if "ligand_eligibility" in item:
+            private_item["ligand_eligibility"] = deepcopy(
+                _object(
+                    item.get("ligand_eligibility"),
+                    f"items[{item_index}].ligand_eligibility",
+                )
+            )
         if "clustering" in item:
             private_item["clustering"] = _object(
                 item.get("clustering"), f"items[{item_index}].clustering"

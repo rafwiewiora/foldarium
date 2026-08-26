@@ -1,0 +1,12 @@
+---
+description: Require Git-backed work and deployments
+alwaysApply: true
+---
+
+# Git-backed work
+
+- Make code changes only inside a valid Git repository or registered worktree.
+- Before editing, confirm the intended branch and repository status.
+- Never deploy code from an untracked copy, ad hoc temporary directory, or directory with missing Git metadata.
+- Before deployment, require the exact deployed source to be committed on a named branch and record that branch and commit.
+- Keep unrelated branches and other contributors' work out of the active scope unless explicitly requested.

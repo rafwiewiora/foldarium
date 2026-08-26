@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import inspect
 import json
 import os
 import subprocess
@@ -436,6 +437,109 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
             "wwpdb-2026-08-08",
         )
 
+    def test_private_materializer_requires_explicit_no_publish_before_configuration(self) -> None:
+        module = self.deployment_module()
+        raw_function = module.materialize_private_weekly_evaluation.get_raw_f()
+        for publish in (None, True):
+            with self.subTest(publish=publish), self.assertRaisesRegex(
+                RuntimeError, "explicit --no-publish"
+            ), patch(
+                "foldarium_pipeline.supabase.SupabaseCoordinator.from_env"
+            ) as from_env:
+                raw_function(
+                    "weekly-2026-08-08-beta-v5-global-tm-29", publish
+                )
+            from_env.assert_not_called()
+
+    def test_private_materializer_passes_only_exact_round_to_no_publish_core(self) -> None:
+        module = self.deployment_module()
+        calls = []
+        coordinator = object()
+        expected = {
+            "status": "materialized-private-preclose",
+            "round_id": "weekly-2026-08-08-beta-v5-global-tm-29",
+            "evaluation_id": "weekly_eval_" + "a" * 32,
+            "item_count": 29,
+            "choice_count": 290,
+            "artifact": {
+                "object_uri": "supabase://private/sha256/aa/" + "a" * 64,
+                "sha256": "a" * 64,
+                "size_bytes": 123,
+                "media_type": "application/json",
+            },
+        }
+
+        def materialize(round_id, destination, *, coordinator):
+            calls.append((round_id, Path(destination).is_dir(), coordinator))
+            return expected
+
+        raw_function = module.materialize_private_weekly_evaluation.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=coordinator,
+        ), patch(
+            "foldarium_pipeline.private_evaluation.materialize_private_preclose_evaluation",
+            side_effect=materialize,
+        ):
+            report = raw_function(expected["round_id"], False)
+
+        self.assertEqual(calls, [(expected["round_id"], True, coordinator)])
+        self.assertEqual(report["mode"], "private-no-publish")
+        self.assertFalse(report["mutation_enabled"])
+        self.assertEqual(report["artifact"]["sha256"], "a" * 64)
+
+        source = inspect.getsource(raw_function)
+        self.assertNotIn("reveal_weekly_quiz_round", source)
+        self.assertNotIn("run_wednesday_reveal", source)
+        self.assertNotIn("_wednesday_publish_enabled", source)
+        self.assertNotIn("weekly_quiz_rounds", source)
+
+    def test_retrospective_tick_catalogs_latest_round_without_reveal_dependency(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            def current_weekly_quiz_round(self, campaign_id):
+                self.campaign_id = campaign_id
+                return {"round_id": "weekly-2026-08-08-v2"}
+
+        coordinator = Coordinator()
+        calls = []
+
+        def materialize(round_id, destination, *, coordinator):
+            calls.append((round_id, Path(destination).is_dir(), coordinator))
+            return {
+                "status": "materialized-private-postclose",
+                "round_id": round_id,
+                "evaluation_id": "weekly_eval_" + "a" * 32,
+                "item_count": 29,
+                "choice_count": 290,
+                "artifact": {"sha256": "b" * 64},
+            }
+
+        raw_function = module.weekly_retrospective_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=coordinator,
+        ), patch(
+            "foldarium_pipeline.private_evaluation.materialize_postclose_weekly_evaluation",
+            side_effect=materialize,
+        ), patch.object(
+            module,
+            "_default_weekly_campaign_id",
+            return_value="wwpdb-2026-08-08",
+        ):
+            report = raw_function()
+
+        self.assertEqual(coordinator.campaign_id, "wwpdb-2026-08-08")
+        self.assertEqual(
+            calls,
+            [("weekly-2026-08-08-v2", True, coordinator)],
+        )
+        self.assertEqual(report["mode"], "private-postclose")
+        source = inspect.getsource(raw_function)
+        self.assertNotIn("reveal_weekly_quiz_round", source)
+        self.assertNotIn("run_wednesday_reveal", source)
+
     def test_scheduled_tick_follows_current_round_across_campaign_rollover(self) -> None:
         module = self.deployment_module()
 
@@ -470,6 +574,9 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         ), patch(
             "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal",
             side_effect=reveal_service,
+        ), patch(
+            "foldarium_pipeline.private_evaluation.recover_legacy_ligand_eligibility",
+            return_value=None,
         ):
             report = raw_function(None, False)
 
@@ -511,10 +618,11 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
     def test_schedule_and_cpu_image_have_bounded_retries_and_evaluation_stack(self) -> None:
         module = self.deployment_module()
         self.assertEqual(module.WEDNESDAY_REVEAL_CRON_UTC, "5 0-5 * * 3")
+        self.assertEqual(module.WEEKLY_RETROSPECTIVE_CRON_UTC, "15 0-5 * * 3")
         self.assertEqual(module.WEDNESDAY_REVEAL_MODAL_RETRIES, 2)
         self.assertEqual(
             module.QUIZ_EVALUATION_PACKAGES,
-            ("gemmi==0.7.3", "numpy==2.3.2", "rdkit==2025.3.6"),
+            ("gemmi==0.7.5", "numpy==2.3.2", "rdkit==2025.3.6"),
         )
 
     def test_tick_dry_run_uses_exact_private_artifacts_without_publishing(self) -> None:
@@ -543,12 +651,14 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
             *,
             prediction_resolver,
             reveal_publisher,
+            recovered_ligand_eligibility,
         ):
             self.assertEqual(round_record, {"round_id": "weekly-2026-08-08"})
             self.assertEqual(private_index_content, b"private-index")
             self.assertTrue(Path(destination).is_dir())
             prediction_resolver({"run_id": "run-of3", "sample_id": "sample-4"})
             self.assertIsNone(reveal_publisher)
+            self.assertIsNone(recovered_ligand_eligibility)
             return {
                 "status": "evaluated-not-revealed",
                 "round_id": "weekly-2026-08-08",
@@ -563,6 +673,9 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         ), patch(
             "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal",
             side_effect=reveal_service,
+        ), patch(
+            "foldarium_pipeline.private_evaluation.recover_legacy_ligand_eligibility",
+            return_value=None,
         ):
             report = raw_function("weekly-2026-08-08", False)
 
@@ -596,8 +709,10 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
             *,
             prediction_resolver,
             reveal_publisher,
+            recovered_ligand_eligibility,
         ):
             self.assertIsNotNone(reveal_publisher)
+            self.assertIsNone(recovered_ligand_eligibility)
             reveal_publisher(
                 round_id=round_record["round_id"], reveal_manifest={"items": []}
             )
@@ -615,6 +730,9 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         ), patch(
             "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal",
             side_effect=reveal_service,
+        ), patch(
+            "foldarium_pipeline.private_evaluation.recover_legacy_ligand_eligibility",
+            return_value=None,
         ):
             report = raw_function("weekly-2026-08-08", True)
 

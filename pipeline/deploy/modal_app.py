@@ -186,12 +186,18 @@ WEDNESDAY_REVEAL_CRON_UTC = os.environ.get(
 )
 WEDNESDAY_REVEAL_ENABLED = os.environ.get("FOLDARIUM_ENABLE_WEDNESDAY_REVEAL") == "1"
 WEDNESDAY_REVEAL_PUBLISH_ENV = "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"
+WEEKLY_RETROSPECTIVE_CRON_UTC = os.environ.get(
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON", "15 0-5 * * 3"
+)
+WEEKLY_RETROSPECTIVE_ENABLED = (
+    os.environ.get("FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE") == "1"
+)
 # Six hourly Wednesday ticks cover a delayed coordinate release without an
 # unbounded poller. Each tick receives two short infrastructure retries; a
 # scientifically incomplete item still aborts the whole atomic reveal.
 WEDNESDAY_REVEAL_MODAL_RETRIES = 2
 QUIZ_EVALUATION_PACKAGES = (
-    "gemmi==0.7.3",
+    "gemmi==0.7.5",
     "numpy==2.3.2",
     "rdkit==2025.3.6",
 )
@@ -495,6 +501,10 @@ if modal is not None:
                 "enabled": WEDNESDAY_REVEAL_ENABLED,
                 "cron": WEDNESDAY_REVEAL_CRON_UTC,
                 "publish": _wednesday_publish_enabled(None),
+            },
+            "weekly_retrospective": {
+                "enabled": WEEKLY_RETROSPECTIVE_ENABLED,
+                "cron": WEEKLY_RETROSPECTIVE_CRON_UTC,
             },
         }
 
@@ -1182,6 +1192,133 @@ if modal is not None:
         image=quiz_assembly_image,
         cpu=8.0,
         memory=32768,
+        secrets=[control_plane_secret],
+        timeout=2 * 60 * 60,
+        max_containers=1,
+    )
+    def materialize_private_weekly_evaluation(
+        round_id: str,
+        publish: bool | None = None,
+    ) -> dict[str, Any]:
+        """Materialize one allow-listed pre-close evaluation in private storage.
+
+        This manual function requires an explicit ``--no-publish``.  It has no
+        reveal callback, no schedule, and no code path that updates a weekly
+        round or its voting window.
+        """
+
+        if publish is not False:
+            raise RuntimeError(
+                "private weekly evaluation requires explicit --no-publish"
+            )
+
+        import tempfile
+
+        from foldarium_pipeline.private_evaluation import (
+            materialize_private_preclose_evaluation,
+        )
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        coordinator = SupabaseCoordinator.from_env()
+        with tempfile.TemporaryDirectory(
+            prefix="foldarium-private-weekly-evaluation-"
+        ) as temporary:
+            result = materialize_private_preclose_evaluation(
+                round_id,
+                temporary,
+                coordinator=coordinator,
+            )
+        print(
+            "foldarium.private_weekly_evaluation "
+            + json.dumps(
+                {
+                    "round_id": result.get("round_id"),
+                    "evaluation_id": result.get("evaluation_id"),
+                    "status": result.get("status"),
+                    "item_count": result.get("item_count"),
+                    "choice_count": result.get("choice_count"),
+                    "artifact_sha256": result.get("artifact", {}).get("sha256"),
+                    "mode": "private-no-publish",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return {**result, "mode": "private-no-publish", "mutation_enabled": False}
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=8.0,
+        memory=32768,
+        schedule=(
+            modal.Cron(WEEKLY_RETROSPECTIVE_CRON_UTC)
+            if WEEKLY_RETROSPECTIVE_ENABLED
+            else None
+        ),
+        secrets=[control_plane_secret],
+        timeout=2 * 60 * 60,
+        retries=modal.Retries(
+            max_retries=WEDNESDAY_REVEAL_MODAL_RETRIES,
+            backoff_coefficient=1.0,
+            initial_delay=60.0,
+            max_delay=60.0,
+        ),
+        max_containers=1,
+    )
+    def weekly_retrospective_tick(
+        round_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Materialize one closed round privately without blocking its reveal."""
+
+        import tempfile
+
+        from foldarium_pipeline.private_evaluation import (
+            materialize_postclose_weekly_evaluation,
+        )
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        coordinator = SupabaseCoordinator.from_env()
+        selected_round_id = round_id
+        if selected_round_id is None:
+            selected_round_id = coordinator.current_weekly_quiz_round(
+                _default_weekly_campaign_id()
+            )["round_id"]
+        with tempfile.TemporaryDirectory(
+            prefix="foldarium-weekly-retrospective-"
+        ) as temporary:
+            result = materialize_postclose_weekly_evaluation(
+                selected_round_id,
+                temporary,
+                coordinator=coordinator,
+            )
+        outcome = {
+            **result,
+            "mode": "private-postclose",
+            "private_catalog_mutation_enabled": True,
+            "public_mutation_enabled": False,
+        }
+        print(
+            "foldarium.weekly_retrospective "
+            + json.dumps(
+                {
+                    "round_id": outcome.get("round_id"),
+                    "evaluation_id": outcome.get("evaluation_id"),
+                    "status": outcome.get("status"),
+                    "item_count": outcome.get("item_count"),
+                    "choice_count": outcome.get("choice_count"),
+                    "artifact_sha256": outcome.get("artifact", {}).get("sha256"),
+                    "mode": outcome["mode"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return outcome
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=8.0,
+        memory=32768,
         schedule=(
             modal.Cron(WEDNESDAY_REVEAL_CRON_UTC)
             if WEDNESDAY_REVEAL_ENABLED
@@ -1214,6 +1351,9 @@ if modal is not None:
         from foldarium_pipeline.supabase import (
             SupabaseCoordinator,
             SupabasePublicationError,
+        )
+        from foldarium_pipeline.private_evaluation import (
+            recover_legacy_ligand_eligibility,
         )
         from foldarium_pipeline.wednesday_reveal import (
             WednesdayRevealNotReady,
@@ -1267,6 +1407,11 @@ if modal is not None:
                 choice.get("run_id"), choice.get("sample_id")
             )
 
+        recovered_ligand_eligibility = recover_legacy_ligand_eligibility(
+            coordinator,
+            round_record,
+            private_index_content,
+        )
         reveal_publisher = (
             coordinator.reveal_weekly_quiz_round if mutation_enabled else None
         )
@@ -1277,6 +1422,7 @@ if modal is not None:
                 temporary,
                 prediction_resolver=prediction_resolver,
                 reveal_publisher=reveal_publisher,
+                recovered_ligand_eligibility=recovered_ligand_eligibility,
             )
         outcome = {
             **result,

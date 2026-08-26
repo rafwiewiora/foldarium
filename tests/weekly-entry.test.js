@@ -32,10 +32,12 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(app, /const WEEKLY_ONLY = window\.FOLDARIUM_QUIZ_MODE === 'weekly'/);
   assert.match(app, /quizSource = WEEKLY_ONLY \? 'weekly' : 'cameo'/);
   assert.match(app, /displayMode = WEEKLY_ONLY \? 'grid' : 'all'/);
-  assert.match(app, /question \$\{idx \+ 1\} \/ \$\{ITEMS\.length\}/);
+  assert.match(app, /const questionOrdinal = isPrivatePrecloseReview\(\)/);
+  assert.match(app, /`question \$\{questionOrdinal\}`/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);
-  assert.match(html, /<label>Your name\s*<input id="participant-name"/);
+  assert.match(html, /<label>Leaderboard name\s*<input id="participant-name"/);
+  assert.match(html, /Shown on the results leaderboard after release/);
   assert.doesNotMatch(html, /required before starting/);
   assert.match(app, /function syncStartGate\(\)/);
   assert.match(html, /Do not invite name entry until the backend, round, and Mol\* are ready/);

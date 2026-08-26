@@ -150,10 +150,14 @@ function gridLayerSandbox(overrides = {}) {
     pinCameraSnapshot: async (_plugin, snapshot) => { calls.push(`pin:${snapshot.question}`); },
     buildSingleLayer: async preserve => { calls.push(`single:${preserve}`); },
     buildGrid: async (...args) => { calls.push(`grid:${args.join(',')}`); },
+    isXtalReferenceChoice: () => false,
+    viewingReleasedCrystal: () => false,
+    buildReleasedCrystalScene: async preserve => { calls.push(`released:${preserve}`); },
     hideGrid: () => { calls.push('hideGrid'); },
     $: selector => ({ classList: {
       contains: () => false,
       add: (...names) => calls.push(`${selector}:${names.join(',')}`),
+      remove: (...names) => calls.push(`${selector}:remove:${names.join(',')}`),
     } }),
     console: { warn: (...args) => calls.push(`warn:${args[1]}`) },
     ...overrides,
@@ -173,6 +177,22 @@ test('Grid builds visible tiles before the hidden replay scene', async () => {
     '#gridview:on,loading-grid',
     'grid:true,false',
     'canonical:pose-a.pdb,pose-b.pdb:true',
+  ]);
+});
+
+test('released crystal mode replaces Grid with the separate experimental scene', async () => {
+  const app = await readApp();
+  const sandbox = gridLayerSandbox({
+    viewingReleasedCrystal: () => true,
+  });
+  const buildLayer = evaluateDeclaration(app, 'async function buildLayer()', sandbox);
+
+  await buildLayer();
+
+  assert.deepEqual(sandbox.calls, [
+    'hideGrid',
+    '#stage:remove:grid-active',
+    'released:true',
   ]);
 });
 
@@ -283,7 +303,8 @@ test('switching display mode renders choices after the queued mutation', async (
     displayMode: 'grid',
     shownOne: 4,
     cur: { revealed: false, selected: { label: 'A' }, selectionExact: true, answerChoices: [{}] },
-    interactionBlocked: () => false,
+    viewerControlBlocked: () => false,
+    retrospectiveAnswerActive: () => false,
     rememberView: () => { calls.push('rememberView'); },
     syncButtons: () => { calls.push('syncButtons'); },
     renderUI: () => { calls.push('renderUI'); },
@@ -308,6 +329,49 @@ test('switching display mode renders choices after the queued mutation', async (
   assert.equal(sandbox.displayMode, 'all');
   assert.deepEqual(sandbox.cur.selected, { label: 'A' },
     'layout changes preserve the explicit preference');
+});
+
+test('retrospective layout switches preserve camera intent and normalize Show-all focus', async () => {
+  const app = await readApp();
+  const raw = { id: 'raw' };
+  const rep = { id: 'rep' };
+  const sandbox = {
+    displayMode: 'one',
+    shownOne: 0,
+    clustered: true,
+    resetCameraOnNextBuild: false,
+    cur: {
+      revealed: true,
+      selected: raw,
+      contextChoice: raw,
+      poseFocusChoice: raw,
+    },
+    viewerControlBlocked: () => false,
+    retrospectiveAnswerActive: () => true,
+    isXtalReferenceChoice: () => false,
+    clusterForChoice: () => ({ rep }),
+    visibleIndexForChoice: () => 0,
+    syncButtons: () => {},
+    renderUI: () => {},
+    recordAppEvent: () => {},
+    viewerRebuild: {
+      enqueue: async (mutate, finalize = () => {}) => {
+        await mutate();
+        await finalize();
+      },
+    },
+  };
+  const onModeClick = evaluateHandler(
+    app,
+    "document.querySelectorAll('#mode button').forEach(b => b.onclick = async () => {",
+    sandbox,
+  );
+
+  await onModeClick({ dataset: { m: 'all' } });
+
+  assert.equal(sandbox.resetCameraOnNextBuild, false);
+  assert.equal(sandbox.cur.contextChoice, rep);
+  assert.equal(sandbox.cur.poseFocusChoice, rep);
 });
 
 test('cluster toggles preserve the exact One-at-a-time pose and Show-all context', async () => {
@@ -365,7 +429,7 @@ test('Grid page switching rebuilds once with the new page already applied', asyn
     gridMethodIndex: 0,
     cur: { item: { source: 'rnp' }, gridMethods: ['af3', 'boltz'], showAnswer: false },
     methodName: method => method.toUpperCase(),
-    interactionBlocked: () => false,
+    viewerControlBlocked: () => false,
     renderUI: () => { calls.push('renderUI'); },
     recordAppEvent: action => { calls.push(`trace:${action}`); },
     buildGrid: () => { calls.push('buildGrid'); },
@@ -446,6 +510,7 @@ test('Weekly clustered layers keep one selectable representative and ghost every
     cur: { item: { source: 'weekly' }, clusters: [cluster], revealed: false, showAnswer: false },
     clustered: true,
     displayMode: 'one',
+    retrospectiveAnswerActive: () => false,
     clusterForChoice: () => cluster,
     choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
@@ -467,6 +532,7 @@ test('Weekly Show all renders cluster representatives without ghost members', as
     cur: { item: { source: 'weekly' }, clusters: [cluster], revealed: false, showAnswer: false },
     clustered: true,
     displayMode: 'all',
+    retrospectiveAnswerActive: () => false,
     clusterForChoice: () => cluster,
     choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
@@ -491,6 +557,7 @@ test('Weekly Show all fades every non-focused pose after a ligand click', async 
     },
     clustered: true,
     displayMode: 'all',
+    retrospectiveAnswerActive: () => false,
     choiceRejected: () => false,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   })([first, focused, third]);
@@ -510,6 +577,7 @@ test('Weekly rejected poses stay visible but muted in Show all and One at a time
     cur: { item: { source: 'weekly' }, contextChoice: null, revealed: false, showAnswer: false },
     clustered: false,
     displayMode: 'all',
+    retrospectiveAnswerActive: () => false,
     choiceRejected: choice => choice === rejected,
     sameChoice: (left, right) => left.pose_file === right.pose_file,
   };
@@ -537,7 +605,7 @@ test('One-at-a-time rejection mutes and restores the whole molecular viewer', as
   };
   const actions = { hidden: false };
   const button = () => ({
-    classList: { toggle() {} },
+    classList: { toggle() {}, add() {}, remove() {} },
     textContent: '',
     setAttribute() {},
   });
@@ -555,6 +623,7 @@ test('One-at-a-time rejection mutes and restores the whole molecular viewer', as
     oneReviewChoice: () => displayedChoice,
     choiceRejected: () => rejected,
     gridChoiceSelected: () => false,
+    retrospectiveAnswerActive: () => false,
   });
 
   syncOneReviewState();
@@ -573,6 +642,45 @@ test('One-at-a-time rejection mutes and restores the whole molecular viewer', as
   assert.equal(classes.has('rejected'), false,
     'leaving One-at-a-time must not leak rejection styling to another layout');
   assert.equal(actions.hidden, true);
+});
+
+test('retrospective One at a time replaces ballot actions with protein-frame controls', async () => {
+  const app = await readApp();
+  const choice = { pose_file: 'pose.pdb' };
+  const classes = new Set();
+  const button = () => ({
+    classList: {
+      toggle(name, force) { if (force) classes.add(name); else classes.delete(name); },
+      add() {},
+      remove(name) { classes.delete(name); },
+    },
+    textContent: '',
+    disabled: false,
+    setAttribute() {},
+  });
+  const elements = {
+    '#app': { classList: { toggle() {}, remove() {} } },
+    '#one-review-actions': { hidden: true },
+    '#one-select': button(),
+    '#one-reject': button(),
+  };
+  const syncOneReviewState = evaluateDeclaration(app, 'function syncOneReviewState()', {
+    $: selector => elements[selector],
+    cur: { item: { source: 'weekly' }, revealed: true },
+    oneReviewChoice: () => choice,
+    choiceRejected: () => false,
+    gridChoiceSelected: () => false,
+    retrospectiveAnswerActive: () => true,
+    retrospectiveProteinFrame: 'folded',
+    isXtalReferenceChoice: () => false,
+  });
+
+  syncOneReviewState();
+
+  assert.equal(elements['#one-review-actions'].hidden, false);
+  assert.equal(elements['#one-select'].textContent, 'Xtal');
+  assert.equal(elements['#one-reject'].textContent, 'Folded');
+  assert.equal(elements['#one-reject'].disabled, false);
 });
 
 test('Weekly cluster acceptance applies to every raw member while labels stay unambiguous', async () => {
@@ -634,6 +742,11 @@ test('Weekly exposes method-specific ligand confidence for every raw pose', asyn
   assert.equal(
     weeklyEntryEvidence(entry),
     'OpenFold3 · ligand pLDDT 82.5 · smina -7.1 kcal/mol · H-bonds 3',
+  );
+  sandbox.clustered = true;
+  assert.equal(
+    weeklyEntryEvidence({ ...entry, members: [boltz] }),
+    'Boltz-2 · ligand pLDDT 75.0 · smina -6.3 kcal/mol · H-bonds 1',
   );
   assert.match(app, /_method: choice\.method \|\| reveal\.method \|\| null/);
   assert.match(app, /_confidence: choice\.confidence \|\| null/);
@@ -735,6 +848,7 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   const calls = [];
   const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
     interactionBlocked: () => false,
+    retrospectiveAnswerActive: () => false,
     cur: {
       item: { source: 'weekly' },
       revealed: false,
@@ -745,6 +859,7 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
     canonicalInteractionIsEmpty: () => false,
     clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
+    isXtalReferenceChoice: () => false,
     visibleIndexForChoice: () => 3,
     clearTransientPoseSelection: () => {},
     plugin: {},
@@ -758,12 +873,49 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
   assert.deepEqual(calls, [[3, exact]]);
 });
 
+test('retrospective Show all switches protein context for predicted and Xtal ligands', async () => {
+  const app = await readApp();
+  const predicted = { pose_file: 'predicted.pdb' };
+  const xtal = { _xtalReference: true, id: '__xtal_reference__' };
+  let clicked = predicted;
+  const calls = [];
+  const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
+    interactionBlocked: () => true,
+    viewerControlBlocked: () => false,
+    retrospectiveAnswerActive: () => true,
+    cur: { item: { source: 'weekly' }, revealed: true, contextChoice: null },
+    displayMode: 'all',
+    choiceFromPoseInteraction: () => clicked,
+    canonicalInteractionIsEmpty: () => false,
+    clearWeeklyShowAllContext: async () => {},
+    sameChoice: () => false,
+    isXtalReferenceChoice: choice => choice._xtalReference === true,
+    visibleIndexForChoice: () => 4,
+    clearTransientPoseSelection: () => {},
+    plugin: {},
+    activateCanonicalPoseChoice: async (...args) => { calls.push(args); },
+    console,
+  });
+
+  handler({ current: { repr: {} } });
+  await Promise.resolve();
+  clicked = xtal;
+  handler({ current: { repr: {} } });
+  await Promise.resolve();
+
+  assert.deepEqual(calls, [[4, predicted], [-1, xtal]]);
+  assert.match(app, /if \(displayMode !== 'all' \|\| contextChoice\)/);
+  assert.match(app, /const pocketChoice = contextChoice\s+\|\| poseLayers/);
+  assert.match(app, /const foldedShowAll = displayMode === 'all' && cur\.contextChoice/);
+});
+
 test('Weekly One at a time inspects without preferring the exact pose clicked in Molstar', async () => {
   const app = await readApp();
   const exact = { pose_file: 'exact.pdb' };
   const calls = [];
   const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
     interactionBlocked: () => false,
+    retrospectiveAnswerActive: () => false,
     cur: { item: { source: 'weekly' }, revealed: false, contextChoice: null },
     displayMode: 'one',
     choiceFromPoseInteraction: () => exact,
@@ -779,6 +931,65 @@ test('Weekly One at a time inspects without preferring the exact pose clicked in
   await Promise.resolve();
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[exact]]);
+});
+
+test('retrospective One at a time ligand clicks inspect the pose without rebuilding pocket sticks', async () => {
+  const app = await readApp();
+  const choice = {
+    pose_file: 'aligned-pose.pdb',
+    answer_crystal_pocket_pdb: 'ATOM crystal pocket',
+  };
+  const inspected = [];
+  const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
+    interactionBlocked: () => true,
+    viewerControlBlocked: () => false,
+    retrospectiveAnswerActive: () => true,
+    cur: { item: { source: 'weekly' }, revealed: true, contextChoice: null },
+    displayMode: 'one',
+    choiceFromPoseInteraction: () => choice,
+    canonicalInteractionIsEmpty: () => false,
+    clearTransientPoseSelection: () => {},
+    plugin: {},
+    inspectCanonicalChoice: current => { inspected.push(current); },
+    console,
+  });
+
+  handler({ current: { repr: {} } });
+
+  assert.deepEqual(inspected, [choice]);
+  assert.match(app, /registerPoseClickTarget\(representation, xtalClickChoice \|\| crystalChoiceByPdb\.get\(crystalPdb\)\)/);
+  assert.doesNotMatch(app, /click a ligand for pocket sticks/);
+});
+
+test('retrospective One at a time maps clustered ghost clicks to the visible representative', async () => {
+  const app = await readApp();
+  const ghost = { id: 'ghost' };
+  const cur = { contextChoice: null, poseFocusChoice: null };
+  const sandbox = {
+    cur,
+    displayMode: 'one',
+    shownOne: 0,
+    retrospectiveAnswerActive: () => true,
+    viewerControlBlocked: () => false,
+    interactionBlocked: () => true,
+    isXtalReferenceChoice: () => false,
+    visibleIndexForChoice: choice => choice === ghost ? 3 : -1,
+    retrospectiveNavChoices: () => [],
+    recordAppEvent: () => {},
+    selectedPaneId: 'pane',
+  };
+  const inspectCanonicalChoice = evaluateDeclaration(
+    app,
+    'function inspectCanonicalChoice(choice)',
+    sandbox,
+  );
+
+  inspectCanonicalChoice(ghost);
+
+  assert.equal(sandbox.shownOne, 3);
+  assert.equal(cur.contextChoice, ghost);
+  assert.equal(cur.poseFocusChoice, ghost);
+  assert.equal(sandbox.selectedPaneId, null);
 });
 
 test('pose clicks clear only Molstar selection marking after the native click', async () => {
@@ -838,9 +1049,15 @@ test('Weekly Grid inspects without preferring the exact pose clicked inside its 
     sameChoice: (left, right) => left?.pose_file === right?.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => null, buildInteractions: async () => {},
+    isXtalReferenceChoice: () => false,
+    itemHasReleasedCrystal: () => false,
+    focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
     window: { waitForCameraSettled: async () => {} }, GOOD: 1, BAD: 2,
   };
+  sandbox.populateGridCell = evaluateDeclaration(
+    app, 'async function populateGridCell(cell, revision, { preserveCamera = null } = {})', sandbox,
+  );
   const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
   const cell = {
     entry: { choice, choiceIndex: 4, cluster: { members: [choice] } },
@@ -894,6 +1111,7 @@ test('Weekly Show all waits for the click zoom before activating pose context', 
     displayMode: 'all',
     plugin,
     cameraSnapshotAfterInteraction: async () => zoomedCamera,
+    retrospectiveAnswerActive: () => false,
     shownOne: 0,
     selectedPaneId: 'pane-old',
     nextCanonicalCameraSnapshot: null,
@@ -997,6 +1215,7 @@ test('Weekly Show all clears only visual pose context when empty Molstar space i
   };
   const handler = evaluateDeclaration(app, 'function onCanonicalPoseInteraction(event)', {
     interactionBlocked: () => false,
+    retrospectiveAnswerActive: () => false,
     cur,
     canonicalPoseActivationRevision: 0,
     displayMode: 'all',
@@ -1020,6 +1239,47 @@ test('Weekly Show all clears only visual pose context when empty Molstar space i
   assert.equal(cur.selected, selected, 'resetting the visual context must preserve the pending vote');
 });
 
+test('Weekly Show all resets the ensemble camera on the first empty-space click', async () => {
+  const app = await readApp();
+  const selected = { pose_file: 'selected.pdb' };
+  const calls = [];
+  const sandbox = {
+    canonicalPoseActivationRevision: 0,
+    cur: {
+      contextChoice: selected,
+      poseFocusChoice: selected,
+    },
+    selectedPaneId: 'pane-1',
+    resetCameraOnNextBuild: false,
+    viewerRebuild: {
+      enqueue: async (mutate, render) => {
+        mutate();
+        calls.push('rebuilt');
+        render?.();
+      },
+    },
+    plugin: {
+      canvas3d: {
+        requestCameraReset: () => calls.push('camera-reset'),
+      },
+    },
+    recordAppEvent: event => calls.push(event),
+  };
+  const clearContext = evaluateDeclaration(
+    app,
+    'async function clearWeeklyShowAllContext()',
+    sandbox,
+  );
+
+  await clearContext();
+
+  assert.equal(sandbox.cur.contextChoice, null);
+  assert.equal(sandbox.cur.poseFocusChoice, null);
+  assert.equal(sandbox.selectedPaneId, null);
+  assert.equal(sandbox.resetCameraOnNextBuild, true);
+  assert.deepEqual(calls, ['rebuilt', 'camera-reset', 'pose_context_cleared']);
+});
+
 test('Weekly pose metrics are attached to a hover-only information affordance', async () => {
   const [app, html] = await Promise.all([readApp(), readHtml()]);
 
@@ -1032,7 +1292,7 @@ test('Weekly pose metrics are attached to a hover-only information affordance', 
   assert.match(html, /\.pose-tooltip\{position:fixed/);
 });
 
-test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the info tooltip', async () => {
+test('Weekly Grid shows compact confidence while retrospective Grid shows cluster votes', async () => {
   const app = await readApp();
   const choice = {
     label: 'C',
@@ -1058,14 +1318,38 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
     displayedPoseLabel: current => current.label,
     acceptedChoiceCorrect: () => false,
     gridChoiceSelected: () => false,
+    isXtalReferenceChoice: () => false,
     GOOD: 1,
     BAD: 2,
   })({ choice, memberCount: 2 });
 
   assert.match(header, /Pose C/);
   assert.match(header, /2 poses/);
-  assert.match(header, /ligand pLDDT 72\.5/);
+  assert.match(header, /pLDDT 72\.5/);
+  assert.doesNotMatch(header, /ligand pLDDT/);
   assert.doesNotMatch(header, /OpenFold|Boltz|smina|ProLIF|\/100/);
+
+  const answerHeader = evaluateDeclaration(app, 'function gridHeader(entry)', {
+    cur: { item: { source: 'weekly' }, revealed: true, showAnswer: true },
+    clustered: true,
+    weeklyLigandPlddt,
+    hex: color => `#${color.toString(16)}`,
+    displayedPoseLabel: current => current.label,
+    answerViewPoseCorrect: () => true,
+    gridChoiceSelected: () => false,
+    isXtalReferenceChoice: () => false,
+    GOOD: 1,
+    BAD: 2,
+  })({
+    choice: { ...choice, rmsd: 1.24, _weeklyVoteCount: 2 },
+    cluster: { members: [{ _weeklyVoteCount: 2 }, { _weeklyVoteCount: 3 }] },
+    memberCount: 2,
+  });
+  assert.match(answerHeader, /class="grid-rmsd correct">RMSD 1\.24 Å/);
+  assert.doesNotMatch(answerHeader, /Exact correct|Incorrect/);
+  assert.doesNotMatch(answerHeader, /pLDDT/);
+  assert.match(answerHeader, /2 poses/);
+  assert.match(answerHeader, /5 votes/);
 
   const registry = elementRegistry();
   const badgeSandbox = {
@@ -1078,6 +1362,10 @@ test('Weekly Grid and One-at-a-time show only compact ligand pLDDT outside the i
     displayedPoseLabel: current => current.label,
     weeklyLigandPlddt,
     weeklyHbondCount,
+    viewingReleasedCrystal: () => false,
+    retrospectiveAnswerActive: () => false,
+    retrospectiveNavChoices: () => [choice],
+    isXtalReferenceChoice: () => false,
     $: registry.$,
   };
   const syncStageBadge = evaluateDeclaration(app, 'function syncStageBadge()', badgeSandbox);
@@ -1147,10 +1435,16 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => ({ radius: 1 }),
     buildInteractions: async (...args) => { interactionCalls.push(args); },
+    isXtalReferenceChoice: () => false,
+    itemHasReleasedCrystal: () => false,
+    focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
     window: { waitForCameraSettled: async ({ requestReset }) => requestReset() },
     GOOD: 0x2BA84A, BAD: 0xE23B2E,
   };
+  sandbox.populateGridCell = evaluateDeclaration(
+    app, 'async function populateGridCell(cell, revision, { preserveCamera = null } = {})', sandbox,
+  );
   const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
   const cell = {
     entry: { choice: representative, cluster: { members: [representative, ghost] } },
@@ -1199,9 +1493,15 @@ test('Surface mode adds representative protein and ligand surfaces in Grid', asy
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => null, buildInteractions: async () => {},
+    isXtalReferenceChoice: () => false,
+    itemHasReleasedCrystal: () => false,
+    focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
     window: { waitForCameraSettled: async () => {} }, GOOD: 1, BAD: 2,
   };
+  sandbox.populateGridCell = evaluateDeclaration(
+    app, 'async function populateGridCell(cell, revision, { preserveCamera = null } = {})', sandbox,
+  );
   const buildGridCell = evaluateDeclaration(app, 'async function buildGridCell(cell, revision)', sandbox);
   const cell = {
     entry: { choice, cluster: { members: [choice] } },
@@ -1422,7 +1722,7 @@ test('selecting an off-page Weekly sidebar pose opens its Grid page', async () =
     GRID_PAGE_SIZE: 9,
     allGridEntries: () => entries,
     sameChoice: (left, right) => left === right,
-    interactionBlocked: () => false,
+    viewerControlBlocked: () => false,
     onPick: async (choiceIndex, choice) => { calls.push(['pick', choiceIndex, choice.id]); },
     renderGridPages: () => { calls.push(['pages', sandbox.gridMethodIndex]); },
     renderUI: () => { calls.push(['ui', sandbox.gridMethodIndex]); },
