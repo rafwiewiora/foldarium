@@ -1090,9 +1090,22 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     "supabase://quiz-public/"
                 )
             )
-            private_index = json.loads(private.stored[0][0])
-            warning_index = json.loads(private.stored[1][0])
-            eligibility_index = json.loads(private.stored[2][0])
+            private_payloads = [
+                json.loads(content)
+                for content, media_type in private.stored
+                if media_type == "application/json"
+            ]
+            private_index = next(
+                payload
+                for payload in private_payloads
+                if "blind_manifest_sha256" in payload
+            )
+            warning_index = next(
+                payload for payload in private_payloads if "warnings" in payload
+            )
+            eligibility_index = next(
+                payload for payload in private_payloads if "rejections" in payload
+            )
             self.assertEqual(
                 warning_index,
                 {
@@ -1272,7 +1285,12 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 round_environment="preview",
             )
             blind = private.opened["blind_manifest"]
-            warning_index = json.loads(private.stored[1][0])
+            warning_index = next(
+                json.loads(content)
+                for content, media_type in private.stored
+                if media_type == "application/json"
+                and "warnings" in json.loads(content)
+            )
 
         self.assertEqual(
             [item["target_id"] for item in stage["items"]],

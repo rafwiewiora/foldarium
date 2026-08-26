@@ -419,10 +419,14 @@ class WeeklyLlmCatalogTests(unittest.TestCase):
 
 class WeeklyLlmClaudeTests(unittest.TestCase):
     def test_command_omits_effort_and_add_dir(self) -> None:
-        command = build_claude_command(
-            prompt_text="prompt",
-            mcp_config_path="/tmp/.empty-mcp-config.json",
-        )
+        with mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.claude.shutil.which",
+            return_value="/usr/local/bin/claude",
+        ):
+            command = build_claude_command(
+                prompt_text="prompt",
+                mcp_config_path="/tmp/.empty-mcp-config.json",
+            )
         self.assertNotIn("--effort", command)
         self.assertNotIn("--add-dir", command)
         self.assertIn("--setting-sources", command)
