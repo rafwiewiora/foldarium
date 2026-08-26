@@ -8,6 +8,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from foldarium_pipeline.contracts import SCHEMA_VERSION, canonical_json
 from foldarium_pipeline.quiz import build_blind_manifest, manifest_sha256
@@ -329,15 +330,33 @@ class SelectorKitPublicationTests(unittest.TestCase):
             "blind_manifest": self.blind,
             "metadata": {"selector_targets": publication["selector_targets"]},
         }
-        backfilled = backfill_selector_kit_for_round(
-            round_row,
-            public_coordinator=public,
-            private_coordinator=private,
-            register_catalog=True,
-        )
+        transient_uri = self.blind["items"][0]["choices"][0]["pose_uri"]
+        original_download = public.download_content_object
+        transient_attempts = 0
+
+        def flaky_download(object_uri, **kwargs):
+            nonlocal transient_attempts
+            if object_uri == transient_uri:
+                transient_attempts += 1
+                if transient_attempts == 1:
+                    raise OSError("transient storage transport failure")
+            return original_download(object_uri, **kwargs)
+
+        public.download_content_object = flaky_download
+        with mock.patch(
+            "foldarium_pipeline.weekly_quiz.time.sleep"
+        ) as retry_sleep:
+            backfilled = backfill_selector_kit_for_round(
+                round_row,
+                public_coordinator=public,
+                private_coordinator=private,
+                register_catalog=True,
+            )
         self.assertEqual(backfilled["round_id"], self.round_id)
         self.assertEqual(len(private.registered), 1)
         self.assertGreaterEqual(len(public.downloads), 3)
+        self.assertEqual(transient_attempts, 2)
+        retry_sleep.assert_called_once_with(0.5)
 
     def test_backfill_recovers_targets_for_pre_selector_round(self) -> None:
         public = FakeCoordinator("quiz-public")
