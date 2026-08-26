@@ -33,21 +33,54 @@ GATE_KEYS = frozenset(
         "FOLDARIUM_WEEKLY_GPU_CLASS",
         "FOLDARIUM_PUBLIC_QUIZ_BUCKET",
         "FOLDARIUM_PREDICTION_MAX_CONTAINERS",
+        "FOLDARIUM_ENABLE_NEXTWEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT",
+        "FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS",
+        "FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION",
+        "FOLDARIUM_WEEKLY_PRODUCTION_CRON",
+        "FOLDARIUM_WEEKLY_PRODUCTION_OPEN",
+        "FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX",
+        "FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT",
         "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL",
         "FOLDARIUM_WEDNESDAY_REVEAL_CRON",
         "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH",
+        "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON",
+        "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON",
     }
 )
 EXPECTED_FIXED_VALUES = {
     "FOLDARIUM_ENABLE_WEEKLY_CRON": "1",
+    "FOLDARIUM_WEEKLY_CRON": "*/15 3-12 * * 6",
     "FOLDARIUM_WEEKLY_HOOK": "foldarium_pipeline.weekly:modal_weekly_hook",
     "FOLDARIUM_WEEKLY_REGISTER": "1",
     "FOLDARIUM_WEEKLY_SUBMIT": "1",
     "FOLDARIUM_WEEKLY_GPU_CLASS": "l4",
     "FOLDARIUM_PUBLIC_QUIZ_BUCKET": "foldarium-weekly-quiz",
+    "FOLDARIUM_ENABLE_NEXTWEEKLY_CRON": "1",
+    "FOLDARIUM_NEXTWEEKLY_CRON": "5 * * * 6,0,1",
+    "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT": "preview",
+    "FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS": "1",
+    "FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION": "1",
+    "FOLDARIUM_WEEKLY_PRODUCTION_CRON": "15 * * * 6,0,1",
+    "FOLDARIUM_WEEKLY_PRODUCTION_OPEN": "0",
+    "FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX": "beta-v1",
+    "FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT": "0",
     "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL": "1",
     "FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH": "0",
+    "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE": "1",
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON": "15 0-5 * * 3",
+    "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION": "0",
+    "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON": "45 0-5 * * 3",
 }
+
+
+def _validate_cron_expression(name: str, expression: str) -> None:
+    """Reject malformed schedules before Modal's server-side validation."""
+    if len(expression.split()) != 5:
+        raise ValueError(f"{name} must be a five-field cron expression")
 
 
 def load_profile(path: Path) -> dict[str, object]:
@@ -98,6 +131,15 @@ def load_profile(path: Path) -> dict[str, object]:
     for key, expected in EXPECTED_FIXED_VALUES.items():
         if environment[key] != expected:
             raise ValueError(f"reviewed production profile requires {key}={expected!r}")
+    for key in (
+        "FOLDARIUM_WEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_CRON",
+        "FOLDARIUM_WEEKLY_PRODUCTION_CRON",
+        "FOLDARIUM_WEDNESDAY_REVEAL_CRON",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON",
+        "FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON",
+    ):
+        _validate_cron_expression(key, environment[key])
     for key in ("FOLDARIUM_WEEKLY_MAX_TARGETS", "FOLDARIUM_PREDICTION_MAX_CONTAINERS"):
         try:
             value = int(environment[key])
@@ -105,10 +147,10 @@ def load_profile(path: Path) -> dict[str, object]:
             raise ValueError(f"{key} must be an integer") from exc
         if value < 1:
             raise ValueError(f"{key} must be positive")
-    if int(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"]) != 2:
+    if int(environment["FOLDARIUM_WEEKLY_MAX_TARGETS"]) != 40:
         raise ValueError(
-            "the reviewed profile retains the two-target safety cap; change it only "
-            "in a separately reviewed commit"
+            "the reviewed profile requires the explicitly approved 40-target "
+            "weekly safety cap"
         )
     if int(environment["FOLDARIUM_PREDICTION_MAX_CONTAINERS"]) != 5:
         raise ValueError("the reviewed production concurrency must remain 5")
@@ -239,19 +281,62 @@ print(json.dumps(report, sort_keys=True))
                 reviewed["FOLDARIUM_PREDICTION_MAX_CONTAINERS"]
             ),
         },
+        "nextweekly": {
+            "enabled": reviewed["FOLDARIUM_ENABLE_NEXTWEEKLY_CRON"] == "1",
+            "cron": reviewed["FOLDARIUM_NEXTWEEKLY_CRON"],
+            "environment": reviewed["FOLDARIUM_NEXTWEEKLY_ENVIRONMENT"],
+            "include_pose_metrics": (
+                reviewed["FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS"] == "1"
+            ),
+            "round_version": "v2",
+            "automatic_retry_error_codes": [
+                "gpu_out_of_memory",
+                "msa_generation_timeout",
+                "msa_preprocessing_failed",
+            ],
+            "retry_batch_size": 10,
+            "gpu_command_budget_seconds": 40 * 60 * 60,
+            "gpu_cost_budget_usd": 44.62848,
+            "oom_retry": {
+                "from_gpu_class": "l4",
+                "to_gpu_class": "a100-40gb",
+                "command_timeout_seconds": 30 * 60,
+                "outer_timeout_seconds": 35 * 60,
+            },
+            "msa_timeout_retry": {
+                "gpu_class": "l4",
+                "command_timeout_seconds": 75 * 60,
+                "outer_timeout_seconds": 80 * 60,
+            },
+            "maximum_retry_reservation_seconds": 75 * 60,
+        },
+        "weekly_production": {
+            "enabled": reviewed["FOLDARIUM_ENABLE_WEEKLY_PRODUCTION_PROMOTION"] == "1",
+            "cron": reviewed["FOLDARIUM_WEEKLY_PRODUCTION_CRON"],
+            "open": reviewed["FOLDARIUM_WEEKLY_PRODUCTION_OPEN"] == "1",
+            "round_suffix": reviewed["FOLDARIUM_WEEKLY_PRODUCTION_ROUND_SUFFIX"],
+            "register_selector_kit": (
+                reviewed["FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT"] == "1"
+            ),
+        },
         "wednesday_reveal": {
             "enabled": reviewed["FOLDARIUM_ENABLE_WEDNESDAY_REVEAL"] == "1",
             "cron": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_CRON"],
             "publish": reviewed["FOLDARIUM_WEDNESDAY_REVEAL_PUBLISH"] == "1",
         },
         "weekly_retrospective": {
-            "enabled": False,
-            "cron": "15 0-5 * * 3",
+            "enabled": reviewed["FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE"] == "1",
+            "cron": reviewed["FOLDARIUM_WEEKLY_RETROSPECTIVE_CRON"],
         },
         "weekly_retrospective_publication": {
-            "enabled": False,
-            "cron": "45 0 * * 3",
+            "enabled": (
+                reviewed["FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION"] == "1"
+            ),
+            "cron": reviewed["FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON"],
         },
+        "required_migrations_before_publication": [
+            "20260826190000_require_retrospective_vote_scope.sql"
+        ],
     }
     if report != expected_report:
         raise RuntimeError("deployed Modal configuration does not match reviewed profile")
