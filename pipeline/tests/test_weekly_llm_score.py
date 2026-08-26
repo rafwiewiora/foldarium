@@ -296,6 +296,18 @@ class WeeklyLlmEvidenceTests(unittest.TestCase):
         self.assertEqual(atoms[1].serial, 100)
         self.assertEqual(atoms[1].element, "NA")
 
+    def test_pdb_parsing_accepts_a_separate_bounded_full_protein_limit(self) -> None:
+        content = (
+            pdb_line(serial=1, res_seq=1, x=1.0, y=2.0, z=3.0)
+            + pdb_line(serial=2, res_seq=2, x=2.0, y=3.0, z=4.0)
+        )
+        with self.assertRaisesRegex(WeeklyLlmEvidenceError, "exceeds 1 heavy atoms"):
+            parse_pdb_atoms(content, label="pocket", max_atoms=1)
+        self.assertEqual(
+            len(parse_pdb_atoms(content, label="protein", max_atoms=2)),
+            2,
+        )
+
     def test_shared_frame_changes_with_relative_translation(self) -> None:
         pose = pdb_line(serial=1, x=0.0, y=0.0, z=0.0)
         near_pocket = pdb_line(serial=1, x=2.0, y=0.0, z=0.0, res="POK")
