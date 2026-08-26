@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import time
 import uuid
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -87,6 +88,8 @@ DEFAULT_PUBLIC_UPLOAD_WORKERS = 1
 MAX_PUBLIC_UPLOAD_WORKERS = 8
 SELECTOR_KIT_ZIP_MEDIA_TYPE = "application/zip"
 SELECTOR_TARGETS_JSON_MEDIA_TYPE = "application/json"
+SELECTOR_ASSET_DOWNLOAD_ATTEMPTS = 4
+SELECTOR_ASSET_DOWNLOAD_RETRY_SECONDS = 0.5
 
 
 class WeeklyQuizAssemblyError(RuntimeError):
@@ -2264,7 +2267,24 @@ def _selector_assets_from_blind_manifest(
                     raise WeeklyQuizAssemblyError(
                         f"blind choice {item_id}/{choice_id} lacks {uri_key}"
                     )
-                content = downloader(uri.strip())
+                content = None
+                last_error: Exception | None = None
+                for attempt in range(SELECTOR_ASSET_DOWNLOAD_ATTEMPTS):
+                    try:
+                        content = downloader(uri.strip())
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt + 1 < SELECTOR_ASSET_DOWNLOAD_ATTEMPTS:
+                            time.sleep(
+                                SELECTOR_ASSET_DOWNLOAD_RETRY_SECONDS * (2**attempt)
+                            )
+                if content is None and last_error is not None:
+                    raise WeeklyQuizAssemblyError(
+                        "selector asset download failed after "
+                        f"{SELECTOR_ASSET_DOWNLOAD_ATTEMPTS} attempts for "
+                        f"{item_id}/{choice_id}/{kind}"
+                    ) from last_error
                 if not isinstance(content, bytes) or not content:
                     raise WeeklyQuizAssemblyError(
                         f"selector asset download for {item_id}/{choice_id}/{kind} is empty"
