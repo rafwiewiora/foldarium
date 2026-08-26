@@ -1,6 +1,7 @@
 import {
   WeeklySelectorResultsError,
   normalizeLatestSubmissionRows,
+  normalizePostCloseBenchmarkRows,
   scoreWeeklySelectorResults,
   verifyKitCatalogRow,
   verifyRevealedSelectorRound,
@@ -70,9 +71,24 @@ export function createWeeklySelectorResultsHandler({
           p_environment: config.environment,
         },
       );
+      const benchmarkRows = await postRows(
+        fetchImpl,
+        config.url,
+        headers,
+        '/rest/v1/rpc/get_weekly_selector_benchmarks_v1',
+        {
+          p_round_id: live.roundId,
+          p_environment: config.environment,
+        },
+      );
 
       const submissions = normalizeLatestSubmissionRows(
         submissionRows,
+        live.roundId,
+        config.environment,
+      );
+      const benchmarks = normalizePostCloseBenchmarkRows(
+        benchmarkRows,
         live.roundId,
         config.environment,
       );
@@ -81,7 +97,7 @@ export function createWeeklySelectorResultsHandler({
         itemCount: live.itemCount,
         blindManifest: live.blindManifest,
         revealManifest: live.revealManifest,
-        submissions,
+        submissions: [...submissions, ...benchmarks],
       });
       return send(response, 200, leaderboard);
     } catch (error) {

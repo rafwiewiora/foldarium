@@ -9,6 +9,7 @@ import {
   buildSminaSubmission,
   manifestSha256,
   normalizeLatestSubmissionRows,
+  normalizePostCloseBenchmarkRows,
   scoreSelectorSubmission,
   scoreWeeklySelectorResults,
   verifyRevealedSelectorRound,
@@ -167,7 +168,7 @@ function revealedRound({ blindManifest, revealManifest, status = 'revealed' }) {
   };
 }
 
-function recordingFetch({ round, catalog, submissions = [] }) {
+function recordingFetch({ round, catalog, submissions = [], benchmarks = [] }) {
   async function fetchImpl(url, options = {}) {
     fetchImpl.calls.push({
       url,
@@ -178,6 +179,7 @@ function recordingFetch({ round, catalog, submissions = [] }) {
     if (url.includes('/weekly_quiz_rounds')) payload = [round];
     else if (url.includes('/get_weekly_selector_kit_descriptor')) payload = [catalog];
     else if (url.includes('/get_weekly_selector_latest_submissions')) payload = submissions;
+    else if (url.includes('/get_weekly_selector_benchmarks_v1')) payload = benchmarks;
     else throw new Error(`unexpected fetch ${url}`);
     return { ok: true, json: async () => payload };
   }
@@ -271,6 +273,7 @@ test('results expose dual-track overall ranks and labeled per-question counts wi
   assert.equal(result.format_version, SELECTOR_RESULTS_FORMAT_VERSION);
   assert.equal(result.participant_count, 2);
   assert.equal(result.selector_count, 1);
+  assert.equal(result.post_close_benchmark_count, 0);
   const ada = result.rows.find(row => row.identity.display_name === 'Ada');
   assert.equal(ada.clustered.correct, 1);
   assert.equal(ada.unclustered.correct, 2);
@@ -329,6 +332,57 @@ test('normalization publishes only approved identity metadata', () => {
   }], ROUND_ID);
   assert.deepEqual(normalized, [{ identity: identity(), items: decisions() }]);
   assert.doesNotMatch(JSON.stringify(normalized), /11111111|token_hash|submission_id/);
+});
+
+test('post-close benchmarks remain visibly separate with sanitized model provenance', () => {
+  const row = {
+    run_class: 'post_close_benchmark',
+    payload: {
+      schema_version: 'foldarium.selector-submission/v2',
+      environment: 'preview',
+      round_id: ROUND_ID,
+      items: decisions(),
+    },
+    display_name: 'Claude Opus',
+    method_name: 'blind-pose-selector',
+    method_version: 'weekly-pose-selector-v1',
+    provider: 'anthropic',
+    requested_model_id: 'opus',
+    observed_model_ids: ['claude-opus-exact'],
+    requested_effort: 'default',
+    applied_effort: null,
+    effort_reporting: 'not_exposed',
+    prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+    prompt_sha256: SELECTOR_PROMPT_SHA256,
+    input_manifest_sha256: HASH('d'),
+    tools_sha256: HASH('b'),
+    config_sha256: HASH('c'),
+    runtime_sha256: HASH('e'),
+    blindness_attestation: identity().blindness_attestation,
+    blindness_attestation_sha256: identity().blindness_attestation_sha256,
+    execution_sha256: HASH('f'),
+  };
+  const normalized = normalizePostCloseBenchmarkRows([row], ROUND_ID, 'preview');
+  assert.equal(normalized[0].participantType, 'post_close_benchmark');
+  assert.equal(normalized[0].identity.model_version, 'claude-opus-exact');
+  assert.equal(normalized[0].identity.benchmark.requested_effort, 'default');
+  assert.equal(normalized[0].identity.benchmark.applied_effort, null);
+
+  const data = fixture();
+  const result = scoreWeeklySelectorResults({
+    roundId: ROUND_ID,
+    itemCount: 2,
+    blindManifest: data.blindManifest,
+    revealManifest: data.revealManifest,
+    submissions: normalized,
+  });
+  assert.equal(result.selector_count, 0);
+  assert.equal(result.post_close_benchmark_count, 1);
+  assert.equal(
+    result.rows.find(resultRow => resultRow.identity.display_name === 'Claude Opus')
+      .participant_type,
+    'post_close_benchmark',
+  );
 });
 
 test('normalization rejects incomplete or inconsistent blindness provenance', () => {

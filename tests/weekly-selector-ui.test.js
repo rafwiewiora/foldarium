@@ -234,6 +234,20 @@ test('selector leaderboard renders independent Cluster and Exact tracks and esca
   assert.match(rendered, /Cluster #2 3\/5 \(60%\)/);
   assert.match(rendered, /Exact #1 4\/5 \(80%\)/);
   assert.doesNotMatch(rendered, /<Ada>/);
+
+  const benchmark = formatSelectorScoreLine({
+    participant_type: 'post_close_benchmark',
+    identity: {
+      display_name: 'Claude Opus',
+      provider: 'anthropic',
+      model_name: 'opus',
+      model_version: 'claude-opus-exact',
+      benchmark: { requested_effort: 'default' },
+    },
+    clustered: { correct: 3, item_count: 5, accuracy: 60, rank: 2 },
+    unclustered: { correct: 4, item_count: 5, accuracy: 80, rank: 1 },
+  });
+  assert.match(benchmark, /Post-close benchmark · requested default effort/);
 });
 
 test('selector leaderboard remains reveal-gated and validates v2 result envelopes', async () => {

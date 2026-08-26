@@ -38,6 +38,7 @@ sequence is in [Weekly LLM voting runbook](weekly-llm-voting-runbook.md).
 | `POST` | `/api/weekly-selector/tokens` | Supabase access token | Register provenance and issue a round-bound selector token |
 | `POST` | `/api/weekly-selector/submissions` | selector bearer token | Atomically accept one complete batch revision |
 | `GET` | `/api/weekly-selector/submissions/{submission_id}` | selector bearer token | Retrieve and verify an owned receipt |
+| `POST` | `/api/weekly-selector/benchmarks` | dedicated server-side ingest token | Append one explicitly post-close benchmark |
 | `GET` | `/api/weekly-selector-results?round_id={round_id}` | none, after reveal | Sanitized exact/cluster results |
 
 The API must resolve its environment from trusted deployment configuration and
@@ -298,6 +299,39 @@ idempotent retry:
 `GET /submissions/{submission_id}` requires a token for the same identity,
 round, and environment and returns the persisted receipt. It never returns the
 ballot, token hash, user ID, or private identity fields.
+
+## Post-close benchmark ingest
+
+`POST /benchmarks` is a separate server-to-server path for catch-up and dry-run
+model evaluation. It never writes selector ballots, latest-submission rows,
+human votes, or vote attempts. The endpoint requires a dedicated benchmark
+ingest secret plus a server-only Supabase service credential; neither credential
+is accepted by pre-close submission endpoints.
+
+The strict `foldarium.selector-post-close-benchmark/v1` envelope binds:
+
+- `run_class: "post_close_benchmark"`;
+- the exact round, blind-manifest, kit, prompt-profile, rendered-input,
+  tool, configuration, runtime, output, and blindness-attestation digests;
+- requested and single observed model identifiers;
+- requested effort plus either the provider-reported applied effort or an
+  explicit `not_exposed`/`null` pair;
+- normalized usage and duration metadata;
+- canonical start/finish timestamps;
+- `reasoning_trace_retained: false`; and
+- one complete canonical v2 dual-mode payload whose submission UUID equals the
+  execution UUID.
+
+Registration is permitted only after the voting deadline and before reveal. The
+database revalidates the complete ballot shape and all round/kit bindings, then
+inserts one immutable execution. Retries with the same UUID and bytes are
+idempotent; reruns use a new UUID and may name one prior execution in
+`supersedes_execution_id`. Rows are append-only.
+
+After reveal, the results projection labels these rows
+`post_close_benchmark` and exposes only sanitized model/digest provenance.
+Runtime run IDs, provider session IDs, usage/cost details, output artifacts, and
+private execution JSON are not published.
 
 ## Errors
 

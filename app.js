@@ -3484,7 +3484,12 @@ function formatSelectorScoreLine(row) {
   const exactPct = Number.isFinite(exact.accuracy) ? `${Math.round(exact.accuracy)}%` : '—';
   const clusterRank = Number.isInteger(cluster.rank) ? `#${cluster.rank} ` : '';
   const exactRank = Number.isInteger(exact.rank) ? `#${exact.rank} ` : '';
-  return `<b>${name}</b> · ${method} · Cluster ${clusterRank}${clusterScore} (${clusterPct}) · Exact ${exactRank}${exactScore} (${exactPct})`;
+  const benchmark = row.participant_type === 'post_close_benchmark'
+    ? ` · Post-close benchmark · requested ${escapeSelectorText(
+      identity.benchmark?.requested_effort || 'unknown',
+    )} effort`
+    : '';
+  return `<b>${name}</b> · ${method}${benchmark} · Cluster ${clusterRank}${clusterScore} (${clusterPct}) · Exact ${exactRank}${exactScore} (${exactPct})`;
 }
 
 function renderWeeklySelectorLeaderboard() {

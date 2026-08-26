@@ -247,6 +247,29 @@ Do not enable the gate in `profiles/molspace-main.json` or apply the migration
 without explicit production approval. No migration, deployment, schedule, or
 live service is activated by this code.
 
+#### Selector post-close benchmark ingest
+
+Catch-up model runs use `/api/weekly-selector/benchmarks`; they must never be
+submitted through the pre-close ballot endpoint. Before enabling this route,
+review and apply the Selector migrations through
+`20260826210000_add_weekly_selector_post_close_benchmarks.sql`.
+
+The Vercel deployment requires environment-specific server-only credentials:
+
+- `FOLDARIUM_<ENV>_SUPABASE_SERVICE_ROLE_KEY`
+- `FOLDARIUM_<ENV>_SELECTOR_BENCHMARK_INGEST_TOKEN`
+
+where `<ENV>` is `PRODUCTION` or `PREVIEW`. Development uses
+`SUPABASE_SERVICE_ROLE_KEY` and `FOLDARIUM_SELECTOR_BENCHMARK_INGEST_TOKEN`.
+The dedicated ingest token is not a Supabase credential and must be generated
+independently. None of these values may appear in browser config, logs, run
+manifests, or public artifacts.
+
+Leaving either value unset disables benchmark ingest with `503`. Registration
+then remains service-role-only in Postgres, accepts only closed/unrevealed
+rounds, and writes only the append-only benchmark table. No environment
+variables, migrations, or endpoint are activated by merging this code.
+
 The Wednesday evaluator is a CPU-only Modal function. Its image pins
 `gemmi==0.7.5`, `numpy==2.3.2`, and `rdkit==2025.3.6`; it neither reserves a GPU
 nor uses either prediction cache Volume. The schedule is absent unless

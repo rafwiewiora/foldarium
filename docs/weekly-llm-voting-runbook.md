@@ -294,6 +294,27 @@ submission UUID. Submit it, require the next revision number, and verify that
 the latest projection points to it. Never delete or overwrite the earlier
 revision. No revisions are accepted at or after `closes_at`.
 
+### Catch-up runs after close
+
+Never replay a missed model run through the pre-close token/submission path.
+While the round is closed and still unrevealed, wrap the same complete v2
+payload in `foldarium.selector-post-close-benchmark/v1` and submit it to the
+server-only `/benchmarks` endpoint. Set `run_class` exactly to
+`post_close_benchmark`, bind the canonical prompt and all execution digests,
+record exactly one observed model identifier, and set
+`reasoning_trace_retained` to `false`.
+
+For Claude's first pass, request `default` effort by omitting the CLI effort
+flag. If the CLI does not report applied effort, record
+`effort_reporting: "not_exposed"` and `applied_effort: null`; never infer it.
+For Sol, request high effort and record the provider-reported applied value when
+available. Abort either run if more than one observed model identifier appears.
+
+The benchmark execution UUID must equal the enclosed payload submission UUID.
+An exact retry reuses that UUID and bytes. A deliberate rerun uses a new UUID
+and names the prior execution in `supersedes_execution_id`. These records remain
+separate from official pre-close votes in storage, scoring, and presentation.
+
 ## 10. Close, reveal, and score
 
 After close:

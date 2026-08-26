@@ -15,7 +15,15 @@ import {
   validateKitDescriptor,
   validateTokenRequest,
 } from '../lib/weekly-selector-contract.js';
+import {
+  SELECTOR_BENCHMARK_SCHEMA_VERSION,
+  digestPostCloseBenchmark,
+  sanitizePostCloseBenchmarkReceipt,
+  validatePostCloseBenchmark,
+} from '../lib/weekly-selector-benchmark.js';
 import { SELECTOR_PROMPT_PROFILE } from '../lib/weekly-selector-prompt.js';
+
+const MAX_BENCHMARK_BODY_BYTES = 262_144;
 
 export function resolveSelectorConfig(env = process.env) {
   const deploymentEnvironment = normalizeDeploymentEnvironment(env.VERCEL_ENV);
@@ -24,6 +32,8 @@ export function resolveSelectorConfig(env = process.env) {
       url: 'FOLDARIUM_PREVIEW_SUPABASE_URL',
       publishableKey: 'FOLDARIUM_PREVIEW_SUPABASE_PUBLISHABLE_KEY',
       anonKey: 'FOLDARIUM_PREVIEW_SUPABASE_ANON_KEY',
+      serviceRoleKey: 'FOLDARIUM_PREVIEW_SUPABASE_SERVICE_ROLE_KEY',
+      benchmarkIngestToken: 'FOLDARIUM_PREVIEW_SELECTOR_BENCHMARK_INGEST_TOKEN',
       deploymentEnvironment,
     });
   }
@@ -32,6 +42,8 @@ export function resolveSelectorConfig(env = process.env) {
       url: 'FOLDARIUM_PRODUCTION_SUPABASE_URL',
       publishableKey: 'FOLDARIUM_PRODUCTION_SUPABASE_PUBLISHABLE_KEY',
       anonKey: 'FOLDARIUM_PRODUCTION_SUPABASE_ANON_KEY',
+      serviceRoleKey: 'FOLDARIUM_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY',
+      benchmarkIngestToken: 'FOLDARIUM_PRODUCTION_SELECTOR_BENCHMARK_INGEST_TOKEN',
       deploymentEnvironment,
     });
   }
@@ -41,6 +53,8 @@ export function resolveSelectorConfig(env = process.env) {
     anonKey: 'FOLDARIUM_DEVELOPMENT_SUPABASE_ANON_KEY',
     fallbackUrl: env.SUPABASE_URL,
     fallbackPublishableKey: env.SUPABASE_ANON_KEY,
+    serviceRoleKey: 'SUPABASE_SERVICE_ROLE_KEY',
+    benchmarkIngestToken: 'FOLDARIUM_SELECTOR_BENCHMARK_INGEST_TOKEN',
     deploymentEnvironment,
   });
 }
@@ -49,9 +63,13 @@ function configFromNames(env, names) {
   const url = normalizedHttpsUrl(env[names.url] || names.fallbackUrl);
   const publishableKey = trimmedString(env[names.publishableKey] || env[names.anonKey]
     || names.fallbackPublishableKey);
+  const serviceRoleKey = trimmedString(env[names.serviceRoleKey]);
+  const benchmarkIngestToken = trimmedString(env[names.benchmarkIngestToken]);
   return {
     url,
     publishableKey,
+    serviceRoleKey,
+    benchmarkIngestToken,
     deploymentEnvironment: names.deploymentEnvironment,
     configured: Boolean(url && publishableKey),
   };
@@ -89,6 +107,7 @@ function routeFromSegments(segments, searchParams) {
     return { name: 'receipt', submissionId: decodeURIComponent(segments[1]) };
   }
   if (segments[0] === 'submissions') return { name: 'submit' };
+  if (segments[0] === 'benchmarks') return { name: 'submit-benchmark' };
   if (searchParams.get('submission_id') && segments[0] === 'receipt') {
     return { name: 'receipt', submissionId: searchParams.get('submission_id') };
   }
@@ -136,6 +155,15 @@ export function createWeeklySelectorHandler({ env = process.env, fetchImpl = fet
         if (request.method !== 'POST') return methodNotAllowed(response, 'POST');
         return await handleSubmit({ config, fetchImpl, request, response });
       }
+      if (route.name === 'submit-benchmark') {
+        if (request.method !== 'POST') return methodNotAllowed(response, 'POST');
+        return await handleSubmitBenchmark({
+          config,
+          fetchImpl,
+          request,
+          response,
+        });
+      }
       if (route.name === 'receipt') {
         if (request.method !== 'GET') return methodNotAllowed(response, 'GET');
         return await handleReceipt({
@@ -168,6 +196,7 @@ export function selectorApiDocumentation() {
     submission_schema_version: SUBMISSION_SCHEMA_VERSION,
     blindness_attestation_schema_version: BLINDNESS_ATTESTATION_SCHEMA_VERSION,
     prompt_profile: SELECTOR_PROMPT_PROFILE,
+    post_close_benchmark_schema_version: SELECTOR_BENCHMARK_SCHEMA_VERSION,
     complete_only: true,
     canonical_json_required: true,
     token_request: {
@@ -241,6 +270,12 @@ export function selectorApiDocumentation() {
         path: '/api/weekly-selector/submissions',
         authentication: 'Foldarium selector bearer token',
       },
+      submit_post_close_benchmark: {
+        method: 'POST',
+        path: '/api/weekly-selector/benchmarks',
+        authentication: 'Dedicated server-side benchmark ingest token',
+        publication_class: 'post_close_benchmark',
+      },
       receipt: {
         method: 'GET',
         path: '/api/weekly-selector/submissions/{submission_id}',
@@ -250,7 +285,7 @@ export function selectorApiDocumentation() {
   };
 }
 
-async function fetchKitDescriptor(fetchImpl, config, roundId) {
+async function fetchKitDescriptor(fetchImpl, config, roundId, bearerToken = null) {
   const kitRows = await supabaseFetch(
     fetchImpl,
     config,
@@ -261,6 +296,7 @@ async function fetchKitDescriptor(fetchImpl, config, roundId) {
         p_round_id: roundId,
         p_environment: config.deploymentEnvironment,
       },
+      bearerToken,
     },
   );
   return Array.isArray(kitRows) ? kitRows[0] : null;
@@ -456,7 +492,7 @@ async function handleRevokeToken({ config, fetchImpl, request, response, tokenId
   });
 }
 
-async function fetchScopedRound(fetchImpl, config, environment, roundId) {
+async function fetchScopedRound(fetchImpl, config, environment, roundId, bearerToken = null) {
   const rows = await supabaseFetch(
     fetchImpl,
     config,
@@ -467,6 +503,7 @@ async function fetchScopedRound(fetchImpl, config, environment, roundId) {
         p_environment: environment,
         p_round_id: roundId,
       },
+      bearerToken,
     },
   );
   return Array.isArray(rows) ? rows[0] : null;
@@ -574,6 +611,98 @@ async function handleSubmit({ config, fetchImpl, request, response }) {
   return sendJson(response, receipt?.idempotent ? 200 : 201, sanitizeReceipt(receipt));
 }
 
+async function handleSubmitBenchmark({ config, fetchImpl, request, response }) {
+  if (!config.serviceRoleKey || !config.benchmarkIngestToken) {
+    return sendJson(response, 503, { error: 'Benchmark ingest is disabled' });
+  }
+  if (!secureTokenEqual(bearerToken(request.headers?.authorization), config.benchmarkIngestToken)) {
+    return sendJson(response, 401, { error: 'Benchmark ingest token required' });
+  }
+  const contentType = headerValue(request.headers, 'content-type');
+  if (!contentType.startsWith('application/json')) {
+    return sendJson(response, 415, { error: 'Content-Type must be application/json' });
+  }
+  const rawBody = await readBody(request);
+  if (rawBody.byteLength > MAX_BENCHMARK_BODY_BYTES) {
+    return sendJson(response, 413, { error: 'Request body is too large' });
+  }
+  const body = parseJsonObject(rawBody);
+  if (
+    !body
+    || body.schema_version !== SELECTOR_BENCHMARK_SCHEMA_VERSION
+    || body.environment !== config.deploymentEnvironment
+    || !ID_RE.test(body.round_id || '')
+  ) {
+    return sendJson(response, 400, { error: 'Invalid benchmark execution' });
+  }
+
+  const serviceConfig = {
+    ...config,
+    publishableKey: config.serviceRoleKey,
+  };
+  const round = await fetchScopedRound(
+    fetchImpl,
+    serviceConfig,
+    body.environment,
+    body.round_id,
+    config.serviceRoleKey,
+  );
+  if (!round || round.public_status !== 'closed') {
+    return sendJson(response, 409, { error: 'Round is not closed for benchmarking' });
+  }
+  const kitRow = await fetchKitDescriptor(
+    fetchImpl,
+    serviceConfig,
+    body.round_id,
+    config.serviceRoleKey,
+  );
+  if (!kitRow) return sendJson(response, 404, { error: 'Selector kit is unavailable' });
+
+  const context = {
+    environment: config.deploymentEnvironment,
+    roundId: round.round_id,
+    blindManifestSha256: round.blind_manifest_sha256,
+    kitSha256: kitRow.kit_sha256,
+    blindManifest: round.blind_manifest,
+  };
+  let normalized;
+  try {
+    normalized = validatePostCloseBenchmark(body, context);
+    if (rawBody.toString('utf8') !== canonicalJson(normalized)) {
+      throw new ContractError('benchmark body is not canonical JSON');
+    }
+  } catch (error) {
+    if (error instanceof ContractError) {
+      return sendJson(response, 400, { error: 'Invalid benchmark execution' });
+    }
+    throw error;
+  }
+  const executionSha256 = digestPostCloseBenchmark(normalized, context);
+  const payloadDigest = sha256Hex(canonicalJson(normalized.payload));
+  const receiptRows = await supabaseFetch(
+    fetchImpl,
+    serviceConfig,
+    '/rest/v1/rpc/register_weekly_selector_benchmark_v1',
+    {
+      method: 'POST',
+      body: {
+        p_execution: normalized,
+        p_execution_sha256: executionSha256,
+        p_payload_digest: payloadDigest,
+      },
+      bearerToken: config.serviceRoleKey,
+      publishableKey: config.serviceRoleKey,
+      allowConflict: true,
+    },
+  );
+  const receipt = Array.isArray(receiptRows) ? receiptRows[0] : receiptRows;
+  return sendJson(
+    response,
+    receipt?.idempotent ? 200 : 201,
+    sanitizePostCloseBenchmarkReceipt(receipt),
+  );
+}
+
 async function handleReceipt({ config, fetchImpl, request, response, submissionId }) {
   if (!UUID_RE.test(submissionId || '')) {
     return sendJson(response, 400, { error: 'Invalid submission id' });
@@ -678,6 +807,13 @@ export function verifySelectorToken(providedToken, storedHash) {
   const providedHash = createHash('sha256').update(String(providedToken)).digest();
   const expectedHash = Buffer.from(String(storedHash), 'hex');
   if (providedHash.length !== expectedHash.length) return false;
+  return timingSafeEqual(providedHash, expectedHash);
+}
+
+function secureTokenEqual(providedToken, expectedToken) {
+  if (!providedToken || !expectedToken) return false;
+  const providedHash = createHash('sha256').update(providedToken).digest();
+  const expectedHash = createHash('sha256').update(expectedToken).digest();
   return timingSafeEqual(providedHash, expectedHash);
 }
 

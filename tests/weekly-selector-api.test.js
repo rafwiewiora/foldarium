@@ -12,7 +12,11 @@ import {
   EMPTY_NETWORK_ALLOWLIST_SHA256,
   SUBMISSION_SCHEMA_VERSION,
   canonicalJson,
+  sha256Hex,
 } from '../lib/weekly-selector-contract.js';
+import {
+  SELECTOR_BENCHMARK_SCHEMA_VERSION,
+} from '../lib/weekly-selector-benchmark.js';
 import {
   SELECTOR_PROMPT_PROFILE_ID,
   SELECTOR_PROMPT_SHA256,
@@ -115,6 +119,63 @@ function validBlindnessAttestation(overrides = {}) {
   };
 }
 
+function validBenchmark(overrides = {}) {
+  const attestation = validBlindnessAttestation();
+  const executionId = '00000000-0000-4000-8000-000000000123';
+  return {
+    schema_version: SELECTOR_BENCHMARK_SCHEMA_VERSION,
+    execution_id: executionId,
+    supersedes_execution_id: null,
+    run_class: 'post_close_benchmark',
+    environment: 'production',
+    round_id: round.round_id,
+    blind_manifest_sha256: BLIND_SHA,
+    kit_sha256: KIT_SHA,
+    display_name: 'Claude Opus',
+    method_name: 'blind-pose-selector',
+    method_version: SELECTOR_PROMPT_PROFILE_ID,
+    provider: 'anthropic',
+    engine: {
+      name: 'claude-cli',
+      version: '1.2.3',
+      run_id: null,
+      session_id: 'session-1',
+    },
+    model: {
+      requested_id: 'opus',
+      observed_ids: ['claude-opus-exact'],
+      requested_effort: 'default',
+      applied_effort: null,
+      effort_reporting: 'not_exposed',
+    },
+    provenance: {
+      prompt_profile_id: SELECTOR_PROMPT_PROFILE_ID,
+      prompt_sha256: SELECTOR_PROMPT_SHA256,
+      input_manifest_sha256: '1'.repeat(64),
+      tools_sha256: '2'.repeat(64),
+      config_sha256: '3'.repeat(64),
+      runtime_sha256: '4'.repeat(64),
+    },
+    blindness_attestation: attestation,
+    blindness_attestation_sha256: sha256Hex(canonicalJson(attestation)),
+    usage: {
+      input_tokens: 10,
+      output_tokens: 10,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      reasoning_tokens: null,
+      cost_usd: 0,
+      duration_ms: 1000,
+    },
+    started_at: '2026-08-26T12:00:00.000Z',
+    finished_at: '2026-08-26T12:00:01.000Z',
+    reasoning_trace_retained: false,
+    output_sha256: '5'.repeat(64),
+    payload: validSubmission({ submission_id: executionId }),
+    ...overrides,
+  };
+}
+
 function invoke(handler, request) {
   const headers = {};
   let statusCode;
@@ -208,6 +269,10 @@ test('routes current round, kit, token, submission, and receipt actions', () => 
     parseWeeklySelectorRoute({ url: 'https://foldarium.test/api/weekly-selector/tokens/22222222-2222-4222-8222-222222222222' }),
     { name: 'revoke-token', tokenId: '22222222-2222-4222-8222-222222222222' },
   );
+  assert.deepEqual(
+    parseWeeklySelectorRoute({ url: 'https://foldarium.test/api/weekly-selector/benchmarks' }),
+    { name: 'submit-benchmark' },
+  );
 });
 
 test('serves static API documentation without database credentials', async () => {
@@ -234,6 +299,10 @@ test('serves static API documentation without database credentials', async () =>
     'blindness_attestation',
   );
   assert.equal(response.body.endpoints.submit.path, '/api/weekly-selector/submissions');
+  assert.equal(
+    response.body.endpoints.submit_post_close_benchmark.publication_class,
+    'post_close_benchmark',
+  );
   assert.equal(response.body.decision_modes.clustered[0].selection_kind, 'cluster');
   assert.equal(response.body.decision_modes.unclustered[0].selection_kind, 'exact');
   assert.equal(response.body.legacy_v1.accepted_by_v2_endpoints, false);
@@ -471,6 +540,113 @@ test('accepts complete submissions with bearer tokens and returns immutable rece
   assert.equal(response.body.blind_manifest_sha256, BLIND_SHA);
   assert.match(response.body.payload_digest, /^[0-9a-f]{64}$/);
   assert.doesNotMatch(response.text, /user_id|token_hash|selector-bearer-token/);
+});
+
+test('registers post-close benchmarks through a separate service-only endpoint', async () => {
+  const benchmark = validBenchmark();
+  const serviceRoleKey = 'service-role-secret';
+  const ingestToken = 'benchmark-ingest-secret';
+  const fetchImpl = recordingFetch([
+    {
+      match: url => url.includes('/rpc/get_weekly_selector_round_v2'),
+      respond: (_url, options) => {
+        assert.equal(options.headers.Authorization, `Bearer ${serviceRoleKey}`);
+        return [{ ...round, public_status: 'closed' }];
+      },
+    },
+    {
+      match: url => url.includes('/rpc/get_weekly_selector_kit_descriptor'),
+      respond: (_url, options) => {
+        assert.equal(options.headers.Authorization, `Bearer ${serviceRoleKey}`);
+        return [kitRow];
+      },
+    },
+    {
+      match: url => url.includes('/rpc/register_weekly_selector_benchmark_v1'),
+      respond: (_url, options) => {
+        assert.equal(options.headers.Authorization, `Bearer ${serviceRoleKey}`);
+        assert.equal(options.headers.apikey, serviceRoleKey);
+        const body = JSON.parse(options.body);
+        assert.deepEqual(body.p_execution, benchmark);
+        assert.match(body.p_execution_sha256, /^[0-9a-f]{64}$/);
+        assert.match(body.p_payload_digest, /^[0-9a-f]{64}$/);
+        return [{
+          execution_id: benchmark.execution_id,
+          environment: benchmark.environment,
+          round_id: benchmark.round_id,
+          execution_sha256: body.p_execution_sha256,
+          payload_digest: body.p_payload_digest,
+          accepted_at: '2026-08-26T12:00:02.000Z',
+          idempotent: false,
+        }];
+      },
+    },
+  ]);
+  const response = await invoke(makeHandler({
+    fetchImpl,
+    env: {
+      ...productionEnv,
+      FOLDARIUM_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
+      FOLDARIUM_PRODUCTION_SELECTOR_BENCHMARK_INGEST_TOKEN: ingestToken,
+    },
+  }), {
+    method: 'POST',
+    url: 'https://foldarium.test/api/weekly-selector/benchmarks',
+    headers: {
+      authorization: `Bearer ${ingestToken}`,
+      'content-type': 'application/json',
+    },
+    body: canonicalJson(benchmark),
+  });
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.body.run_class, 'post_close_benchmark');
+  assert.equal(response.body.execution_id, benchmark.execution_id);
+  assert.doesNotMatch(response.text, /service-role|ingest-secret|session-1|usage/);
+});
+
+test('benchmark ingest fails closed without dedicated credentials or after reveal', async () => {
+  const disabled = await invoke(makeHandler({ env: productionEnv }), {
+    method: 'POST',
+    url: 'https://foldarium.test/api/weekly-selector/benchmarks',
+    headers: {
+      authorization: 'Bearer anything',
+      'content-type': 'application/json',
+    },
+    body: canonicalJson(validBenchmark()),
+  });
+  assert.equal(disabled.statusCode, 503);
+
+  const env = {
+    ...productionEnv,
+    FOLDARIUM_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: 'service-role',
+    FOLDARIUM_PRODUCTION_SELECTOR_BENCHMARK_INGEST_TOKEN: 'ingest-token',
+  };
+  const unauthorized = await invoke(makeHandler({ env }), {
+    method: 'POST',
+    url: 'https://foldarium.test/api/weekly-selector/benchmarks',
+    headers: {
+      authorization: 'Bearer wrong',
+      'content-type': 'application/json',
+    },
+    body: canonicalJson(validBenchmark()),
+  });
+  assert.equal(unauthorized.statusCode, 401);
+
+  const fetchImpl = recordingFetch([{
+    match: url => url.includes('/rpc/get_weekly_selector_round_v2'),
+    respond: () => [{ ...round, public_status: 'open' }],
+  }]);
+  const openRound = await invoke(makeHandler({ env, fetchImpl }), {
+    method: 'POST',
+    url: 'https://foldarium.test/api/weekly-selector/benchmarks',
+    headers: {
+      authorization: 'Bearer ingest-token',
+      'content-type': 'application/json',
+    },
+    body: canonicalJson(validBenchmark()),
+  });
+  assert.equal(openRound.statusCode, 409);
 });
 
 test('uses timing-safe token hash verification helper', () => {
