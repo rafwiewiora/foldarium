@@ -1919,7 +1919,7 @@ if modal is not None:
         cpu=1.0,
         memory=2048,
         secrets=[control_plane_secret],
-        timeout=5 * 60,
+        timeout=15 * 60,
         max_containers=1,
     )
     def promote_weekly_quiz_round(

@@ -1211,6 +1211,15 @@ class WeeklyLifecycleReconciliationTests(unittest.TestCase):
         self.assertEqual(window["round_id"], "weekly-2026-08-15-beta-v1")
         self.assertEqual(window["environment"], "production")
 
+    def test_production_promotion_allows_the_bounded_selector_backfill_window(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1] / "deploy" / "modal_app.py"
+        ).read_text(encoding="utf-8")
+        decorator = source.split("def promote_weekly_quiz_round(", 1)[0].rsplit(
+            "@app.function(", 1
+        )[1]
+        self.assertIn("timeout=15 * 60", decorator)
+
     def test_lifecycle_report_includes_retrospective_gates(self) -> None:
         module = self.deployment_module()
         report = module._lifecycle_deployment_report()
