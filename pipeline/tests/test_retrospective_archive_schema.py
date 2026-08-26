@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -366,8 +367,10 @@ class RetrospectiveArchiveSchemaTests(unittest.TestCase):
             / "profiles"
             / "molspace-main.json"
         ).read_text(encoding="utf-8")
-        self.assertNotIn(
-            "FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION", profile
+        profile_environment = json.loads(profile)["environment"]
+        self.assertEqual(
+            profile_environment["FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION"],
+            "0",
         )
 
 
