@@ -1,0 +1,45 @@
+{
+  "manifest": {
+    "schema_version": "foldarium.weekly-selector-kit/v2",
+    "environment": "preview",
+    "round_id": "weekly-2026-08-08",
+    "blind_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kit_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "items": [
+      {
+        "item_id": "item-a",
+        "choices": [
+          { "choice_id": "choice-1", "cluster_id": "cluster-x" },
+          { "choice_id": "choice-2", "cluster_id": "cluster-x" }
+        ]
+      },
+      {
+        "item_id": "item-b",
+        "choices": [
+          { "choice_id": "choice-4", "cluster_id": "cluster-y" }
+        ]
+      }
+    ]
+  },
+  "submission": {
+    "schema_version": "foldarium.selector-submission/v2",
+    "submission_id": "00000000-0000-4000-8000-000000000001",
+    "environment": "preview",
+    "round_id": "weekly-2026-08-08",
+    "blind_manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kit_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "items": [
+      {
+        "item_id": "item-a",
+        "clustered": { "selection_kind": "cluster", "cluster_id": "cluster-x" },
+        "unclustered": { "selection_kind": "exact", "choice_id": "choice-1" }
+      },
+      {
+        "item_id": "item-b",
+        "clustered": { "selection_kind": "none" },
+        "unclustered": { "selection_kind": "none" }
+      }
+    ]
+  },
+  "expected_digest": "70d199d85b844d6a91da210930a13b169ca3041be6d79915fba8edd4e0d33c39"
+}

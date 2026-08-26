@@ -51,6 +51,14 @@ legacy anonymous ballot, fix deterministic publication IDs, normalize the
 confirmed unclustered beta round to exact-pose scope, and reject later
 non-empty votes that lack explicit exact-or-cluster scope.
 
+Selector v2 is completed by
+`20260825223000_upgrade_weekly_selector_v2.sql`, which binds identities to the
+registered canonical prompt profile, and
+`20260826210000_add_weekly_selector_post_close_benchmarks.sql`, which adds a
+separate append-only service-role ingest for closed/unrevealed catch-up runs.
+Post-close benchmark rows are never inserted into pre-close selector or human
+vote tables and become publicly queryable only after reveal.
+
 Workers use `claim_prediction_run` for a bounded lease. After running a model, a worker uploads every
 verified artifact to Storage and calls `finish_prediction_run`; artifact metadata and the terminal result
 are committed in one database transaction. A dead Modal worker can therefore be reclaimed by a GCP worker

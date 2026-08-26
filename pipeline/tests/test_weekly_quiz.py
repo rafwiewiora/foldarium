@@ -117,6 +117,7 @@ class FakeCoordinator:
         self.stored: list[tuple[bytes, str]] = []
         self.opened: dict | None = None
         self.public_bucket_checked = False
+        self.registered_selector_kits: list[dict] = []
 
     def require_public_bucket(self) -> None:
         self.public_bucket_checked = True
@@ -134,6 +135,10 @@ class FakeCoordinator:
     def open_weekly_quiz_round(self, **kwargs):
         self.opened = kwargs
         return {"status": "open", "round_id": kwargs["round_id"]}
+
+    def register_weekly_selector_kit(self, **kwargs):
+        self.registered_selector_kits.append(kwargs)
+        return {"status": "registered", "round_id": kwargs["round_id"]}
 
 
 class TrackingPublicCoordinator(FakeCoordinator):
@@ -1085,9 +1090,22 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                     "supabase://quiz-public/"
                 )
             )
-            private_index = json.loads(private.stored[0][0])
-            warning_index = json.loads(private.stored[1][0])
-            eligibility_index = json.loads(private.stored[2][0])
+            private_payloads = [
+                json.loads(content)
+                for content, media_type in private.stored
+                if media_type == "application/json"
+            ]
+            private_index = next(
+                payload
+                for payload in private_payloads
+                if "blind_manifest_sha256" in payload
+            )
+            warning_index = next(
+                payload for payload in private_payloads if "warnings" in payload
+            )
+            eligibility_index = next(
+                payload for payload in private_payloads if "rejections" in payload
+            )
             self.assertEqual(
                 warning_index,
                 {
@@ -1267,7 +1285,12 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
                 round_environment="preview",
             )
             blind = private.opened["blind_manifest"]
-            warning_index = json.loads(private.stored[1][0])
+            warning_index = next(
+                json.loads(content)
+                for content, media_type in private.stored
+                if media_type == "application/json"
+                and "warnings" in json.loads(content)
+            )
 
         self.assertEqual(
             [item["target_id"] for item in stage["items"]],

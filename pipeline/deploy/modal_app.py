@@ -841,6 +841,7 @@ if modal is not None:
         from foldarium_pipeline.weekly_quiz import (
             REQUIRED_METHODS,
             publish_staged_weekly_quiz,
+            regenerate_promoted_selector_kit,
             select_complete_method_pairs,
             stage_weekly_quiz,
         )
@@ -1089,10 +1090,24 @@ if modal is not None:
 
         from foldarium_pipeline.contracts import canonical_json
         from foldarium_pipeline.quiz import manifest_sha256
-        from foldarium_pipeline.supabase import SupabaseCoordinator
-        from foldarium_pipeline.weekly_quiz import clone_weekly_quiz_manifests
+        from foldarium_pipeline.supabase import SupabaseConfigurationError, SupabaseCoordinator
+        from foldarium_pipeline.weekly_quiz import (
+            clone_weekly_quiz_manifests,
+            regenerate_promoted_selector_kit,
+        )
 
         coordinator = SupabaseCoordinator.from_env()
+        try:
+            public_bucket = _weekly_public_bucket()
+        except ValueError as exc:
+            raise SupabaseConfigurationError(
+                f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+            ) from exc
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == coordinator.storage_bucket:
+            raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
         source, private_content = coordinator.weekly_quiz_reveal_inputs(source_round_id)
         if source.get("environment") != source_environment:
             raise RuntimeError("source weekly round environment does not match")
@@ -1168,6 +1183,23 @@ if modal is not None:
                 ),
             },
         }
+        selector_kit = regenerate_promoted_selector_kit(
+            source_round=source,
+            source_metadata=source_metadata,
+            promoted_blind_manifest=blind,
+            public_coordinator=public,
+            private_coordinator=coordinator,
+            register_catalog=False,
+        )
+        metadata["selector_targets"] = selector_kit["selector_targets"]
+        metadata["selector_kit"] = {
+            "kit_sha256": selector_kit["kit_sha256"],
+            "item_count": selector_kit["item_count"],
+            "byte_size": selector_kit["byte_size"],
+            "storage_path": selector_kit["storage_path"],
+            "object_uri": selector_kit["object_uri"],
+            "registered": False,
+        }
         response: Any = {"status": "uploaded-not-opened"}
         if open_round:
             opened = coordinator.open_weekly_quiz_round(
@@ -1179,6 +1211,17 @@ if modal is not None:
                 metadata=metadata,
                 environment=round_environment,
             )
+            selector_kit["registration"] = coordinator.register_weekly_selector_kit(
+                round_id=round_id,
+                kit_sha256=selector_kit["kit_sha256"],
+                item_count=int(selector_kit["item_count"]),
+                byte_size=int(selector_kit["byte_size"]),
+                storage_path=selector_kit["storage_path"],
+                descriptor=selector_kit["descriptor"],
+                blind_manifest_sha256=manifest_sha256(blind),
+            )
+            selector_kit["registered"] = True
+            metadata["selector_kit"]["registered"] = True
             response = {
                 "status": opened.get("status"),
                 "round_id": opened.get("round_id"),
@@ -1197,9 +1240,68 @@ if modal is not None:
             "choice_count": sum(len(item["choices"]) for item in blind["items"]),
             "blind_manifest_sha256": manifest_sha256(blind),
             "private_index": private_object,
+            "selector_kit": selector_kit,
             "open_response": response,
         }
         print("foldarium.weekly_quiz_promotion " + json.dumps(result, sort_keys=True))
+        return result
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=2.0,
+        memory=8192,
+        secrets=[control_plane_secret],
+        timeout=15 * 60,
+        max_containers=1,
+    )
+    def backfill_weekly_selector_kit(
+        round_id: str | None = None,
+        campaign_id: str | None = None,
+        round_environment: str = "production",
+    ) -> dict[str, Any]:
+        """Publish a selector kit catalog row for the current or named round."""
+
+        from foldarium_pipeline.supabase import SupabaseConfigurationError, SupabaseCoordinator
+        from foldarium_pipeline.weekly_quiz import backfill_selector_kit_for_round
+
+        private = SupabaseCoordinator.from_env()
+        try:
+            public_bucket = _weekly_public_bucket()
+        except ValueError as exc:
+            raise SupabaseConfigurationError(
+                f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+            ) from exc
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == private.storage_bucket:
+            raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
+
+        if round_id:
+            round_row = private.weekly_quiz_round(round_id)
+        else:
+            if not campaign_id:
+                raise ValueError("campaign_id is required when round_id is omitted")
+            round_row = private.current_weekly_quiz_round(
+                campaign_id,
+                environment=round_environment,
+            )
+        selector_kit = backfill_selector_kit_for_round(
+            round_row,
+            public_coordinator=public,
+            private_coordinator=private,
+            register_catalog=True,
+        )
+        result = {
+            "status": "selector-kit-registered",
+            "round_id": round_row["round_id"],
+            "environment": round_row.get("environment", round_environment),
+            "kit_sha256": selector_kit["kit_sha256"],
+            "item_count": selector_kit["item_count"],
+            "byte_size": selector_kit["byte_size"],
+            "storage_path": selector_kit["storage_path"],
+        }
+        print("foldarium.weekly_selector_backfill " + json.dumps(result, sort_keys=True))
         return result
 
     @app.function(

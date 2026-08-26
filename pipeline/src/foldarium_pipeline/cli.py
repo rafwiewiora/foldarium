@@ -21,7 +21,11 @@ from .staging import (
 from .worker import execute_task_json
 from .intake import WeeklyPolicy
 from .weekly import build_public_weekly_plan
-from .weekly_quiz import publish_staged_weekly_quiz, stage_weekly_quiz
+from .weekly_quiz import (
+    backfill_selector_kit_for_round,
+    publish_staged_weekly_quiz,
+    stage_weekly_quiz,
+)
 from .supabase import SupabaseConfigurationError, SupabaseCoordinator
 
 
@@ -162,6 +166,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--open-round",
         action="store_true",
         help="after upload, invoke the privileged RPC that makes the blind round visible",
+    )
+
+    selector_backfill = commands.add_parser(
+        "weekly-selector-kit-backfill",
+        help="publish a selector kit catalog row for the current or named weekly round",
+    )
+    selector_backfill.add_argument(
+        "--round-id",
+        help="exact weekly round id; defaults to the current round for --campaign",
+    )
+    selector_backfill.add_argument(
+        "--campaign",
+        help="campaign id used to resolve the current round when --round-id is omitted",
+    )
+    selector_backfill.add_argument(
+        "--environment",
+        choices=("production", "preview", "development"),
+        default="production",
     )
     return parser
 
@@ -316,6 +338,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 opens_at=args.opens_at,
                 closes_at=args.closes_at,
                 open_round=args.open_round,
+            )
+        )
+    elif args.command == "weekly-selector-kit-backfill":
+        private = SupabaseCoordinator.from_env()
+        public_bucket = os.environ.get("FOLDARIUM_PUBLIC_QUIZ_BUCKET")
+        if not public_bucket:
+            raise SupabaseConfigurationError(
+                "missing required environment variable: FOLDARIUM_PUBLIC_QUIZ_BUCKET"
+            )
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == private.storage_bucket:
+            raise SupabaseConfigurationError(
+                "FOLDARIUM_PUBLIC_QUIZ_BUCKET must differ from the private prediction bucket"
+            )
+        if args.round_id:
+            round_row = private.weekly_quiz_round(args.round_id)
+        else:
+            if not args.campaign:
+                raise ValueError("--campaign is required when --round-id is omitted")
+            round_row = private.current_weekly_quiz_round(
+                args.campaign,
+                environment=args.environment,
+            )
+        _print(
+            backfill_selector_kit_for_round(
+                round_row,
+                public_coordinator=public,
+                private_coordinator=private,
+                register_catalog=True,
             )
         )
     return 0

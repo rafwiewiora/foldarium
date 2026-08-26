@@ -2322,6 +2322,54 @@ class SupabaseCoordinator(SupabasePublisher):
                 )
         return row
 
+    def register_weekly_selector_kit(
+        self,
+        *,
+        round_id: str,
+        kit_sha256: str,
+        item_count: int,
+        byte_size: int,
+        storage_path: str,
+        descriptor: Mapping[str, Any],
+        blind_manifest_sha256: str,
+    ) -> Any:
+        """Persist one immutable selector kit descriptor for an exact weekly round.
+
+        Requires a deployed ``register_weekly_selector_kit`` RPC that verifies
+        the round exists, binds ``blind_manifest_sha256``, and inserts into
+        ``private.weekly_selector_kit_catalog``.
+        """
+
+        if not re.fullmatch(r"[0-9a-f]{64}", kit_sha256):
+            raise SupabasePublicationError("kit_sha256 must be a SHA-256 hex string")
+        if not re.fullmatch(r"[0-9a-f]{64}", blind_manifest_sha256):
+            raise SupabasePublicationError(
+                "blind_manifest_sha256 must be a SHA-256 hex string"
+            )
+        if isinstance(item_count, bool) or not isinstance(item_count, int) or item_count < 1:
+            raise SupabasePublicationError("item_count must be a positive integer")
+        if (
+            isinstance(byte_size, bool)
+            or not isinstance(byte_size, int)
+            or byte_size < 1
+            or byte_size > 536_870_912
+        ):
+            raise SupabasePublicationError("byte_size must be between 1 and 536870912")
+        if not isinstance(storage_path, str) or not storage_path.strip():
+            raise SupabasePublicationError("storage_path is required")
+        if len(storage_path) > 1024 or re.search(r"[\x00-\x1f\x7f]", storage_path):
+            raise SupabasePublicationError("storage_path is invalid")
+        payload = {
+            "p_round_id": _safe_identifier(round_id, "round_id"),
+            "p_kit_sha256": kit_sha256,
+            "p_item_count": item_count,
+            "p_byte_size": byte_size,
+            "p_storage_path": storage_path.strip(),
+            "p_descriptor": _json_object(descriptor, "descriptor"),
+            "p_blind_manifest_sha256": blind_manifest_sha256,
+        }
+        return self._rpc("register_weekly_selector_kit", payload)
+
     def register_external_prediction_set(
         self,
         *,
