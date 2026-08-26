@@ -602,7 +602,7 @@ test('list uses newest-first opaque keyset cursors and validates limits', async 
   }
 });
 
-test('suppressed public human aggregates stay unknown in list and detail responses', async () => {
+test('public API reveals chosen pseudonyms even for a one-player artifact', async () => {
   const week = buildWeek({ suppressHumans: true });
   const handler = createWeeklyRetrospectivesHandler({
     env: env(),
@@ -611,14 +611,14 @@ test('suppressed public human aggregates stay unknown in list and detail respons
   const list = await invoke(handler);
   assert.equal(list.statusCode, 200);
   assert.deepEqual(list.body.publications[0].summary.outcomes, {
-    pose_solved: 0,
+    pose_solved: 1,
     pose_unsolved: 0,
     none_solved: 0,
     none_unsolved: 0,
-    suppressed: 1,
+    suppressed: 0,
   });
-  assert.equal(list.body.publications[0].summary.human_complete_count, null);
-  assert.equal(list.body.publications[0].summary.human_partial_count, null);
+  assert.equal(list.body.publications[0].summary.human_complete_count, 1);
+  assert.equal(list.body.publications[0].summary.human_partial_count, 0);
 
   const detail = await invoke(handler, {
     query: { round_id: week.publication.round_id },
@@ -627,11 +627,18 @@ test('suppressed public human aggregates stay unknown in list and detail respons
   const aggregate = detail.body.retrospective.questions[0].human_aggregate;
   assert.deepEqual(aggregate, {
     answered_count: 1,
-    correct_count: null,
-    suppressed: true,
-    answers: [],
+    correct_count: 1,
+    suppressed: false,
+    answers: [{
+      choice_id: 'choice-a',
+      picked_none: false,
+      selection_kind: 'exact',
+      correct: true,
+      vote_count: 1,
+      display_names: ['PocketFox'],
+    }],
   });
-  assert.doesNotMatch(detail.serialized, /"correct_count":0/);
+  assert.match(detail.serialized, /PocketFox/);
 });
 
 test('artifact loading preserves order and never exceeds five publication workers', async () => {
@@ -676,12 +683,16 @@ test('exact detail accepts arbitrary round IDs, strips private manifest fields, 
     'https://example.supabase.co/storage/v1/object/public/structures/weekly/pose-a.pdb',
   );
   assert.equal(detail.body.blind_manifest.items[0].ligand.component_id, 'DRG');
+  assert.match(detail.serialized, /PocketFox/);
   assert.doesNotMatch(
     detail.serialized,
-    /PocketFox|participant_link|prediction_sha256|s3:|supabase:|"_sha256"|[a-f0-9]{64}/,
+    /participant_link|prediction_sha256|s3:|supabase:|"_sha256"|[a-f0-9]{64}/,
   );
   assert.match(detail.headers['Cache-Control'], /s-maxage=86400/);
-  assert.match(detail.headers.ETag, /^"weekly-retrospective-[a-f0-9]{64}"$/);
+  assert.match(
+    detail.headers.ETag,
+    /^"weekly-retrospective-names-v1-[a-f0-9]{64}"$/,
+  );
 
   const cached = await invoke(handler, {
     query: { round_id: week.publication.round_id },
@@ -770,7 +781,7 @@ test('admin exact is preview-only, no-store, and returns normalized raw pseudony
   assert.doesNotMatch(enabled.serialized, /participant_link|11111111|object_uri|sha256/);
 });
 
-test('public all-time exposes only approved LLM and baseline cumulative rankings', async () => {
+test('public all-time includes chosen human pseudonyms without private linkage', async () => {
   const weeks = [buildWeek({ index: 0 }), buildWeek({ index: 1 })];
   const response = await invoke(createWeeklyRetrospectivesHandler({
     env: env(),
@@ -783,14 +794,35 @@ test('public all-time exposes only approved LLM and baseline cumulative rankings
   assert.equal(response.body.scope, 'public');
   assert.deepEqual(
     response.body.participants.map(row => row.participant_kind),
-    ['llm', 'baseline'],
+    ['llm', 'human', 'baseline'],
   );
   assert.equal(response.body.participants[0].total_correct, 2);
   assert.equal(response.body.participants[0].total_questions, 2);
   assert.equal(response.body.participants[0].weighted_average_accuracy, 100);
   assert.equal(response.body.participants[0].provisional, true);
-  assert.doesNotMatch(response.serialized, /PocketFox|human|participant_link|11111111/);
+  const human = response.body.participants.find(
+    row => row.participant_kind === 'human',
+  );
+  assert.equal(human.participant, 'PocketFox');
+  assert.equal(human.total_correct, 2);
+  assert.doesNotMatch(response.serialized, /participant_link|11111111/);
   assert.match(response.headers['Cache-Control'], /s-maxage=300/);
+
+  const humansOnly = await invoke(createWeeklyRetrospectivesHandler({
+    env: env(),
+    fetchImpl: archiveFetch(weeks),
+  }), {
+    query: {
+      all_time: '1',
+      ranking: 'weighted_average_accuracy',
+      participant_kind: 'human',
+    },
+  });
+  assert.equal(humansOnly.statusCode, 200);
+  assert.deepEqual(
+    humansOnly.body.participants.map(row => row.participant),
+    ['PocketFox'],
+  );
 });
 
 test('admin all-time groups humans by HMAC linkage and uses the latest raw pseudonym', async () => {

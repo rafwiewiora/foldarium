@@ -292,7 +292,7 @@ test('builds per-question popularity from eligible players without internal user
     itemCount: fixture.itemCount,
     blindManifest: fixture.blindManifest,
     revealManifest: fixture.revealManifest,
-    votes: fixture.votes,
+    votes: enrichVotesWithSelectionKinds(fixture.votes),
     legacySessions: fixture.legacySessions,
   });
   assert.equal(result.items.length, 29);
@@ -304,21 +304,14 @@ test('builds per-question popularity from eligible players without internal user
     answers: [{
       choice_id: 'choice-a',
       picked_none: false,
-      selection_kind: 'unknown',
-      correct: true,
-      vote_count: 1,
-      display_names: ['Claude Opus'],
-    }, {
-      choice_id: 'choice-a',
-      picked_none: false,
       selection_kind: 'exact',
       correct: true,
-      vote_count: 1,
-      display_names: [SMINA_DISPLAY_NAME],
+      vote_count: 2,
+      display_names: ['Claude Opus', SMINA_DISPLAY_NAME],
     }, {
       choice_id: 'choice-b',
       picked_none: false,
-      selection_kind: 'unknown',
+      selection_kind: 'exact',
       correct: false,
       vote_count: 1,
       display_names: ['Codex GPT-5.6'],
@@ -355,6 +348,17 @@ test('vote-attempt provenance distinguishes cluster and exact-pose selections', 
     submitted_at: '2026-08-08T12:00:00Z',
   }]);
   assert.deepEqual(enriched.map(vote => vote.selection_kind), ['cluster', 'exact']);
+});
+
+test('known unclustered legacy ballots default missing provenance to exact pose', () => {
+  const votes = [{
+    round_id: ALLOWED_ROUND_ID,
+    user_id: USER_CLAUDE,
+    item_id: 'ITEM01',
+    choice_id: 'choice-a',
+    picked_none: false,
+  }];
+  assert.equal(enrichVotesWithSelectionKinds(votes)[0].selection_kind, 'exact');
 });
 
 test('prefers current opted-in identity over legacy allow-listed name', () => {

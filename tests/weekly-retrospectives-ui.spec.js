@@ -12,6 +12,7 @@ const round = {
   opens_at: '2026-08-15T00:00:00Z',
   closes_at: '2026-08-19T00:00:00Z',
   revealed_at: '2026-08-20T00:00:00Z',
+  blind_week: '2026-08-20',
   item_count: 2,
   choice_count: 3,
 };
@@ -32,10 +33,10 @@ const listPayload = {
       },
       outcomes: {
         pose_solved: 1,
-        pose_unsolved: 0,
+        pose_unsolved: 1,
         none_solved: 0,
         none_unsolved: 0,
-        suppressed: 1,
+        suppressed: 0,
       },
     },
   }],
@@ -107,6 +108,10 @@ const detailPayload = {
         answered: 2, total: 2, accuracy: 50, coverage: 100, complete: true,
       },
     ],
+    human_entries: [{
+      participant: 'PocketFox', participant_kind: 'human', correct: 1,
+      answered: 2, total: 2, accuracy: 50, coverage: 100, complete: true,
+    }],
     questions: [
       {
         item_id: 'item-a',
@@ -116,7 +121,7 @@ const detailPayload = {
           correct_count: 2,
           answers: [{
             choice_id: 'choice-a', picked_none: false, selection_kind: 'exact',
-            correct: true, vote_count: 2,
+            correct: true, vote_count: 2, display_names: ['PocketFox', 'PosePilot'],
           }],
         },
         automated_entries: [{
@@ -128,9 +133,12 @@ const detailPayload = {
         item_id: 'item-b',
         human_aggregate: {
           answered_count: 2,
-          suppressed: true,
-          correct_count: null,
-          answers: [],
+          suppressed: false,
+          correct_count: 0,
+          answers: [{
+            choice_id: 'choice-c', picked_none: false, selection_kind: 'exact',
+            correct: false, vote_count: 2, display_names: ['PocketFox', 'PosePilot'],
+          }],
         },
         automated_entries: [{
           participant: 'Smina', participant_kind: 'baseline', choice_id: 'choice-c',
@@ -171,17 +179,30 @@ const adminDetail = {
 };
 
 const publicAllTime = {
-  participants: [{
-    rank: 1,
-    participant: 'Claude Opus',
-    participant_kind: 'llm',
-    weeks_participated: 4,
-    complete_weeks: 4,
-    total_correct: 7,
-    total_questions: 8,
-    weighted_average_accuracy: 87.5,
-    provisional: false,
-  }],
+  participants: [
+    {
+      rank: 1,
+      participant: 'Claude Opus',
+      participant_kind: 'llm',
+      weeks_participated: 4,
+      complete_weeks: 4,
+      total_correct: 7,
+      total_questions: 8,
+      weighted_average_accuracy: 87.5,
+      provisional: false,
+    },
+    {
+      rank: 2,
+      participant: maliciousName,
+      participant_kind: 'human',
+      weeks_participated: 2,
+      complete_weeks: 2,
+      total_correct: 3,
+      total_questions: 4,
+      weighted_average_accuracy: 75,
+      provisional: true,
+    },
+  ],
 };
 
 const adminAllTime = {
@@ -238,9 +259,12 @@ test('archive list has four outcome lanes, no Mol-star, and no desktop overflow'
   await mockApi(page);
   await unlock(page, baseUrl);
   await expect(page.locator('.round-row')).toHaveCount(1);
+  await expect(page.locator('#round-list .round-date')).toContainText(
+    'Blind week · Aug 20, 2026',
+  );
   await expect(page.locator('.round-row .rail-lane')).toHaveCount(4);
   await expect(page.locator('.round-row')).toContainText('Claude Opus');
-  await expect(page.locator('.round-row')).toContainText('1 question hidden for privacy');
+  await expect(page.locator('.round-row')).not.toContainText('hidden for privacy');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(molecularRequests).toEqual([]);
 });
@@ -250,6 +274,8 @@ test('desktop split view keeps archive summary inside its pane', async ({ page }
   await mockApi(page);
   await unlock(page, `${baseUrl}/${roundId}`);
   await expect(page.locator('#round-detail')).toBeVisible();
+  await expect(page.locator('.detail-head')).toContainText('Blind week');
+  await expect(page.locator('.detail-head')).toContainText('Thursday, August 20, 2026');
 
   const layout = await page.evaluate(() => {
     const list = document.querySelector('#round-list').getBoundingClientRect();
@@ -275,10 +301,8 @@ test('detail filters four outcomes, safely renders admin names, and fits mobile'
   await unlock(page, `${baseUrl}/${roundId}`);
   await expect(page.locator('#round-detail')).toBeVisible();
   await expect(page.locator('.filter-row button')).toHaveCount(5);
-  await expect(page.locator('.question-list')).toContainText(
-    'Aggregate answers are hidden until at least 3 humans answer',
-  );
-  await expect(page.locator('.question-list')).not.toContainText('0/2 correct');
+  await expect(page.locator('.question-list')).toContainText('PocketFox');
+  await expect(page.locator('.question-list')).toContainText('0/2 correct');
   await page.locator('.filter-row button[data-filter="pose-solved"]').click();
   await expect(page.locator('.question-row')).toHaveCount(1);
   await expect(page.locator('.question-row')).toContainText('LIG');
@@ -294,7 +318,7 @@ test('detail filters four outcomes, safely renders admin names, and fits mobile'
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('all-time enables admin Human results and marks provisional rows', async ({ page }) => {
+test('all-time exposes public Human pseudonyms and marks provisional rows', async ({ page }) => {
   await mockApi(page);
   await unlock(page, `${baseUrl}?view=all-time`);
   const human = page.locator('#participant-filter [data-kind="human"]');

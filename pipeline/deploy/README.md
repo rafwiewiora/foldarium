@@ -206,27 +206,28 @@ content-addressed objects in the verified private bucket:
 
 - a server-only source snapshot containing stable participant linkage for
   retry verification and future cumulative aggregation;
-- a sanitized public artifact containing anonymous human aggregates plus the
-  approved LLM and Smina entries;
-- a full admin artifact containing per-publication human pseudonyms plus the
-  automated entries.
+- a sanitized public artifact containing human aggregates plus the approved
+  LLM and Smina entries;
+- a pseudonymous detail artifact containing the players' chosen display names
+  plus the automated entries.
 
 Neither returned artifact contains user/session IDs, participant hashes,
 traces, comments, application state, auth data, credentials, or private object
-URIs. The admin artifact never leaves the private bucket. The immutable catalog
-records separate descriptors for all three objects and binds them to the exact
-round, reveal, v5 evaluation artifact, timestamps, and item/choice counts.
-Retries rebuild the source and artifacts and fail if an existing publication
-differs.
+URIs. The pseudonymous detail artifact never leaves the private bucket; the
+server API projects only chosen display names and scored answers from it.
+The immutable catalog records separate descriptors for all three objects and
+binds them to the exact round, reveal, v5 evaluation artifact, timestamps, and
+item/choice counts. Retries rebuild the source and artifacts and fail if an
+existing publication differs.
 
-Public human score details use a minimum cohort of three. Below that threshold,
-the artifact retains only the overall participant count and each question's
-answered count, marks those aggregates suppressed, and omits score
-distributions, answer breakdowns, and correct counts. The private admin
-artifact remains complete. Credential rotation for Claude Opus or Codex must
-use `register_weekly_retrospective_automated_identity` with a service-role
-operator; the allow-list remains code-reviewed and direct registry writes are
-not supported.
+Human counts, answer breakdowns, and chosen pseudonyms are public after reveal,
+including for cohorts smaller than three. The known unclustered beta round is
+normalized to exact-pose scope; every later non-empty vote must include an
+explicit `exact` or `cluster` selection kind or publication fails. Credential
+rotation for Claude Opus or Codex must use
+`register_weekly_retrospective_automated_identity` with a service-role operator;
+the allow-list remains code-reviewed and direct registry writes are not
+supported.
 
 The Modal schedule is absent unless
 `FOLDARIUM_ENABLE_WEEKLY_RETROSPECTIVE_PUBLICATION=1` is present at deploy time;
@@ -239,7 +240,9 @@ newest campaign.
 
 Review and apply
 `supabase/migrations/20260826003000_add_weekly_retrospective_publications.sql`
-before any manual invocation or separate deployment that enables the schedule.
+and the additive retrospective corrections through
+`20260826190000_require_retrospective_vote_scope.sql` before any manual
+invocation or separate deployment that enables the schedule.
 Do not enable the gate in `profiles/molspace-main.json` or apply the migration
 without explicit production approval. No migration, deployment, schedule, or
 live service is activated by this code.

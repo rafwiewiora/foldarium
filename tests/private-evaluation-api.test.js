@@ -386,7 +386,7 @@ test('private question results retain cluster-versus-pose vote provenance', asyn
   assert.equal(response.body.weekly_question_results.items[0].answers[0].selection_kind, 'cluster');
 });
 
-test('legacy LLM ballots resolve as cluster votes and include Smina', async () => {
+test('legacy unclustered LLM ballots resolve as exact votes and include Smina', async () => {
   const fixture = buildFixture();
   const item = fixture.revealManifest.items[0];
   const representative = fixture.blindManifest.items[0].choices.find(choice => choice.is_rep);
@@ -415,7 +415,7 @@ test('legacy LLM ballots resolve as cluster votes and include Smina', async () =
   assert.equal(response.statusCode, 200);
   const answers = response.body.weekly_question_results.items[0].answers;
   assert.ok(answers.some(answer => (
-    answer.selection_kind === 'cluster'
+    answer.selection_kind === 'exact'
     && answer.display_names.includes('Claude Opus')
   )));
   assert.ok(answers.some(answer => (

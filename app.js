@@ -3347,8 +3347,7 @@ function privateQuestionAnswerLabel(answer) {
   if (answer.selection_kind === 'cluster') {
     return `Cluster ${clusterForChoice(choice)?.label || displayedPoseLabel(choice, true)}`;
   }
-  if (answer.selection_kind === 'exact') return `Pose ${displayedPoseLabel(choice, false)}`;
-  return `Choice ${displayedPoseLabel(choice, false)} (scope unknown)`;
+  return `Pose ${displayedPoseLabel(choice, false)}`;
 }
 
 function privateQuestionAnswerState(answer) {
@@ -3422,7 +3421,9 @@ function renderArchiveQuestionResult(result) {
       <span class="weekly-question-result-rank">·</span>
       <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
       <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
-      <span>${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}</span>
+      <span>${answer.display_names?.length
+        ? answer.display_names.map(escapeLeaderboardText).join(', ')
+        : `${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}`}</span>
     </div>`;
   }).join('');
   const automatedRows = (result.automated_entries || []).map((answer, index) => {
@@ -3434,21 +3435,15 @@ function renderArchiveQuestionResult(result) {
       <span>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</span>
     </div>`;
   }).join('');
-  const humanSummary = human.suppressed
-    ? `<div><strong>${human.answered_count || 0}</strong>
-        <span>anonymous humans answered</span>
-      </div>`
-    : `<div><strong>${human.correct_count || 0}/${human.answered_count || 0}</strong>
-        <span>anonymous human answers were correct</span>
-      </div>`;
-  const humanBody = human.suppressed
-    ? '<p class="weekly-scorecard-empty">Aggregate answers are hidden until at least 3 humans answer.</p>'
-    : (humanRows || '<p class="weekly-scorecard-empty">No human answers.</p>');
+  const humanSummary = `<div><strong>${human.correct_count || 0}/${human.answered_count || 0}</strong>
+      <span>player answers were correct</span>
+    </div>`;
+  const humanBody = humanRows || '<p class="weekly-scorecard-empty">No player answers.</p>';
   return `<div class="weekly-question-result">
     <div class="weekly-question-result-summary">
       ${humanSummary}
     </div>
-    <div class="weekly-question-result-heading">Anonymous human answers</div>
+    <div class="weekly-question-result-heading">Player answers</div>
     <div class="weekly-question-result-ranking">${humanBody}</div>
     <div class="weekly-question-result-heading">Automated answers</div>
     <div class="weekly-question-result-ranking">${automatedRows}</div>

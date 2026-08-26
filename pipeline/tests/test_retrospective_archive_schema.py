@@ -205,6 +205,34 @@ class RetrospectiveArchiveSchemaTests(unittest.TestCase):
             normalized,
         )
 
+    def test_vote_scope_is_exact_for_legacy_and_required_afterward(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        migration = (
+            repository
+            / "supabase"
+            / "migrations"
+            / "20260826190000_require_retrospective_vote_scope.sql"
+        ).read_text(encoding="utf-8").lower()
+        normalized = " ".join(migration.split())
+
+        self.assertIn(
+            "when p_round_id = 'weekly-2026-08-08-beta-v5-global-tm-29' "
+            "then 'exact' else null",
+            normalized,
+        )
+        self.assertIn(
+            "where not vote.picked_none and vote.selection_kind is null",
+            normalized,
+        )
+        self.assertNotIn("else 'unknown'", normalized)
+        for role in ("public", "anon", "authenticated", "service_role"):
+            self.assertIn(
+                "revoke all on function "
+                "private.foldarium_expected_weekly_retrospective_source(text) "
+                f"from {role}",
+                normalized,
+            )
+
     def test_catalog_is_separate_append_only_and_service_only(self) -> None:
         normalized = " ".join(self.migration().split())
         self.assertIn(

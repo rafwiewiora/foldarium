@@ -63,7 +63,8 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.doesNotMatch(`${html}\n${ui}`, /molstar|Mol\*/i);
   assert.doesNotMatch(ui, /\.innerHTML\s*=/);
   assert.match(ui, /\.textContent\s*=/);
-  assert.match(html, /data-kind="human" disabled/);
+  assert.match(html, /data-kind="human" title="Show player pseudonyms"/);
+  assert.match(ui, /answer\.display_names\.join\(', '\)/);
   assert.match(css, /@media\(max-width:620px\)/);
   assert.match(css, /min-width:320px/);
   assert.match(css, /prefers-reduced-motion:reduce/);
@@ -78,7 +79,8 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   assert.match(app, /if \(DEV \|\| isRetrospectiveReview\(\)\)/);
   assert.match(app, /foldariumPrivateReview\.enrichPrivateWeeklyPool/);
   assert.match(app, /detail\.answer_overlays/);
-  assert.match(app, /Aggregate answers are hidden until at least 3 humans answer/);
+  assert.doesNotMatch(app, /scope unknown|Aggregate answers are hidden/);
+  assert.match(app, /Player answers/);
   const archiveStart = app.indexOf(
     'if (isArchiveRetrospective()) {\n      activateArchiveDetail',
   );

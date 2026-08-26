@@ -87,10 +87,7 @@ export function createPrivateEvaluationHandler({
           + 'select=round_id,user_id,display_name&'
           + `round_id=eq.${encodeURIComponent(LEGACY_V4_ROUND_ID)}`),
       ]);
-      const legacyClusterUserIds = new Set(legacySessions.map(session => session.user_id));
-      const votesWithSelectionKinds = enrichVotesWithSelectionKinds(votes, voteAttempts, {
-        legacyClusterUserIds,
-      });
+      const votesWithSelectionKinds = enrichVotesWithSelectionKinds(votes, voteAttempts);
       bundle.weekly_leaderboard = scoreWeeklyResults({
         roundId: ALLOWED_ROUND_ID,
         itemCount: descriptor.itemCount,

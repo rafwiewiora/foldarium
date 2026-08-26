@@ -8,12 +8,13 @@ import {
   WeeklyRetrospectiveError,
   buildAdminAllTime,
   buildAdminDetail,
-  buildPublicAllTime,
   buildPublicDetail,
+  buildPublicHumanAllTime,
   decodeArchiveCursor,
   encodeArchiveCursor,
   parseSupabaseObjectUri,
   publicationSummary,
+  publishHumanPseudonyms,
   verifyAdminArtifact,
   verifyEvaluationAndRound,
   verifyPublicationCatalogRow,
@@ -60,11 +61,14 @@ export function createWeeklyRetrospectivesHandler({
       }
       if (mode.name === 'detail') {
         const publication = await client.fetchPublication(mode.roundId);
-        const [context, artifactBytes] = await Promise.all([
+        const [context, artifactBytes, adminBytes] = await Promise.all([
           client.fetchVerifiedContext(publication),
           client.download(publication.descriptors[
             mode.admin ? 'admin_artifact' : 'public_artifact'
           ]),
+          mode.admin
+            ? Promise.resolve(null)
+            : client.download(publication.descriptors.admin_artifact),
         ]);
         if (mode.admin) {
           const adminArtifact = verifyAdminArtifact(artifactBytes, publication);
@@ -74,8 +78,12 @@ export function createWeeklyRetrospectivesHandler({
             adminArtifact,
           }));
         }
-        const publicArtifact = verifyPublicArtifact(artifactBytes, publication);
-        const etag = `"weekly-retrospective-${publication.digests.public_artifact_sha256}"`;
+        const publicArtifact = publishHumanPseudonyms({
+          publication,
+          publicArtifact: verifyPublicArtifact(artifactBytes, publication),
+          adminArtifact: verifyAdminArtifact(adminBytes, publication),
+        });
+        const etag = `"weekly-retrospective-names-v1-${publication.digests.admin_artifact_sha256}"`;
         response.setHeader('ETag', etag);
         response.setHeader('Cache-Control', PUBLIC_DETAIL_CACHE);
         if (etagMatches(request.headers, etag)) return notModified(response);
@@ -116,18 +124,20 @@ export function createWeeklyRetrospectivesHandler({
         publications,
         ARTIFACT_LOAD_CONCURRENCY,
         async publication => {
-        const [context, publicBytes] = await Promise.all([
+        const [context, sourceBytes, publicBytes] = await Promise.all([
           client.fetchVerifiedContext(publication),
+          client.download(publication.descriptors.source_snapshot),
           client.download(publication.descriptors.public_artifact),
         ]);
         return {
           publication,
           context,
+          sourceSnapshot: verifySourceSnapshot(sourceBytes, publication),
           publicArtifact: verifyPublicArtifact(publicBytes, publication),
         };
         },
       );
-      const result = buildPublicAllTime(weeks, {
+      const result = buildPublicHumanAllTime(weeks, {
         ranking: mode.ranking,
         participantKind: mode.participantKind,
       });
@@ -195,8 +205,7 @@ function parseMode(query) {
     throw new WeeklyRetrospectiveError('list request is invalid');
   }
   if (allTime && (!RANKING_VIEWS.includes(ranking)
-    || (participantKind != null && !PARTICIPANT_KINDS.includes(participantKind))
-    || (!admin && participantKind === 'human'))) {
+    || (participantKind != null && !PARTICIPANT_KINDS.includes(participantKind)))) {
     throw new WeeklyRetrospectiveError('ranking request is invalid');
   }
   if (roundId) return { name: 'detail', admin, roundId };
@@ -231,13 +240,19 @@ async function listPublications(client, mode) {
     publications,
     ARTIFACT_LOAD_CONCURRENCY,
     async publication => {
-      const [context, publicBytes] = await Promise.all([
+      const [context, publicBytes, adminBytes] = await Promise.all([
         client.fetchVerifiedContext(publication),
         client.download(publication.descriptors.public_artifact),
+        client.download(publication.descriptors.admin_artifact),
       ]);
+      const publicArtifact = publishHumanPseudonyms({
+        publication,
+        publicArtifact: verifyPublicArtifact(publicBytes, publication),
+        adminArtifact: verifyAdminArtifact(adminBytes, publication),
+      });
       return publicationSummary(publication, {
         context,
-        publicArtifact: verifyPublicArtifact(publicBytes, publication),
+        publicArtifact,
       });
     },
   );

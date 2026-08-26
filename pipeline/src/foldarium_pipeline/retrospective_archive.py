@@ -34,9 +34,9 @@ RETROSPECTIVE_SOURCE_FORMAT_VERSION = "foldarium.weekly-retrospective-source/v1"
 RETROSPECTIVE_PUBLIC_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v1"
 RETROSPECTIVE_ADMIN_FORMAT_VERSION = "foldarium.weekly-retrospective-admin/v1"
 RETROSPECTIVE_MEDIA_TYPE = "application/json"
-MIN_PUBLIC_HUMAN_COHORT = 3
 LEGACY_ANONYMOUS_ROUND_ID = "weekly-2026-08-08-beta-v5-global-tm-29"
 LEGACY_ANONYMOUS_DISPLAY_NAME = "Anonymous"
+LEGACY_EXACT_SCOPE_ROUND_ID = LEGACY_ANONYMOUS_ROUND_ID
 
 APPROVED_AUTOMATED_IDENTITIES = frozenset(
     {
@@ -257,15 +257,15 @@ def build_retrospective_source_snapshot(
             attempt = attempts_by_vote.get(
                 (participant, item_id, choice_id, picked_none)
             )
-            selection_kind = (
-                attempt[1]
-                if attempt is not None
-                else (
-                    "cluster"
-                    if participant in automation_by_participant
-                    else "unknown"
+            if attempt is not None:
+                selection_kind = attempt[1]
+            elif round_id == LEGACY_EXACT_SCOPE_ROUND_ID:
+                # This beta round presented unclustered poses to every participant.
+                selection_kind = "exact"
+            else:
+                raise RetrospectiveArchiveError(
+                    "non-empty vote is missing exact-or-cluster scope"
                 )
-            )
         participant_links.add(participant)
         normalized_votes.append(
             {
@@ -630,7 +630,7 @@ def build_retrospective_artifacts(
             if not isinstance(picked_none, bool):
                 raise RetrospectiveArchiveError("vote picked_none is invalid")
             selection_kind = vote.get("selection_kind")
-            if selection_kind not in {"none", "exact", "cluster", "unknown"}:
+            if selection_kind not in {"none", "exact", "cluster"}:
                 raise RetrospectiveArchiveError("vote selection_kind is invalid")
             if picked_none:
                 if vote.get("choice_id") is not None or selection_kind != "none":
@@ -756,19 +756,11 @@ def build_retrospective_artifacts(
                 "item_id": item_id,
                 "human_aggregate": {
                     "answered_count": len(human_responses),
-                    "suppressed": (
-                        len(human_responses) < MIN_PUBLIC_HUMAN_COHORT
+                    "suppressed": False,
+                    "correct_count": sum(
+                        1 for row in human_responses if row["correct"]
                     ),
-                    "correct_count": (
-                        None
-                        if len(human_responses) < MIN_PUBLIC_HUMAN_COHORT
-                        else sum(1 for row in human_responses if row["correct"])
-                    ),
-                    "answers": (
-                        []
-                        if len(human_responses) < MIN_PUBLIC_HUMAN_COHORT
-                        else human_answers
-                    ),
+                    "answers": human_answers,
                 },
                 "automated_entries": automated_responses,
             }
@@ -789,36 +781,24 @@ def build_retrospective_artifacts(
         "round": round_block,
         "human_aggregate": {
             "participant_count": len(human_results),
-            "suppressed": len(human_results) < MIN_PUBLIC_HUMAN_COHORT,
-            "complete_count": (
-                None
-                if len(human_results) < MIN_PUBLIC_HUMAN_COHORT
-                else sum(1 for row in human_results if row["complete"])
+            "suppressed": False,
+            "complete_count": sum(1 for row in human_results if row["complete"]),
+            "partial_count": sum(
+                1
+                for row in human_results
+                if 0 < row["answered"] < item_count
             ),
-            "partial_count": (
-                None
-                if len(human_results) < MIN_PUBLIC_HUMAN_COHORT
-                else sum(
-                    1
-                    for row in human_results
-                    if 0 < row["answered"] < item_count
+            "score_distribution": [
+                {
+                    "correct": correct,
+                    "answered": answered,
+                    "participant_count": count,
+                }
+                for (correct, answered), count in sorted(
+                    distribution_counts.items(),
+                    key=lambda item: (-item[0][0], -item[0][1]),
                 )
-            ),
-            "score_distribution": (
-                []
-                if len(human_results) < MIN_PUBLIC_HUMAN_COHORT
-                else [
-                    {
-                        "correct": correct,
-                        "answered": answered,
-                        "participant_count": count,
-                    }
-                    for (correct, answered), count in sorted(
-                        distribution_counts.items(),
-                        key=lambda item: (-item[0][0], -item[0][1]),
-                    )
-                ]
-            ),
+            ],
         },
         "automated_entries": automated_results,
         "questions": public_questions,
@@ -1149,7 +1129,6 @@ __all__ = [
     "APPROVED_AUTOMATED_IDENTITIES",
     "RETROSPECTIVE_ADMIN_FORMAT_VERSION",
     "RETROSPECTIVE_MEDIA_TYPE",
-    "MIN_PUBLIC_HUMAN_COHORT",
     "RETROSPECTIVE_PUBLICATION_FORMAT_VERSION",
     "RETROSPECTIVE_PUBLIC_FORMAT_VERSION",
     "RETROSPECTIVE_SOURCE_FORMAT_VERSION",

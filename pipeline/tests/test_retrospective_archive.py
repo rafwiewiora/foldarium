@@ -9,7 +9,6 @@ from unittest.mock import patch
 from foldarium_pipeline.contracts import canonical_json
 from foldarium_pipeline.quiz import manifest_sha256
 from foldarium_pipeline.retrospective_archive import (
-    MIN_PUBLIC_HUMAN_COHORT,
     RETROSPECTIVE_ADMIN_FORMAT_VERSION,
     RETROSPECTIVE_PUBLIC_FORMAT_VERSION,
     RetrospectiveArchiveError,
@@ -225,7 +224,7 @@ class RetrospectiveArchiveTests(unittest.TestCase):
             if vote["participant_link"] == CLAUDE_ID
         )
         self.assertEqual(human_vote["selection_kind"], "exact")
-        self.assertEqual(claude_vote["selection_kind"], "cluster")
+        self.assertEqual(claude_vote["selection_kind"], "exact")
 
     def test_known_legacy_round_uses_anonymous_for_missing_human_session(self) -> None:
         rows = source_rows()
@@ -251,6 +250,14 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         for collection in ("votes", "vote_attempts", "current_sessions"):
             for row in rows[collection]:
                 row["round_id"] = future_round_id
+        rows["vote_attempts"].append(
+            {
+                **rows["votes"][1],
+                "vote_attempt_id": "22222222-2222-4222-8222-222222222222",
+                "app_state": {"selection_kind": "exact"},
+                "submitted_at": "2026-08-17T19:01:00Z",
+            }
+        )
         rows["current_sessions"] = [
             row
             for row in rows["current_sessions"]
@@ -259,6 +266,19 @@ class RetrospectiveArchiveTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RetrospectiveArchiveError, "one unambiguous pseudonym"
+        ):
+            build_retrospective_source_snapshot(future_round_id, **rows)
+
+    def test_future_round_rejects_nonempty_vote_without_scope(self) -> None:
+        future_round_id = "weekly-2026-08-22"
+        rows = source_rows()
+        for collection in ("votes", "vote_attempts", "current_sessions"):
+            for row in rows[collection]:
+                row["round_id"] = future_round_id
+
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError,
+            "missing exact-or-cluster scope",
         ):
             build_retrospective_source_snapshot(future_round_id, **rows)
 
@@ -348,15 +368,19 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         self.assertEqual(public["format_version"], RETROSPECTIVE_PUBLIC_FORMAT_VERSION)
         self.assertEqual(admin["format_version"], RETROSPECTIVE_ADMIN_FORMAT_VERSION)
         self.assertEqual(public["human_aggregate"]["participant_count"], 1)
-        self.assertTrue(public["human_aggregate"]["suppressed"])
-        self.assertIsNone(public["human_aggregate"]["complete_count"])
-        self.assertIsNone(public["human_aggregate"]["partial_count"])
-        self.assertEqual(public["human_aggregate"]["score_distribution"], [])
-        self.assertTrue(public["questions"][0]["human_aggregate"]["suppressed"])
-        self.assertIsNone(
-            public["questions"][0]["human_aggregate"]["correct_count"]
+        self.assertFalse(public["human_aggregate"]["suppressed"])
+        self.assertEqual(public["human_aggregate"]["complete_count"], 1)
+        self.assertEqual(public["human_aggregate"]["partial_count"], 0)
+        self.assertEqual(
+            public["human_aggregate"]["score_distribution"],
+            [{"correct": 0, "answered": 1, "participant_count": 1}],
         )
-        self.assertEqual(public["questions"][0]["human_aggregate"]["answers"], [])
+        self.assertFalse(public["questions"][0]["human_aggregate"]["suppressed"])
+        self.assertEqual(public["questions"][0]["human_aggregate"]["correct_count"], 0)
+        self.assertEqual(
+            public["questions"][0]["human_aggregate"]["answers"][0]["vote_count"],
+            1,
+        )
         self.assertEqual(
             [row["participant"] for row in public["automated_entries"]],
             ["Claude Opus", "Smina"],
@@ -384,8 +408,7 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         self.assertEqual(summary["item_count"], 1)
         self.assertEqual(summary["choice_count"], 2)
 
-    def test_public_human_cohort_suppression_for_zero_one_and_three(self) -> None:
-        self.assertEqual(MIN_PUBLIC_HUMAN_COHORT, 3)
+    def test_public_human_aggregates_are_visible_for_zero_one_and_three(self) -> None:
         evaluation = evaluation_descriptor()
         artifact = {
             "blind_manifest": blind_manifest(),
@@ -428,29 +451,18 @@ class RetrospectiveArchiveTests(unittest.TestCase):
                 question = public["questions"][0]["human_aggregate"]
                 self.assertEqual(aggregate["participant_count"], human_count)
                 self.assertEqual(question["answered_count"], human_count)
+                self.assertFalse(aggregate["suppressed"])
+                self.assertFalse(question["suppressed"])
+                self.assertEqual(aggregate["complete_count"], human_count)
+                self.assertEqual(aggregate["partial_count"], 0)
                 self.assertEqual(
-                    aggregate["suppressed"],
-                    human_count < MIN_PUBLIC_HUMAN_COHORT,
+                    question["correct_count"],
+                    0 if human_count == 0 else human_count - 1,
                 )
                 self.assertEqual(
-                    question["suppressed"],
-                    human_count < MIN_PUBLIC_HUMAN_COHORT,
+                    sum(row["vote_count"] for row in question["answers"]),
+                    human_count,
                 )
-                if human_count < MIN_PUBLIC_HUMAN_COHORT:
-                    self.assertIsNone(aggregate["complete_count"])
-                    self.assertIsNone(aggregate["partial_count"])
-                    self.assertEqual(aggregate["score_distribution"], [])
-                    self.assertIsNone(question["correct_count"])
-                    self.assertEqual(question["answers"], [])
-                else:
-                    self.assertEqual(aggregate["complete_count"], 3)
-                    self.assertEqual(aggregate["partial_count"], 0)
-                    self.assertFalse(aggregate["suppressed"])
-                    self.assertEqual(question["correct_count"], 2)
-                    self.assertEqual(
-                        sum(row["vote_count"] for row in question["answers"]),
-                        3,
-                    )
                 self.assertEqual(
                     len(
                         [

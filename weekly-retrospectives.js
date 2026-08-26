@@ -48,7 +48,9 @@ function clear(node) {
 }
 
 function formatDate(value, options = { month: 'short', day: 'numeric', year: 'numeric' }) {
-  const date = new Date(value);
+  const date = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value,
+  );
   return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat(undefined, options).format(date)
     : 'Unknown date';
@@ -147,7 +149,7 @@ function makeRoundRow(publication, compact = false) {
   const summary = publication.summary || {};
   const date = element('div', 'round-date');
   date.append(
-    element('strong', '', formatDate(publication.revealed_at)),
+    element('strong', '', `Blind week · ${formatDate(publication.blind_week)}`),
     element('span', '', `${publication.item_count} questions · ${publication.choice_count} poses`),
   );
   const meta = element('div', 'round-meta');
@@ -270,22 +272,15 @@ function renderQuestionRow(row) {
   );
   const answers = element('div', 'answer-block');
   const human = row.question.human_aggregate;
-  if (human.suppressed) {
+  answers.append(answerLine(
+    'Players',
+    `${human.correct_count}/${human.answered_count} correct`,
+  ));
+  for (const answer of human.answers || []) {
     answers.append(answerLine(
-      'Anonymous humans',
-      `${human.answered_count} answered · Aggregate answers are hidden until at least 3 humans answer`,
+      `↳ ${choiceLabel(answer.choice_id, answer.picked_none, row.blindItem)}`,
+      answer.display_names.join(', '),
     ));
-  } else {
-    answers.append(answerLine(
-      'Anonymous humans',
-      `${human.correct_count}/${human.answered_count} correct`,
-    ));
-    for (const answer of human.answers || []) {
-      answers.append(answerLine(
-        `↳ ${choiceLabel(answer.choice_id, answer.picked_none, row.blindItem)}`,
-        `${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}`,
-      ));
-    }
   }
   for (const automated of row.question.automated_entries || []) {
     answers.append(answerLine(
@@ -310,6 +305,25 @@ function renderAutomatedLeaderboard(host, detail) {
       `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
     ));
   });
+  section.append(list);
+  host.append(section);
+}
+
+function renderHumanLeaderboard(host, detail) {
+  const section = element('section', 'detail-section');
+  section.append(element('h3', '', 'Weekly player leaderboard'));
+  const list = element('div', 'admin-list');
+  const rows = [...(detail.retrospective?.human_entries || [])].sort(
+    (left, right) => right.correct - left.correct
+      || left.participant.localeCompare(right.participant),
+  );
+  rows.forEach((row, index) => {
+    list.append(answerLine(
+      `${index + 1}. ${row.participant}`,
+      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+    ));
+  });
+  if (!rows.length) list.append(element('p', 'empty', 'No player results.'));
   section.append(list);
   host.append(section);
 }
@@ -357,8 +371,8 @@ function renderDetail() {
 
   const head = element('div', 'detail-head');
   head.append(
-    element('p', 'eyebrow', `Revealed ${formatDate(round.revealed_at)}`),
-    element('h2', '', formatDate(round.revealed_at, {
+    element('p', 'eyebrow', 'Blind week'),
+    element('h2', '', formatDate(round.blind_week, {
       weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
     })),
   );
@@ -377,6 +391,7 @@ function renderDetail() {
     overviewCell('Human participants', detail.retrospective?.human_aggregate?.participant_count || 0),
   );
   host.append(head, overview);
+  renderHumanLeaderboard(host, detail);
   renderAutomatedLeaderboard(host, detail);
 
   const questions = element('section', 'detail-section');
@@ -472,30 +487,13 @@ async function loadAllTime() {
   status.textContent = 'Loading rankings…';
   const humanButton = document.querySelector('#participant-filter [data-kind="human"]');
   try {
-    let payload;
-    if (state.participantKind === 'human') {
-      payload = await api({
-        admin: true,
-        all_time: true,
-        ranking: state.ranking,
-        participant_kind: 'human',
-      });
-    } else {
-      const publicRequest = api({
-        all_time: true,
-        ranking: state.ranking,
-        participant_kind: state.participantKind || null,
-      });
-      const adminProbe = !state.adminAllTimeAvailable
-        ? api({ admin: true, all_time: true, ranking: state.ranking }).catch(() => null)
-        : Promise.resolve(null);
-      const [publicPayload, adminPayload] = await Promise.all([publicRequest, adminProbe]);
-      payload = publicPayload;
-      if (adminPayload) state.adminAllTimeAvailable = true;
-    }
-    humanButton.disabled = !state.adminAllTimeAvailable;
-    humanButton.title = state.adminAllTimeAvailable
-      ? 'Admin preview human rankings' : 'Available in admin previews';
+    const payload = await api({
+      all_time: true,
+      ranking: state.ranking,
+      participant_kind: state.participantKind || null,
+    });
+    humanButton.disabled = false;
+    humanButton.title = 'Show player pseudonyms';
     status.textContent = '';
     renderAllTime(payload);
   } catch (error) {
