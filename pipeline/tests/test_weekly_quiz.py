@@ -678,6 +678,94 @@ class PairwisePoseDistanceTests(unittest.TestCase):
         self.assertAlmostEqual(matrix[0][1], 0.0)
         self.assertGreaterEqual(audit["automorphism_count"], 2)
 
+    def test_legacy_topology_digest_matches_full_audit(self) -> None:
+        smiles = "CCCCCCCCCCCCCCCCC"
+        audit = weekly_quiz_module.legacy_ligand_topology_audit(smiles)
+        digest = weekly_quiz_module.legacy_ligand_topology_digest(smiles)
+        self.assertEqual(
+            digest["source_topology_sha256"],
+            audit["source_topology_sha256"],
+        )
+        self.assertEqual(
+            digest["source_smiles_sha256"],
+            audit["source_smiles_sha256"],
+        )
+        self.assertEqual(digest["heavy_atom_count"], audit["heavy_atom_count"])
+
+    def test_legacy_topology_ignores_leading_explicit_hydrogen(self) -> None:
+        ordinary = "CCCCCCCCCCCCCCCCC"
+        explicit = "[H]" + ordinary
+        ordinary_digest = weekly_quiz_module.legacy_ligand_topology_digest(ordinary)
+        explicit_digest = weekly_quiz_module.legacy_ligand_topology_digest(explicit)
+        self.assertEqual(explicit_digest["heavy_atom_count"], 17)
+        self.assertEqual(
+            explicit_digest["source_topology_sha256"],
+            ordinary_digest["source_topology_sha256"],
+        )
+        self.assertNotEqual(
+            explicit_digest["source_smiles_sha256"],
+            ordinary_digest["source_smiles_sha256"],
+        )
+
+    def test_legacy_topology_matches_stored_explicit_hydrogen_mappings(self) -> None:
+        cases = (
+            (
+                "[H]/N=C(/NCCC[C@@H](C(=O)O)N)\\NP(=O)(O)O",
+                "de98809d40b37b01f9a2cc86baf55b0dd6e4aa4160f2eaf611470ec9bb10a4f6",
+                16,
+            ),
+            (
+                "[H]/N=C\\c1ncc(cn1)NC(=O)[C@H](c2ccc(cc2)Cl)C3CCN(CC3)C(=O)C",
+                "ea900dae651fccbbad512bca1ba3af6d6a10ddfcb33e56551620cc9d37e069a0",
+                28,
+            ),
+        )
+        for smiles, expected_topology_sha256, expected_heavy_atoms in cases:
+            with self.subTest(expected_topology_sha256=expected_topology_sha256[:8]):
+                digest = weekly_quiz_module.legacy_ligand_topology_digest(smiles)
+                audit = weekly_quiz_module.legacy_ligand_topology_audit(smiles)
+                self.assertEqual(digest["heavy_atom_count"], expected_heavy_atoms)
+                self.assertEqual(
+                    digest["source_topology_sha256"],
+                    expected_topology_sha256,
+                )
+                self.assertEqual(
+                    audit["source_topology_sha256"],
+                    expected_topology_sha256,
+                )
+
+    def test_legacy_topology_digest_succeeds_when_automorphism_cap_is_exceeded(self) -> None:
+        import numpy
+        from rdkit import Chem
+
+        smiles = "COC"
+        original_cap = weekly_quiz_module.LIGAND_AUTOMORPHISM_CAP
+        try:
+            weekly_quiz_module.LIGAND_AUTOMORPHISM_CAP = 1
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "exceeds the clustering automorphism limit",
+            ):
+                weekly_quiz_module.legacy_ligand_topology_audit(smiles)
+            digest = weekly_quiz_module.legacy_ligand_topology_digest(smiles)
+            self.assertEqual(digest["heavy_atom_count"], 3)
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError,
+                "exceeds the clustering automorphism limit",
+            ):
+                weekly_quiz_module._pairwise_pose_distances(
+                    [fake_ligand([6, 8, 6]), fake_ligand([6, 8, 6])],
+                    [
+                        [[-1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                        [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]],
+                    ],
+                    ligand_smiles=smiles,
+                    numpy=numpy,
+                    Chem=Chem,
+                )
+        finally:
+            weekly_quiz_module.LIGAND_AUTOMORPHISM_CAP = original_cap
+
     def test_wrong_output_element_order_fails_closed(self) -> None:
         import numpy
         from rdkit import Chem

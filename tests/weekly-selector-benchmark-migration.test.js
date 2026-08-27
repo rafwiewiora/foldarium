@@ -7,6 +7,11 @@ const migrationUrl = new URL(
   import.meta.url,
 );
 const sql = (await readFile(migrationUrl, 'utf8')).replace(/\s+/g, ' ').toLowerCase();
+const rpcFixUrl = new URL(
+  '../supabase/migrations/20260826232500_fix_weekly_selector_benchmark_rpc_conflict.sql',
+  import.meta.url,
+);
+const rpcFixSql = (await readFile(rpcFixUrl, 'utf8')).replace(/\s+/g, ' ').toLowerCase();
 
 test('benchmark migration is append-only and physically separate from ballots', () => {
   assert.match(
@@ -56,6 +61,14 @@ test('registration is canonical, content-idempotent, and revision-safe', () => {
   assert.match(sql, /idempotent := v_inserted_count = 0/);
 });
 
+test('registration conflict target cannot collide with an output parameter', () => {
+  assert.match(
+    rpcFixSql,
+    /on conflict on constraint weekly_selector_post_close_benchmarks_v1_pkey do nothing/,
+  );
+  assert.doesNotMatch(rpcFixSql, /on conflict \(execution_id\)/);
+});
+
 test('public projection is reveal-gated and strips runtime identifiers and usage', () => {
   assert.match(sql, /create or replace function public\.get_weekly_selector_benchmarks_v1/);
   assert.match(sql, /quiz_round\.status = 'revealed'/);
@@ -71,4 +84,28 @@ test('public projection is reveal-gated and strips runtime identifiers and usage
     sql,
     /grant (?:select|insert|update|delete)[^;]+weekly_selector_post_close_benchmarks_v1 to anon/,
   );
+});
+
+const retrospectiveMigrationUrl = new URL(
+  '../supabase/migrations/20260826233000_add_retrospective_post_close_benchmarks.sql',
+  import.meta.url,
+);
+const retrospectiveSql = (await readFile(retrospectiveMigrationUrl, 'utf8')).replace(/\s+/g, ' ').toLowerCase();
+
+test('retrospective source migration filters superseded benchmark executions', () => {
+  assert.match(retrospectiveSql, /successor\.supersedes_execution_id = benchmark\.execution_id/);
+  assert.match(retrospectiveSql, /item\.value -> 'unclustered' ->> 'selection_kind'/);
+  assert.match(retrospectiveSql, /'gpt-5\.6 sol'/);
+  assert.match(
+    retrospectiveSql,
+    /lock table public\.weekly_selector_post_close_benchmarks_v1 in share mode/,
+  );
+});
+
+test('retrospective benchmark migration keeps active-only projection', () => {
+  const projection = retrospectiveSql.slice(
+    retrospectiveSql.indexOf('create or replace function public.get_weekly_selector_benchmarks_v1'),
+    retrospectiveSql.indexOf('create or replace function public.register_weekly_retrospective_publication'),
+  );
+  assert.match(projection, /successor\.supersedes_execution_id = benchmark\.execution_id/);
 });

@@ -373,6 +373,45 @@ class RetrospectiveArchiveSchemaTests(unittest.TestCase):
             "0",
         )
 
+    def test_retrospective_source_includes_active_post_close_benchmarks(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        migration = (
+            repository
+            / "supabase"
+            / "migrations"
+            / "20260826233000_add_retrospective_post_close_benchmarks.sql"
+        ).read_text(encoding="utf-8").lower()
+        normalized = " ".join(migration.split())
+
+        self.assertIn("active_benchmarks as (", normalized)
+        self.assertIn("benchmark_vote_rows as (", normalized)
+        self.assertIn("item.value -> 'unclustered' ->> 'selection_kind'", normalized)
+        self.assertIn("'gpt-5.6 sol'", normalized)
+        self.assertIn("successor.supersedes_execution_id = benchmark.execution_id", normalized)
+        self.assertIn("combined_participants as (", normalized)
+        self.assertIn("combined_votes as (", normalized)
+        self.assertIn(
+            "lock table public.weekly_selector_post_close_benchmarks_v1 in share mode",
+            normalized,
+        )
+        self.assertIn("benchmark_validation.unknown_name_count = 0", normalized)
+        self.assertIn("benchmark_validation.distinct_name_count", normalized)
+
+    def test_benchmark_projection_returns_only_active_executions(self) -> None:
+        repository = Path(__file__).resolve().parents[2]
+        migration = (
+            repository
+            / "supabase"
+            / "migrations"
+            / "20260826233000_add_retrospective_post_close_benchmarks.sql"
+        ).read_text(encoding="utf-8").lower()
+        projection = migration.split(
+            "create or replace function public.get_weekly_selector_benchmarks_v1",
+            1,
+        )[1].split("create or replace function public.register_weekly_retrospective_publication", 1)[0]
+        self.assertIn("successor.supersedes_execution_id = benchmark.execution_id", projection)
+        self.assertGreaterEqual(projection.count("successor.supersedes_execution_id"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

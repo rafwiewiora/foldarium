@@ -496,6 +496,8 @@ class SupabasePublisherTests(unittest.TestCase):
                             "participant_kind": "llm",
                         }
                     ]
+                elif "/rpc/get_weekly_selector_benchmarks_v1" in url:
+                    rows = []
                 else:
                     rows = []
                 return FakeResponse(json.dumps(rows).encode())
@@ -521,15 +523,81 @@ class SupabasePublisherTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("legacy_sessions", rows)
-        self.assertEqual(len(opener.calls), 4)
+        self.assertEqual(rows["post_close_benchmarks"], [])
+        self.assertEqual(len(opener.calls), 5)
         urls = "\n".join(call[0].full_url for call in opener.calls)
         self.assertIn("weekly_retrospective_automated_identities", urls)
+        self.assertIn("get_weekly_selector_benchmarks_v1", urls)
         self.assertNotIn("weekly-2026-08-08-beta-v4", urls)
         self.assertNotIn("viewer_trace", urls)
         self.assertNotIn("suggestion", urls)
         self.assertNotIn("comment", urls)
         self.assertTrue(
-            all(call[0].get_header("Range") == "0-999" for call in opener.calls)
+            all(
+                call[0].get_header("Range") == "0-999"
+                for call in opener.calls
+                if "/rest/v1/rpc/" not in call[0].full_url
+            )
+        )
+
+    def test_retrospective_source_snapshot_reduces_benchmark_rpc_rows(self) -> None:
+        benchmark_payload = {
+            "submission_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "round_id": "weekly-2026-08-15",
+            "items": [],
+        }
+
+        class SourceOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                url = request.full_url  # type: ignore[attr-defined]
+                if "/rpc/get_weekly_selector_benchmarks_v1" in url:
+                    rows = [
+                        {
+                            "run_class": "post_close_benchmark",
+                            "display_name": "GPT-5.6 Sol",
+                            "payload": benchmark_payload,
+                            "runtime_sha256": "f" * 64,
+                            "execution_sha256": "e" * 64,
+                        }
+                    ]
+                else:
+                    rows = []
+                return FakeResponse(json.dumps(rows).encode())
+
+        opener = SourceOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "prediction-results",
+            opener=opener,
+        )
+        rows = coordinator.weekly_retrospective_source_rows(
+            "weekly-2026-08-15",
+            environment="production",
+        )
+        self.assertEqual(
+            rows["post_close_benchmarks"],
+            [
+                {
+                    "run_class": "post_close_benchmark",
+                    "display_name": "GPT-5.6 Sol",
+                    "payload": benchmark_payload,
+                }
+            ],
+        )
+        rpc_request = next(
+            call[0]
+            for call in opener.calls
+            if "/rpc/get_weekly_selector_benchmarks_v1" in call[0].full_url
+        )
+        rpc_payload = json.loads(rpc_request.data)
+        self.assertEqual(
+            rpc_payload,
+            {
+                "p_environment": "production",
+                "p_round_id": "weekly-2026-08-15",
+            },
         )
 
     def test_uploads_verified_digest_path_before_atomic_finish_rpc(self) -> None:

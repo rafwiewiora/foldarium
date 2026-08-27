@@ -23,6 +23,95 @@ REFERENCE_POCKET_RADIUS_ANGSTROM = 8.0
 # This general floor covers observed de-reacted terminal groups such as 15/18 R06
 # (83.3%) and 21/24 IO0 (87.5%) without target-specific ratios.
 PARTIAL_REFERENCE_COVERAGE_MIN = 0.80
+RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY = (
+    "foldarium.released-partial-reference-override/v1"
+)
+RELEASED_PARTIAL_REFERENCE_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
+    ("weekly-2026-08-22-beta-v1", "26WD"): {
+        "target_id": "26WD",
+        "component_id": "AAO",
+        "expected_heavy_atoms": 66,
+        "minimum_observed_heavy_atoms": 52,
+    },
+}
+
+def _validate_minimum_reference_heavy_atoms_override(
+    heavy_atoms: int,
+    minimum_observed: int,
+) -> None:
+    if isinstance(minimum_observed, bool) or not isinstance(minimum_observed, int):
+        raise EvaluationError(
+            "minimum_reference_heavy_atoms must be a positive integer"
+        )
+    if minimum_observed < 1:
+        raise EvaluationError(
+            "minimum_reference_heavy_atoms must be a positive integer"
+        )
+    if minimum_observed >= heavy_atoms:
+        raise EvaluationError(
+            "minimum_reference_heavy_atoms must be below expected heavy_atoms"
+        )
+
+
+def released_partial_reference_override_for_item(
+    round_id: str,
+    item_id: str,
+    *,
+    target_id: str,
+    component_id: str,
+    heavy_atoms: int,
+) -> dict[str, Any] | None:
+    """Return one authenticated historical override or fail closed on mismatch."""
+
+    if not isinstance(round_id, str) or not round_id.strip():
+        raise EvaluationError("released partial-reference round_id is invalid")
+    if not isinstance(item_id, str) or not item_id.strip():
+        raise EvaluationError("released partial-reference item_id is invalid")
+    if not isinstance(target_id, str) or not target_id.strip():
+        raise EvaluationError("released partial-reference target_id is invalid")
+    if not isinstance(component_id, str) or not component_id.strip():
+        raise EvaluationError("released partial-reference component_id is invalid")
+    if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
+        raise EvaluationError("released partial-reference heavy_atoms is invalid")
+
+    spec = RELEASED_PARTIAL_REFERENCE_OVERRIDES.get((round_id.strip(), item_id.strip()))
+    if spec is None:
+        return None
+    normalized_target = target_id.strip().upper()
+    normalized_component = component_id.strip().upper()
+    if normalized_target != spec["target_id"]:
+        raise EvaluationError(
+            "released partial-reference override target_id binding mismatch"
+        )
+    if normalized_component != spec["component_id"]:
+        raise EvaluationError(
+            "released partial-reference override component_id binding mismatch"
+        )
+    if heavy_atoms != spec["expected_heavy_atoms"]:
+        raise EvaluationError(
+            "released partial-reference override heavy_atoms binding mismatch"
+        )
+    minimum_observed = spec["minimum_observed_heavy_atoms"]
+    _validate_minimum_reference_heavy_atoms_override(heavy_atoms, minimum_observed)
+    return {
+        "policy": RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
+        "minimum_observed_heavy_atoms": minimum_observed,
+    }
+
+
+def _partial_reference_coverage_threshold(
+    heavy_atoms: int,
+    *,
+    minimum_observed_heavy_atoms: int | None,
+) -> float:
+    if minimum_observed_heavy_atoms is None:
+        return PARTIAL_REFERENCE_COVERAGE_MIN
+    _validate_minimum_reference_heavy_atoms_override(
+        heavy_atoms, minimum_observed_heavy_atoms
+    )
+    return minimum_observed_heavy_atoms / heavy_atoms
+
+
 LIGAND_MAPPING_POLICY_FULL = "full-reference-graph-symmetry/v1"
 LIGAND_MAPPING_POLICY_PARTIAL = "partial-reference-connected-subgraph/v1"
 LIGAND_MAPPING_POLICY_FULL_EXPLICIT = "full-reference-explicit-component-bonds/v1"
@@ -995,11 +1084,19 @@ def _exact_ligand_conformers(
 
 
 def _partial_reference_ligand_conformers(
-    model: Any, heavy_atoms: int, component_id: str
+    model: Any,
+    heavy_atoms: int,
+    component_id: str,
+    *,
+    minimum_observed_heavy_atoms: int | None = None,
 ) -> list[tuple[str, Any, str, list[Any], int, float]]:
     """Return connected-coverage partial conformers below the expected heavy-atom count."""
 
     component = component_id.upper()
+    minimum_coverage = _partial_reference_coverage_threshold(
+        heavy_atoms,
+        minimum_observed_heavy_atoms=minimum_observed_heavy_atoms,
+    )
     rows: list[tuple[str, Any, str, list[Any], int, float]] = []
     for chain in model:
         for residue in chain:
@@ -1011,27 +1108,38 @@ def _partial_reference_ligand_conformers(
                 if observed >= heavy_atoms:
                     continue
                 coverage = observed / heavy_atoms
-                if coverage >= PARTIAL_REFERENCE_COVERAGE_MIN:
+                if coverage >= minimum_coverage:
                     rows.append((chain.name, residue, altloc, atoms, observed, coverage))
     rows.sort(key=lambda row: (row[0], row[1].seqid.num, row[1].name, row[2]))
     return rows
 
 
 def _partial_reference_ligands(
-    model: Any, heavy_atoms: int, component_id: str
+    model: Any,
+    heavy_atoms: int,
+    component_id: str,
+    *,
+    minimum_observed_heavy_atoms: int | None = None,
 ) -> list[tuple[str, Any, int, float]]:
     """Return connected-coverage partial references below the expected heavy-atom count."""
 
     rows: list[tuple[str, Any, int, float]] = []
     for chain, residue, _altloc, _atoms, observed, coverage in _partial_reference_ligand_conformers(
-        model, heavy_atoms, component_id
+        model,
+        heavy_atoms,
+        component_id,
+        minimum_observed_heavy_atoms=minimum_observed_heavy_atoms,
     ):
         rows.append((chain, residue, observed, coverage))
     return rows
 
 
 def _reference_ligand_candidates(
-    model: Any, heavy_atoms: int, component_id: str
+    model: Any,
+    heavy_atoms: int,
+    component_id: str,
+    *,
+    minimum_observed_heavy_atoms: int | None = None,
 ) -> list[tuple[str, Any, str, list[Any], str, int, float]]:
     """Prefer exact conformers; otherwise allow conservative partial conformers only."""
 
@@ -1044,7 +1152,10 @@ def _reference_ligand_candidates(
     return [
         (chain, residue, altloc, atoms, "partial", observed, coverage)
         for chain, residue, altloc, atoms, observed, coverage in _partial_reference_ligand_conformers(
-            model, heavy_atoms, component_id
+            model,
+            heavy_atoms,
+            component_id,
+            minimum_observed_heavy_atoms=minimum_observed_heavy_atoms,
         )
     ]
 
@@ -1059,14 +1170,24 @@ def _ligand_scoring_audit(
     observed: int,
     scored: int,
     policy: str,
+    minimum_observed_heavy_atoms: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    audit = {
         "reference_heavy_atoms_expected": heavy_atoms,
         "reference_heavy_atoms_observed": observed,
         "reference_heavy_atoms_scored": scored,
         "reference_coverage": observed / heavy_atoms,
         "ligand_mapping_policy": policy,
     }
+    if minimum_observed_heavy_atoms is not None:
+        _validate_minimum_reference_heavy_atoms_override(
+            heavy_atoms, minimum_observed_heavy_atoms
+        )
+        audit["reference_heavy_atoms_minimum_observed"] = minimum_observed_heavy_atoms
+        audit["released_partial_reference_override_policy"] = (
+            RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY
+        )
+    return audit
 
 
 def _connectivity_molecule_from_atoms(
@@ -1526,6 +1647,7 @@ def evaluate_ligand_pose(
     heavy_atoms: int,
     ligand_smiles: str | None = None,
     ligand_order_policy: str | None = None,
+    minimum_reference_heavy_atoms: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate one predicted complex against one released reference assembly."""
 
@@ -1533,6 +1655,10 @@ def evaluate_ligand_pose(
         raise EvaluationError("component_id must be non-empty")
     if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
         raise EvaluationError("heavy_atoms must be a positive integer")
+    if minimum_reference_heavy_atoms is not None:
+        _validate_minimum_reference_heavy_atoms_override(
+            heavy_atoms, minimum_reference_heavy_atoms
+        )
     gemmi, numpy, Chem, rdDetermineBonds = _dependencies()
     try:
         reference = gemmi.read_structure(str(reference_path))
@@ -1545,7 +1671,10 @@ def evaluate_ligand_pose(
         raise EvaluationError("could not parse reference/prediction coordinates") from exc
 
     reference_ligands = _reference_ligand_candidates(
-        reference_model, heavy_atoms, component_id
+        reference_model,
+        heavy_atoms,
+        component_id,
+        minimum_observed_heavy_atoms=minimum_reference_heavy_atoms,
     )
     predicted_ligands = _exact_ligand_conformers(prediction_model, heavy_atoms)
     reference_polymers = _polymer_chains(reference_model)
@@ -1693,6 +1822,7 @@ def evaluate_ligand_pose(
                                 observed=observed_count,
                                 scored=scored_count,
                                 policy=mapping_policy,
+                                minimum_observed_heavy_atoms=minimum_reference_heavy_atoms,
                             ),
                             "ligand_topology_source": topology_source,
                         }
@@ -1861,6 +1991,9 @@ __all__ = [
     "LIGAND_MAPPING_POLICY_PARTIAL_EXPLICIT",
     "LIGAND_MAPPING_POLICY_PARTIAL_TASK_SMILES",
     "PARTIAL_REFERENCE_COVERAGE_MIN",
+    "RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY",
+    "RELEASED_PARTIAL_REFERENCE_OVERRIDES",
+    "released_partial_reference_override_for_item",
     "TOPOLOGY_SOURCE_EXPLICIT",
     "TOPOLOGY_SOURCE_INFERRED",
     "TOPOLOGY_SOURCE_TASK_SMILES",

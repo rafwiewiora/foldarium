@@ -224,8 +224,10 @@ def ligand_eligibility_from_target(target: Mapping[str, Any]) -> dict[str, Any]:
     return _weekly_ligand_eligibility(component_id, heavy_atoms, smiles)
 
 
-def legacy_ligand_topology_audit(ligand_smiles: str) -> dict[str, Any]:
-    """Recompute the clustering topology audit fields for one task SMILES."""
+def _legacy_ligand_topology_graph(
+    ligand_smiles: str,
+) -> tuple[list[int], list[list[int]], Any, Any]:
+    """Parse one task SMILES into a deterministic heavy-atom topology graph."""
 
     if not isinstance(ligand_smiles, str) or not ligand_smiles.strip():
         raise WeeklyQuizAssemblyError(
@@ -237,22 +239,62 @@ def legacy_ligand_topology_audit(ligand_smiles: str) -> dict[str, Any]:
         raise WeeklyQuizAssemblyError(
             "selected ligand task SMILES could not be parsed for clustering"
         )
-    source_molecule = Chem.RemoveHs(source_molecule)
-    expected_elements = [atom.GetAtomicNum() for atom in source_molecule.GetAtoms()]
+    expected_elements: list[int] = []
+    old_to_new: dict[int, int] = {}
+    for atom in source_molecule.GetAtoms():
+        atomic_number = int(atom.GetAtomicNum())
+        if atomic_number == 1:
+            continue
+        old_to_new[atom.GetIdx()] = len(expected_elements)
+        expected_elements.append(atomic_number)
     if not expected_elements:
         raise WeeklyQuizAssemblyError("selected ligand task SMILES has no heavy atoms")
     topology_builder = Chem.RWMol()
     for atomic_number in expected_elements:
-        atom = Chem.Atom(int(atomic_number))
+        atom = Chem.Atom(atomic_number)
         atom.SetNoImplicit(True)
         topology_builder.AddAtom(atom)
     topology_edges: list[list[int]] = []
     for bond in source_molecule.GetBonds():
-        left, right = sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+        begin = bond.GetBeginAtomIdx()
+        end = bond.GetEndAtomIdx()
+        if begin not in old_to_new or end not in old_to_new:
+            continue
+        left, right = sorted((old_to_new[begin], old_to_new[end]))
         topology_builder.AddBond(left, right, Chem.BondType.SINGLE)
         topology_edges.append([int(left), int(right)])
     topology_edges.sort()
     topology = topology_builder.GetMol()
+    return expected_elements, topology_edges, topology, Chem
+
+
+def legacy_ligand_topology_digest(ligand_smiles: str) -> dict[str, Any]:
+    """Recompute immutable topology digest fields without automorphism enumeration."""
+
+    expected_elements, topology_edges, _topology, _Chem = _legacy_ligand_topology_graph(
+        ligand_smiles
+    )
+    topology_payload = {
+        "atomic_numbers": expected_elements,
+        "edges": topology_edges,
+    }
+    return {
+        "source_smiles_sha256": hashlib.sha256(
+            ligand_smiles.encode("utf-8")
+        ).hexdigest(),
+        "source_topology_sha256": hashlib.sha256(
+            canonical_json(topology_payload).encode("utf-8")
+        ).hexdigest(),
+        "heavy_atom_count": len(expected_elements),
+    }
+
+
+def legacy_ligand_topology_audit(ligand_smiles: str) -> dict[str, Any]:
+    """Recompute the clustering topology audit fields for one task SMILES."""
+
+    expected_elements, topology_edges, topology, Chem = _legacy_ligand_topology_graph(
+        ligand_smiles
+    )
     mappings = topology.GetSubstructMatches(
         topology,
         uniquify=False,
@@ -267,19 +309,10 @@ def legacy_ligand_topology_audit(ligand_smiles: str) -> dict[str, Any]:
         raise WeeklyQuizAssemblyError(
             "canonical ligand graph exceeds the clustering automorphism limit"
         )
-    topology_payload = {
-        "atomic_numbers": expected_elements,
-        "edges": topology_edges,
-    }
+    digest = legacy_ligand_topology_digest(ligand_smiles)
     return {
         "policy": LEGACY_LIGAND_ORDER_POLICY,
-        "source_smiles_sha256": hashlib.sha256(
-            ligand_smiles.encode("utf-8")
-        ).hexdigest(),
-        "source_topology_sha256": hashlib.sha256(
-            canonical_json(topology_payload).encode("utf-8")
-        ).hexdigest(),
-        "heavy_atom_count": len(expected_elements),
+        **digest,
         "automorphism_count": len(mappings),
         "automorphism_cap": LIGAND_AUTOMORPHISM_CAP,
         "rdkit_version": str(Chem.rdBase.rdkitVersion),
@@ -793,15 +826,9 @@ def _pairwise_pose_distances(
         raise WeeklyQuizAssemblyError(
             "selected ligand requires canonical task SMILES for clustering"
         )
-    source_molecule = Chem.MolFromSmiles(ligand_smiles)
-    if source_molecule is None:
-        raise WeeklyQuizAssemblyError(
-            "selected ligand task SMILES could not be parsed for clustering"
-        )
-    source_molecule = Chem.RemoveHs(source_molecule)
-    expected_elements = [atom.GetAtomicNum() for atom in source_molecule.GetAtoms()]
-    if not expected_elements:
-        raise WeeklyQuizAssemblyError("selected ligand task SMILES has no heavy atoms")
+    expected_elements, topology_edges, topology, Chem = _legacy_ligand_topology_graph(
+        ligand_smiles
+    )
     for index, ligand in enumerate(ligands):
         atoms = _heavy_atoms(ligand)
         observed_elements = [atom.element.atomic_number for atom in atoms]
@@ -816,21 +843,6 @@ def _pairwise_pose_distances(
                 f"prediction ligand atom names are not unique for blind choice {index + 1}"
             )
 
-    # Construct an element-labelled connectivity graph from the task SMILES.
-    # Bond order is deliberately collapsed so aromatic/resonance annotation
-    # cannot differ across method writers, while adjacency remains exact.
-    topology_builder = Chem.RWMol()
-    for atomic_number in expected_elements:
-        atom = Chem.Atom(int(atomic_number))
-        atom.SetNoImplicit(True)
-        topology_builder.AddAtom(atom)
-    topology_edges: list[list[int]] = []
-    for bond in source_molecule.GetBonds():
-        left, right = sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
-        topology_builder.AddBond(left, right, Chem.BondType.SINGLE)
-        topology_edges.append([int(left), int(right)])
-    topology_edges.sort()
-    topology = topology_builder.GetMol()
     mappings = topology.GetSubstructMatches(
         topology,
         uniquify=False,
@@ -846,19 +858,10 @@ def _pairwise_pose_distances(
             "canonical ligand graph exceeds the clustering automorphism limit"
         )
 
-    topology_payload = {
-        "atomic_numbers": expected_elements,
-        "edges": topology_edges,
-    }
+    digest = legacy_ligand_topology_digest(ligand_smiles)
     mapping_audit = {
         "policy": LEGACY_LIGAND_ORDER_POLICY,
-        "source_smiles_sha256": hashlib.sha256(
-            ligand_smiles.encode("utf-8")
-        ).hexdigest(),
-        "source_topology_sha256": hashlib.sha256(
-            canonical_json(topology_payload).encode("utf-8")
-        ).hexdigest(),
-        "heavy_atom_count": len(expected_elements),
+        **digest,
         "automorphism_count": len(mappings),
         "automorphism_cap": LIGAND_AUTOMORPHISM_CAP,
         "rdkit_version": str(Chem.rdBase.rdkitVersion),

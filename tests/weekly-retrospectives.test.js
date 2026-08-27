@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
+  APPROVED_LLM_IDENTITIES,
   ARCHIVE_ADMIN_DETAIL_FORMAT_VERSION,
   ARCHIVE_ALL_TIME_FORMAT_VERSION,
   ARCHIVE_DETAIL_FORMAT_VERSION,
@@ -27,6 +28,10 @@ const LLM_ID = '22222222-2222-4222-8222-222222222222';
 const HMAC_KEY = 'retrospective-participant-test-key-32-bytes';
 const ITEM_ID = '9XYZ';
 const REFERENCE_URI = `https://files.rcsb.org/download/${ITEM_ID}.cif.gz`;
+
+test('public archive accepts the audited Sol benchmark identity', () => {
+  assert.ok(APPROVED_LLM_IDENTITIES.includes('GPT-5.6 Sol'));
+});
 
 function digest(bytes) {
   return createHash('sha256').update(bytes).digest('hex');

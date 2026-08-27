@@ -2173,16 +2173,20 @@ class SupabaseCoordinator(SupabasePublisher):
         return row
 
     def weekly_retrospective_source_rows(
-        self, round_id: str
+        self, round_id: str, *, environment: str = "production"
     ) -> dict[str, list[dict[str, Any]]]:
         """Snapshot the bounded rows used by retrospective aggregation.
 
         Raw application state is fetched only to extract the approved
         ``selection_kind`` field in the deterministic core helper. It is never
         copied into either publication artifact or the normalized source object.
+        Post-close benchmark rows are fetched separately from ballots via the
+        reveal-gated selector benchmark RPC and reduced to ``display_name`` plus
+        ``payload`` before leaving this coordinator boundary.
         """
 
         round_id = _safe_identifier(round_id, "round_id")
+        environment = _safe_identifier(environment, "environment")
         round_filter = f"eq.{round_id}"
         votes_query = urlencode(
             {
@@ -2217,6 +2221,40 @@ class SupabaseCoordinator(SupabasePublisher):
                 "order": "user_id.asc",
             }
         )
+        benchmark_rows = self._rpc(
+            "get_weekly_selector_benchmarks_v1",
+            {"p_environment": environment, "p_round_id": round_id},
+        )
+        if benchmark_rows is None:
+            benchmark_rows = []
+        if not isinstance(benchmark_rows, list) or not all(
+            isinstance(row, Mapping) for row in benchmark_rows
+        ):
+            raise SupabasePublicationError(
+                "weekly retrospective benchmark snapshot returned an invalid row set"
+            )
+        post_close_benchmarks: list[dict[str, Any]] = []
+        for row in benchmark_rows:
+            run_class = row.get("run_class")
+            display_name = row.get("display_name")
+            payload = row.get("payload")
+            if (
+                not isinstance(run_class, str)
+                or not run_class
+                or not isinstance(display_name, str)
+                or not display_name
+                or not isinstance(payload, Mapping)
+            ):
+                raise SupabasePublicationError(
+                    "weekly retrospective benchmark snapshot row is malformed"
+                )
+            post_close_benchmarks.append(
+                {
+                    "run_class": run_class,
+                    "display_name": display_name,
+                    "payload": deepcopy(dict(payload)),
+                }
+            )
         return {
             "votes": self._get_all_json_rows(
                 f"/rest/v1/weekly_quiz_votes?{votes_query}",
@@ -2237,6 +2275,7 @@ class SupabaseCoordinator(SupabasePublisher):
                 ),
                 "weekly retrospective automated-identity registry snapshot",
             ),
+            "post_close_benchmarks": post_close_benchmarks,
         }
 
     def weekly_retrospective_publication(

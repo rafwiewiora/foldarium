@@ -16,16 +16,21 @@ from foldarium_pipeline.contracts import canonical_json
 from foldarium_pipeline.quiz import build_blind_manifest, manifest_sha256
 from foldarium_pipeline.evaluation import (
     EVALUATOR_VERSION,
+    EvaluationError,
     LIGAND_MAPPING_POLICY_PARTIAL,
     LIGAND_MAPPING_POLICY_PARTIAL_TASK_SMILES,
     LIGAND_MAPPING_POLICY_FULL_TASK_SMILES,
+    RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
     TOPOLOGY_SOURCE_TASK_SMILES,
 )
 from foldarium_pipeline.wednesday_reveal import (
     CORRECT_RMSD_ANGSTROM,
     WednesdayRevealError,
     WednesdayRevealNotReady,
+    _evaluate_validated_round,
     _evaluation_fields,
+    _validate_legacy_clustering_ligand_binding,
+    _validated_round,
     fetch_rcsb_released_reference,
     rcsb_reference_url,
     run_private_preclose_evaluation,
@@ -117,6 +122,59 @@ def round_fixture() -> tuple[dict, dict, bytes]:
         "round_id": "weekly-2026-08-08",
         "status": "open",
         "closes_at": "2026-08-12T00:00:00Z",
+        "blind_manifest": blind,
+        "blind_manifest_sha256": manifest_sha256(blind),
+        "metadata": {
+            "private_index": {
+                "object_uri": "supabase://private/index.json",
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "media_type": "application/json",
+            }
+        },
+    }
+    return round_record, private, content
+
+
+def aug22_26wd_round_fixture(
+    *, heavy_atoms: int = 66
+) -> tuple[dict, dict, bytes]:
+    round_id = "weekly-2026-08-22-beta-v1"
+    smiles = "C" * heavy_atoms
+    eligibility = {
+        "policy": fixture_ligand_eligibility()["policy"],
+        "passed": True,
+        "component_id": "AAO",
+        "heavy_atoms": heavy_atoms,
+        "smiles": smiles,
+        "smiles_sha256": hashlib.sha256(smiles.encode("utf-8")).hexdigest(),
+    }
+    source = [
+        {
+            "id": "26WD",
+            "target_id": "26WD",
+            "ligand": {"component_id": "AAO", "heavy_atoms": heavy_atoms},
+            "ligand_eligibility": eligibility,
+            "week": "2026-08-22",
+            "protein_uri": "supabase://quiz/protein.pdb",
+            "choices": [
+                {
+                    "run_id": "run-test",
+                    "sample_id": "sample-1",
+                    "method": "openfold3",
+                    "method_version": "0.4.4",
+                    "pose_uri": "supabase://quiz/pose-a.pdb",
+                    "cluster_id": "cluster-a",
+                    "is_rep": True,
+                }
+            ],
+        }
+    ]
+    blind, private = build_blind_manifest(round_id, source)
+    content = canonical_json(private).encode("utf-8")
+    round_record = {
+        "round_id": round_id,
+        "status": "open",
+        "closes_at": "2026-08-22T20:00:00Z",
         "blind_manifest": blind,
         "blind_manifest_sha256": manifest_sha256(blind),
         "metadata": {
@@ -869,6 +927,34 @@ class LegacyLigandEligibilityRecoveryTests(unittest.TestCase):
         self.assertEqual(result["status"], "evaluated-private-preclose")
         self.assertEqual(result["item_count"], 1)
 
+    def test_legacy_clustering_validation_uses_digest_only_topology(self) -> None:
+        round_record, private, _content = promoted_round_fixture()
+        item = private["items"][0]
+        source_round_id = round_record["metadata"]["promoted_from_round_id"]
+        item.pop("ligand_eligibility", None)
+        smiles = "COC"
+        eligibility = fixture_ligand_eligibility(smiles=smiles, heavy_atoms=3)
+        item["ligand"]["heavy_atoms"] = 3
+        audit = fixture_legacy_ligand_topology_audit(smiles)
+        audit["choices"] = legacy_clustering_for_item(
+            item, identity_round_id=source_round_id, smiles=smiles
+        )["ligand_atom_mapping"]["choices"]
+        item["clustering"] = {"ligand_atom_mapping": audit}
+        module = __import__("foldarium_pipeline.weekly_quiz", fromlist=["LIGAND_AUTOMORPHISM_CAP"])
+        original_cap = module.LIGAND_AUTOMORPHISM_CAP
+        try:
+            module.LIGAND_AUTOMORPHISM_CAP = 1
+            with self.assertRaises(WeeklyQuizAssemblyError):
+                legacy_ligand_topology_audit(smiles)
+            _validate_legacy_clustering_ligand_binding(
+                item,
+                eligibility,
+                identity_round_id=source_round_id,
+                item_id=item["id"],
+            )
+        finally:
+            module.LIGAND_AUTOMORPHISM_CAP = original_cap
+
     def test_embedded_and_recovered_eligibility_mismatch_is_rejected(self) -> None:
         round_record, private_content = LigandEligibilityValidationTests.tampered_private_fixture(
             lambda item: item.__setitem__(
@@ -1331,6 +1417,76 @@ class EvaluationFieldThreadingTests(unittest.TestCase):
             }
         )
         self.assertNotIn("reference_pocket_pdb", fields)
+
+
+class ReleasedPartialReferenceOverrideRevealTests(unittest.TestCase):
+    def test_validated_round_attaches_authenticated_override_for_26wd(self) -> None:
+        round_record, private, _ = aug22_26wd_round_fixture()
+        _, _, items = _validated_round(round_record, private)
+        self.assertEqual(len(items), 1)
+        override = items[0].get("released_partial_reference_override")
+        self.assertIsNotNone(override)
+        self.assertEqual(override["minimum_observed_heavy_atoms"], 52)
+        self.assertEqual(override["policy"], RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY)
+
+    def test_validated_round_rejects_override_binding_mismatch(self) -> None:
+        round_record, private, _ = aug22_26wd_round_fixture(heavy_atoms=65)
+        with self.assertRaisesRegex(EvaluationError, "heavy_atoms binding mismatch"):
+            _validated_round(round_record, private)
+
+    def test_other_rounds_do_not_receive_override(self) -> None:
+        round_record, private, _ = round_fixture()
+        _, _, items = _validated_round(round_record, private)
+        self.assertNotIn("released_partial_reference_override", items[0])
+
+    def test_evaluate_validated_round_passes_minimum_reference_heavy_atoms(self) -> None:
+        round_record, private, _ = aug22_26wd_round_fixture()
+        _, blind, items = _validated_round(round_record, private)
+        captured: list[dict] = []
+
+        def evaluator(*_args, **kwargs):
+            captured.append(dict(kwargs))
+            return overlay_evaluation_score()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            _evaluate_validated_round(
+                round_record["round_id"],
+                blind,
+                items,
+                temporary,
+                prediction_resolver=lambda choice: coordinate(
+                    b"prediction", f"supabase://private/{choice['id']}.cif"
+                ),
+                reference_resolver=lambda item: coordinate(
+                    b"reference", f"supabase://reference/{item['target_id']}.cif"
+                ),
+                evaluator=evaluator,
+            )
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0]["minimum_reference_heavy_atoms"], 52)
+
+    def test_override_minimum_observed_propagates_into_reveal_provenance(self) -> None:
+        fields = _evaluation_fields(
+            {
+                "evaluator_version": EVALUATOR_VERSION,
+                "receptor_rmsd": 0.5,
+                "reference_heavy_atoms_expected": 66,
+                "reference_heavy_atoms_observed": 52,
+                "reference_heavy_atoms_scored": 52,
+                "reference_heavy_atoms_minimum_observed": 52,
+                "reference_coverage": 52 / 66,
+                "ligand_mapping_policy": LIGAND_MAPPING_POLICY_PARTIAL,
+                "released_partial_reference_override_policy": (
+                    RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY
+                ),
+            }
+        )
+        self.assertEqual(fields["reference_heavy_atoms_minimum_observed"], 52)
+        self.assertEqual(
+            fields["released_partial_reference_override_policy"],
+            RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
+        )
 
 
 if __name__ == "__main__":

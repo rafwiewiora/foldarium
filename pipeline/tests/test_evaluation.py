@@ -16,6 +16,7 @@ from foldarium_pipeline.evaluation import (
     LIGAND_MAPPING_POLICY_PARTIAL_EXPLICIT,
     LIGAND_MAPPING_POLICY_PARTIAL_TASK_SMILES,
     PARTIAL_REFERENCE_COVERAGE_MIN,
+    RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
     TOPOLOGY_SOURCE_EXPLICIT,
     TOPOLOGY_SOURCE_INFERRED,
     TOPOLOGY_SOURCE_TASK_SMILES,
@@ -23,6 +24,7 @@ from foldarium_pipeline.evaluation import (
     evaluate_ligand_pose,
     exact_complex_receptor_superposition,
     exact_complex_tm_superposition,
+    released_partial_reference_override_for_item,
     _chem_comp_bond_edges,
     _conformer_heavy_atoms,
     _exact_ligand_conformers,
@@ -1669,6 +1671,151 @@ class ReferencePocketExportTests(unittest.TestCase):
         self.assertTrue(score["reference_pocket_pdb"].endswith("\nEND\n"))
         fields = _evaluation_fields(score)
         self.assertNotIn("reference_pocket_pdb", fields)
+
+
+@unittest.skipUnless(HAS_GEMMI, "Gemmi is an optional evaluation dependency")
+class ReleasedPartialReferenceOverrideTests(unittest.TestCase):
+    component_id = "AAO"
+    heavy_atoms = 66
+    minimum_observed = 52
+
+    def setUp(self) -> None:
+        try:
+            from rdkit import Chem  # noqa: F401
+        except (ImportError, ModuleNotFoundError):
+            self.skipTest("RDKit is an optional evaluation dependency")
+
+    def test_default_threshold_rejects_52_of_66_without_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.pdb"
+            prediction_path = root / "prediction.pdb"
+            observed = self.minimum_observed
+            self.assertLess(observed / self.heavy_atoms, PARTIAL_REFERENCE_COVERAGE_MIN)
+            _write_pose_fixture(
+                reference_path,
+                ligand_positions=_linear_chain_positions(observed),
+                component_id=self.component_id,
+            )
+            _write_pose_fixture(
+                prediction_path,
+                ligand_positions=_linear_chain_positions(self.heavy_atoms),
+                component_id=self.component_id,
+            )
+
+            with self.assertRaisesRegex(
+                EvaluationError,
+                f"reference contains no {self.component_id} ligand with {self.heavy_atoms} atoms",
+            ):
+                evaluate_ligand_pose(
+                    reference_path,
+                    prediction_path,
+                    component_id=self.component_id,
+                    heavy_atoms=self.heavy_atoms,
+                )
+
+    def test_override_accepts_52_of_66(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.pdb"
+            prediction_path = root / "prediction.pdb"
+            _write_pose_fixture(
+                reference_path,
+                ligand_positions=_linear_chain_positions(self.minimum_observed),
+                component_id=self.component_id,
+            )
+            _write_pose_fixture(
+                prediction_path,
+                ligand_positions=_linear_chain_positions(self.heavy_atoms),
+                component_id=self.component_id,
+                ligand_translation=(0.0, 0.2, 0.0),
+            )
+
+            score = evaluate_ligand_pose(
+                reference_path,
+                prediction_path,
+                component_id=self.component_id,
+                heavy_atoms=self.heavy_atoms,
+                minimum_reference_heavy_atoms=self.minimum_observed,
+            )
+
+        self.assertAlmostEqual(score["rmsd"], 0.2, places=5)
+        self.assertEqual(score["ligand_mapping_policy"], LIGAND_MAPPING_POLICY_PARTIAL)
+        self.assertEqual(score["reference_heavy_atoms_observed"], self.minimum_observed)
+        self.assertEqual(
+            score["reference_heavy_atoms_minimum_observed"], self.minimum_observed
+        )
+        self.assertEqual(
+            score["released_partial_reference_override_policy"],
+            RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
+        )
+        self.assertLess(score["reference_coverage"], PARTIAL_REFERENCE_COVERAGE_MIN)
+
+    def test_override_rejects_one_atom_below_minimum(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.pdb"
+            prediction_path = root / "prediction.pdb"
+            observed = self.minimum_observed - 1
+            _write_pose_fixture(
+                reference_path,
+                ligand_positions=_linear_chain_positions(observed),
+                component_id=self.component_id,
+            )
+            _write_pose_fixture(
+                prediction_path,
+                ligand_positions=_linear_chain_positions(self.heavy_atoms),
+                component_id=self.component_id,
+            )
+
+            with self.assertRaisesRegex(
+                EvaluationError,
+                f"reference contains no {self.component_id} ligand with {self.heavy_atoms} atoms",
+            ):
+                evaluate_ligand_pose(
+                    reference_path,
+                    prediction_path,
+                    component_id=self.component_id,
+                    heavy_atoms=self.heavy_atoms,
+                    minimum_reference_heavy_atoms=self.minimum_observed,
+                )
+
+    def test_released_partial_reference_override_binding_mismatch_raises(self) -> None:
+        with self.assertRaisesRegex(
+            EvaluationError,
+            "heavy_atoms binding mismatch",
+        ):
+            released_partial_reference_override_for_item(
+                "weekly-2026-08-22-beta-v1",
+                "26WD",
+                target_id="26WD",
+                component_id="AAO",
+                heavy_atoms=65,
+            )
+
+    def test_override_audit_fields_propagate_through_evaluation_fields(self) -> None:
+        fields = _evaluation_fields(
+            {
+                "evaluator_version": EVALUATOR_VERSION,
+                "receptor_rmsd": 0.5,
+                "reference_heavy_atoms_expected": self.heavy_atoms,
+                "reference_heavy_atoms_observed": self.minimum_observed,
+                "reference_heavy_atoms_scored": self.minimum_observed,
+                "reference_heavy_atoms_minimum_observed": self.minimum_observed,
+                "reference_coverage": self.minimum_observed / self.heavy_atoms,
+                "ligand_mapping_policy": LIGAND_MAPPING_POLICY_PARTIAL,
+                "released_partial_reference_override_policy": (
+                    RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY
+                ),
+            }
+        )
+        self.assertEqual(
+            fields["reference_heavy_atoms_minimum_observed"], self.minimum_observed
+        )
+        self.assertEqual(
+            fields["released_partial_reference_override_policy"],
+            RELEASED_PARTIAL_REFERENCE_OVERRIDE_POLICY,
+        )
 
 
 if __name__ == "__main__":
