@@ -348,28 +348,12 @@
   .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
     color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
   .participant-setup input:focus{outline:none;border-color:var(--accent)}
-  .programmatic-voting{display:none;flex-direction:column;gap:10px;padding:11px;border:1px solid var(--line);
-    border-radius:9px;background:#f6f8fa}
-  .programmatic-voting .q{margin:0}
-  .programmatic-voting label{font-size:12px;color:var(--muted)}
-  .programmatic-voting input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
-    color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
-  .programmatic-voting input:focus{outline:none;border-color:var(--accent)}
-  .programmatic-voting-actions{display:flex;flex-wrap:wrap;gap:6px}
-  .programmatic-voting-actions .ghost,.programmatic-voting-actions .primary{min-height:38px;padding:8px 12px;font-size:12.5px}
-  .programmatic-voting-links{display:flex;flex-wrap:wrap;gap:8px;font-size:12px}
-  .programmatic-voting-links a{color:var(--accent);text-decoration:none;font-weight:600}
-  .programmatic-voting-links a:hover{text-decoration:underline}
-  .selector-token-row{display:flex;gap:6px;align-items:stretch}
-  .selector-token-row input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
   .weekly-selector-leaderboard{margin-top:10px;display:flex;flex-direction:column;gap:8px}
   .weekly-selector-leaderboard[hidden]{display:none!important}
   .weekly-selector-row{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;
     font-size:12.5px;line-height:1.45;color:var(--ink)}
   .weekly-selector-row b{font-weight:650}
   .weekly-selector-heading{font-size:11px;color:var(--faint);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-  html[data-quiz-mode="weekly"] #programmatic-voting{display:flex}
-  #wrap:not(.intro) #programmatic-voting{display:none!important}
   #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:#edf8fc;
     color:#116d94;border-color:#b8dce9;font-weight:700;box-shadow:0 3px 12px #16202b18}
   html[data-quiz-mode="weekly"] #setup,
@@ -488,70 +472,6 @@
       </label>
       <p class="hint">Shown on the results leaderboard after release.</p>
       <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
-    </section>
-
-    <section class="programmatic-voting" id="programmatic-voting" aria-labelledby="programmatic-voting-title">
-      <div class="q" id="programmatic-voting-title">Programmatic voting · v2</div>
-      <p class="hint">Download the immutable blind kit and submit one complete batch before close. Every item requires independent clustered (Cluster or None) and unclustered (exact Pose or None) decisions.</p>
-      <div class="programmatic-voting-actions">
-        <button class="ghost" id="selector-download-kit" type="button">Download verified v2 kit</button>
-        <a class="ghost" id="selector-offline-tool" href="/weekly-selector-offline/" target="_blank" rel="noopener">Offline v2 mapper</a>
-      </div>
-      <label>Selector display name
-        <input id="selector-display-name" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Method name
-        <input id="selector-method-name" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Method version
-        <input id="selector-method-version" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Provider
-        <input id="selector-provider" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Model
-        <input id="selector-model" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Exact model version
-        <input id="selector-model-version" autocomplete="off" maxlength="80"/>
-      </label>
-      <label>Registered prompt profile
-        <input id="selector-prompt-profile-id" autocomplete="off" readonly/>
-      </label>
-      <label>Registered prompt SHA-256
-        <input id="selector-prompt-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}" readonly/>
-      </label>
-      <label>Tools SHA-256
-        <input id="selector-tools-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}"/>
-      </label>
-      <label>Config SHA-256
-        <input id="selector-config-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}"/>
-      </label>
-      <label>Inference network policy
-        <select id="selector-network-policy">
-          <option value="none">No network</option>
-          <option value="provider-api-only">Provider API only</option>
-        </select>
-      </label>
-      <label>Canonical network allowlist SHA-256
-        <input id="selector-network-allowlist-sha256" autocomplete="off" maxlength="64" pattern="[0-9a-f]{64}" value="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"/>
-      </label>
-      <p class="hint">Token creation attests that inference uses only the verified kit, with browser, web search, external retrieval, and shared caches disabled. The default digest is SHA-256 of the canonical empty allowlist <code>[]</code>.</p>
-      <div class="selector-token-row">
-        <input id="selector-api-token" type="password" readonly autocomplete="off" placeholder="Create a round-bound v2 token" aria-label="Selector API token"/>
-        <button class="ghost" id="selector-create-token" type="button" disabled>Create v2 token</button>
-        <button class="ghost" id="selector-copy-token" type="button" disabled>Copy</button>
-      </div>
-      <label>Complete dual-mode v2 JSON
-        <input id="selector-submission-file" type="file" accept="application/json,.json"/>
-      </label>
-      <div class="programmatic-voting-actions">
-        <button class="primary" id="selector-submit-file" type="button" disabled>Upload complete v2 JSON</button>
-      </div>
-      <div class="programmatic-voting-links">
-        <a id="selector-api-docs" href="/api/weekly-selector/docs" target="_blank" rel="noopener noreferrer">Dual-mode v2 JSON / API contract ↗</a>
-      </div>
-      <p class="dialog-status" id="programmatic-voting-status" role="status" aria-live="polite"></p>
     </section>
 
     <div id="setup">
@@ -870,7 +790,7 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608243');
+      await loadScript('app.js?v=202608244');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

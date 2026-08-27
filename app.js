@@ -179,8 +179,6 @@ let localWeeklyScore = { correct: 0, answered: 0 };
 let localWeeklyScoredItems = new Set();
 let WEEKLY_SELECTOR_RESULTS = null;
 let WEEKLY_SELECTOR_RESULTS_ERROR = '';
-let SELECTOR_ROUND_DESCRIPTOR = null;
-let SELECTOR_API_TOKEN = '';
 let WEEKLY_ITEM_STATES = new Map();
 let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
@@ -219,7 +217,6 @@ const applyUserView = () => {
 let score = { you: 0, af3: 0, n: 0, randExp: 0 };
 const $ = s => document.querySelector(s);
 const CACHE_BUST = Date.now();
-const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 const hex = c => '#' + c.toString(16).padStart(6, '0');
 // "locked" = the green/red answer is on screen; controls are inert only then. In "my view" (revealed but
 // answer hidden) everything is interactive again, exactly as before voting.
@@ -3134,7 +3131,6 @@ function showIntro() {
     $('#start').style.display = pool.length
       && (isRetrospectiveReview() || status !== 'closed') ? '' : 'none';
     syncStartGate();
-    syncProgrammaticVotingPanel();
     return;
   }
   $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
@@ -3177,7 +3173,8 @@ function setProgrammaticVotingStatus(message = '') {
 function syncProgrammaticVotingPanel() {
   const panel = $('#programmatic-voting');
   if (!panel) return;
-  panel.hidden = !WEEKLY_ONLY || !$('#wrap')?.classList.contains('intro');
+  panel.hidden = !WEEKLY_ONLY || !PROGRAMMATIC_VOTING
+    || !$('#wrap')?.classList.contains('intro');
   const open = SELECTOR_ROUND_DESCRIPTOR?.public_status === 'open';
   for (const selector of ['#selector-create-token', '#selector-submit-file', '#selector-submission-file']) {
     const control = $(selector);
@@ -3206,7 +3203,7 @@ async function getBrowserSupabaseAccessToken() {
 }
 
 async function loadProgrammaticVotingDescriptor() {
-  if (!WEEKLY_ONLY) return;
+  if (!WEEKLY_ONLY || !PROGRAMMATIC_VOTING) return;
   setProgrammaticVotingStatus('');
   try {
     const response = await fetch('/api/weekly-selector/rounds/current', { cache: 'no-store' });
@@ -4043,7 +4040,6 @@ function beginQuiz(initialQuestionIndex = 0) {
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#wrap').classList.remove('intro');
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
-  syncProgrammaticVotingPanel();
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = isRetrospectiveReview() ? 'none' : '';
@@ -5221,8 +5217,6 @@ async function init() {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
     });
-    syncProgrammaticVotingPanel();
-    void loadProgrammaticVotingDescriptor();
     renderWeeklyResultsStatus();
     if (WEEKLY_ROUND?.public_status === 'revealed') void loadWeeklySelectorResults();
     startWeeklyCountdown();
@@ -5378,10 +5372,6 @@ async function init() {
   $('#participant-name').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
   });
-  $('#selector-download-kit')?.addEventListener('click', () => { void downloadSelectorKit(); });
-  $('#selector-create-token')?.addEventListener('click', () => { void createSelectorApiToken(); });
-  $('#selector-copy-token')?.addEventListener('click', () => { void copySelectorApiToken(); });
-  $('#selector-submit-file')?.addEventListener('click', () => { void submitSelectorFile(); });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) return;
     recordAppEvent('page_hidden');
