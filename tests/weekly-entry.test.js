@@ -39,7 +39,7 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /`question \$\{questionOrdinal\}`/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);
-  assert.match(html, /<label>Leaderboard name\s*<input id="participant-name"/);
+  assert.match(html, /<label>Player name\s*<input id="participant-name"/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.doesNotMatch(html, /required before starting/);
   assert.match(app, /function syncStartGate\(\)/);
@@ -59,10 +59,12 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /Read-only Preview: you can inspect this dialog, but Send is disabled/);
   assert.match(app, /suggestion-open'\)\.disabled = WEEKLY_ROUND\?\.public_status === 'revealed'/);
   assert.match(html, /id="revealed-weekly-modes" hidden/);
+  assert.match(html, /This week’s Weekly is revealed/);
+  assert.match(html, /Next blind Weekly opens Saturday/);
   assert.match(html, /id="play-for-fun-start"[\s\S]*Play for fun/);
-  assert.match(html, /see the opponents and answer, but keep the crystal structure hidden/);
-  assert.match(html, /id="current-retrospective-link"[\s\S]*Molecular retrospective/);
-  assert.match(html, /Review the released Xtal structure/);
+  assert.match(html, /No Xtal · opponents shown after each answer/);
+  assert.match(html, /id="current-retrospective-link"[\s\S]*Review with Xtal/);
+  assert.match(app, /with a correct pose[\s\S]*where “None” is correct/);
   assert.match(app, /retrospectiveLink\.href = `\/weekly\?retrospective_round=\$\{encodeURIComponent\(WEEKLY_ROUND\.round_id\)\}`/);
   assert.match(app, /showRevealedModes[\s\S]*start'\)\.style\.display/);
   assert.match(app, /crystalReviewAllowed = cur\?\.item\?\.source !== 'weekly' \|\| isRetrospectiveReview\(\)/);
