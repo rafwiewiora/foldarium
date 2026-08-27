@@ -132,7 +132,9 @@ function syncXtalRow() {
   const link = $('#rcsb-link');
   const status = $('#xtal-status');
   if (!row || !label) return;
-  const showRow = !!(cur?.showAnswer && (itemHasXtalOverlay(cur.item) || itemHasReleasedCrystal(cur.item)));
+  const crystalReviewAllowed = cur?.item?.source !== 'weekly' || isRetrospectiveReview();
+  const showRow = !!(crystalReviewAllowed && cur?.showAnswer
+    && (itemHasXtalOverlay(cur.item) || itemHasReleasedCrystal(cur.item)));
   row.style.display = showRow ? '' : 'none';
   if (!showRow) {
     if (link) link.style.display = 'none';
