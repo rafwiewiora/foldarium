@@ -14,6 +14,7 @@ from any external prediction service.
 - A blind Saturday-to-Wednesday quiz/vote/reveal contract and normalized public CAMEO AF3 importer.
 - A shared receptor-aligned, symmetry-aware ligand RMSD evaluator for Wednesday comparisons.
 - A portable, fail-closed public Foldseek client with batched authoritative RCSB cutoff lookups.
+- Fail-closed post-reveal and blind Weekly training-similarity audits.
 - Thin deployment seams for Modal now and the same container/task contract on GCP later.
 
 No inference is launched merely by installing this package or running `weekly-plan`.
@@ -34,6 +35,44 @@ No inference is launched merely by installing this package or running `weekly-pl
 The registration RPC creates the snapshot, campaign, target, and run rows in one transaction only after
 the replay inputs have been stored by SHA-256. Browser clients can read blind weekly rounds and submit
 authenticated votes, but correctness and RMSD remain private until the Wednesday reveal RPC succeeds.
+
+Scientific evaluation dependencies are optional:
+
+```bash
+python -m pip install -e './pipeline[evaluation]'
+python -m unittest discover -s pipeline/tests -v
+```
+
+The optional `weekly-llm` extra installs the Cursor SDK adapter. The Claude
+adapter uses an independently installed `claude` CLI. Neither adapter runs
+unless explicitly invoked.
+
+## Audit published Weekly training similarity
+
+Install the evaluation extra, keep the resumable cache outside Git, and run the
+exact post-reveal label separately from the blind proxy:
+
+```bash
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-exact.json \
+  --mode exact
+
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-blind.json \
+  --mode blind
+```
+
+The command records search, download, parse, and incomplete-candidate failures
+as `unknown`. `--workers`, `--limit`, `--only`, and `--force` support bounded
+pilots and resumable reruns. The blind scorer's input type contains only the
+archived predicted receptor, predicted pocket, and candidate poses.
+
+For a version-pinned local or batch Foldseek backend,
+`pipeline/scripts/weekly_foldseek_batch.py prepare` emits 100 first-chain query
+PDBs plus a digest manifest. Run Foldseek with the documented eight-column
+format, then use its `import` command to seed the same fail-closed hit cache.
 
 ## The portability contract
 
