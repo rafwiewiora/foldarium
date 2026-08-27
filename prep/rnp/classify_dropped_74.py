@@ -6,14 +6,18 @@ recording the branch each dropped item hits. Read-only; writes only this scratch
 """
 import json, pickle, csv, sys, os, re
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
-RNP="/Users/rafalwiewiora/rnp_data"
-CACHE="/tmp/coords_cache_v2.pkl"
-IDX=f"{RNP}/cif_index_v2.json"
-TABLE=f"{RNP}/xmethod_plddt_table_v2.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-PLAN=f"{RNP}/rnp_quiz_plan_v2.pkl"
+RNP = paths.rnp_dir
+CACHE = paths.work_dir / "coords_cache_v2.pkl"
+IDX = RNP / "cif_index_v2.json"
+TABLE = RNP / "xmethod_plddt_table_v2.csv"
+ANNOT = paths.annotations
+PLAN = RNP / "rnp_quiz_plan_v2.pkl"
 CLUSTER_THRESH=2.0
 POCKET_CA_R=12.0
 SINGLE_POCKET_SPREAD=8.0
@@ -260,5 +264,5 @@ json.dump({
     'dropped':len(dropped),
     'buckets':{b:[k for k,_ in buckets.get(b,[])] for b in order},
     'detail':{k:{'bucket':bb,'detail':dd} for k,(bb,dd) in classification.items()},
-}, open(f"{RNP}/dropped_74_classification.json",'w'), indent=2)
-print("\nwrote",f"{RNP}/dropped_74_classification.json", file=sys.stderr)
+}, open(RNP / "dropped_74_classification.json",'w'), indent=2)
+print("\nwrote", RNP / "dropped_74_classification.json", file=sys.stderr)

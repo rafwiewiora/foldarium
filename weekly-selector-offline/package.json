@@ -1,0 +1,18 @@
+{
+  "name": "weekly-selector-wasm",
+  "type": "module",
+  "description": "Offline Foldarium weekly selector submission mapper",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": "https://github.com/rafwiewiora/foldarium",
+  "files": [
+    "weekly_selector_wasm_bg.wasm",
+    "weekly_selector_wasm.js",
+    "weekly_selector_wasm.d.ts"
+  ],
+  "main": "weekly_selector_wasm.js",
+  "types": "weekly_selector_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

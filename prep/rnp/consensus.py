@@ -16,6 +16,10 @@ Outputs consensus_results.json.
 """
 import json, pickle, csv, sys, time, random, os, re
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
 KNOWN2={'CL','BR','NA','MG','ZN','FE','CA','MN','SE','SI','LI','CU','CO','NI','PT','AS','SB','SN','HG','CD','AG','AU','PD','BA','SR','CS','RB','TE','GE','GA','AL','TI','CR','MO','RU','RH','IR','OS','RE','HF','TA','ZR','NB','PB','BI','TL','IN','BE','SC'}
@@ -24,12 +28,12 @@ def elem_of(name):
     if len(s)>=2 and s[:2] in KNOWN2: return s[:2]
     return s[0]
 
-CACHE=os.environ.get("CACHE","/tmp/coords_cache.pkl")
+CACHE = os.environ.get("CACHE", str(paths.work_dir / "coords_cache.pkl"))
 REQUIRE_FULL=True  # only score systems whose ALL table poses are present in cache
-IDX="/tmp/cif_index.json"
-TABLE="/Users/rafalwiewiora/rnp_data/xmethod_plddt_table.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-OUT="/Users/rafalwiewiora/rnp_data/consensus_results.json"
+IDX = paths.work_dir / "cif_index.json"
+TABLE = paths.rnp_dir / "xmethod_plddt_table.csv"
+ANNOT = paths.annotations
+OUT = paths.rnp_dir / "consensus_results.json"
 CLUSTER_THRESH=2.0
 POCKET_CA_R=12.0   # residues whose ref CA within this of ref ligand centroid-ish used for superpose
 SUBSET=None        # set int to subsample gameable systems (novel always kept)

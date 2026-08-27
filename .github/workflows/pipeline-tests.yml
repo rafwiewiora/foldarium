@@ -1,0 +1,79 @@
+name: Test and audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Test web application and API contracts
+        run: npm test
+
+  contracts-and-adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test portable pipeline core
+        env:
+          PYTHONPATH: pipeline/src
+        run: python -m unittest discover -s pipeline/tests -v
+
+  scientific-evaluation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pipeline/pyproject.toml
+      - name: Install evaluation dependencies
+        run: python -m pip install -e "./pipeline[evaluation]"
+      - name: Test pipeline with scientific evaluators
+        run: python -m unittest discover -s pipeline/tests -v
+
+  selector-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Test offline Selector mapper
+        run: cargo test --locked --manifest-path tools/weekly-selector-wasm/Cargo.toml
+      - name: Test JavaScript parity fixture
+        run: node --test tools/weekly-selector-wasm/tests/parity.test.js
+
+  database-bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase and apply migrations
+        run: supabase start
+      - name: Verify migrations replay cleanly
+        run: supabase db reset
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

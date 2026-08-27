@@ -10,14 +10,18 @@ Oracle / top-1 metrics = over ALL poses in the table (all methods, all seeds/sam
 """
 import json, pickle, csv, sys, os, re, math
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
-RNP="/Users/rafalwiewiora/rnp_data"
-CACHE="/tmp/coords_cache_v2.pkl"
-IDX=f"{RNP}/cif_index_v2.json"
-TABLE=f"{RNP}/xmethod_plddt_table_v2.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-PLAN=f"{RNP}/rnp_quiz_plan_v2.pkl"
+RNP = paths.rnp_dir
+CACHE = paths.work_dir / "coords_cache_v2.pkl"
+IDX = RNP / "cif_index_v2.json"
+TABLE = RNP / "xmethod_plddt_table_v2.csv"
+ANNOT = paths.annotations
+PLAN = RNP / "rnp_quiz_plan_v2.pkl"
 CLUSTER_THRESH=2.0
 POCKET_CA_R=12.0
 SINGLE_POCKET_SPREAD=8.0
@@ -305,5 +309,5 @@ print(f"\n[unclassifiable (no valid geometry): n={len(unc)}] reasons={dict(uncla
 # save scratch
 json.dump({'records':[{k:(v if not isinstance(v,np.generic) else float(v)) for k,v in r.items()} for r in records],
            'unclass_reason':dict(unclass_reason)},
-          open(f"{RNP}/pocket_bias_records.json",'w'),indent=1,default=str)
-print(f"\nwrote {RNP}/pocket_bias_records.json",file=sys.stderr)
+          open(RNP / "pocket_bias_records.json",'w'),indent=1,default=str)
+print(f"\nwrote {RNP / 'pocket_bias_records.json'}",file=sys.stderr)

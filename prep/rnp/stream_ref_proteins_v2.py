@@ -9,14 +9,17 @@ Resumable: if OUT exists and has all wanted paths, skip.
 """
 import tarfile, json, pickle, sys, time, os, re
 
+from _paths import parse_paths
+
 def strip_suffix(ch):
     # protenix auth_asym_id has a model suffix ('B0'->'B'); leave plain ids unchanged
     m=re.match(r'^([A-Za-z]+)\d*$', ch)
     return m.group(1) if m else ch
 
-TAR="/Users/rafalwiewiora/rnp_data/prediction_files.tar.gz"
-PLAN="/Users/rafalwiewiora/rnp_data/rnp_quiz_plan_v2.pkl"
-OUT="/tmp/ref_protein_atoms_v2.pkl"
+paths = parse_paths(__doc__)
+TAR = paths.rnp_dir / "prediction_files.tar.gz"
+PLAN = paths.rnp_dir / "rnp_quiz_plan_v2.pkl"
+OUT = str(paths.work_dir / "ref_protein_atoms_v2.pkl")
 
 plan=pickle.load(open(PLAN,'rb'))
 want={p['ref_path'] for p in plan}

@@ -9,8 +9,9 @@ from collections import defaultdict
 from statistics import median, mean
 import numpy as np, gemmi, warnings
 warnings.filterwarnings("ignore")
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent/"viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline

@@ -13,15 +13,49 @@ For each quiz item we need, per Boltz-2 YAML:
 Writes quiz/boltz_inputs/<id>.yaml. Unresolvable ligands -> _unresolved.txt.
 Does NOT run Boltz-2. Read-only w.r.t. CAMEO/RCSB (only downloads ligand defs).
 """
-import json, sys, re, urllib.request
+import argparse, json, sys, re, urllib.request
 from pathlib import Path
-import gemmi
 
-HERE = Path(__file__).resolve().parent
-CAMEO = Path("/Users/rafalwiewiora/cameo_data/extracted/modeling")
+from _paths import HERE, add_cameo_dir_argument, default_cameo_dir
+
+CAMEO = default_cameo_dir()
 OUT = HERE / "boltz_inputs"
 LIGCACHE = OUT / "_ligcache"
 UA = {"User-Agent": "Mozilla/5.0 (boltz-prep)"}
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_cameo_dir_argument(parser)
+    parser.add_argument(
+        "--quiz-items",
+        type=Path,
+        default=HERE / "quiz_items.json",
+        help="quiz item manifest (default: prep/cameo/quiz_items.json)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUT,
+        help="directory for generated YAML files (default: prep/cameo/boltz_inputs)",
+    )
+    return parser, parser.parse_args()
+
+
+_CLI = _parse_args() if __name__ == "__main__" else None
+if _CLI is not None:
+    _parser, _args = _CLI
+    CAMEO = _args.cameo_dir.expanduser().resolve()
+    if not CAMEO.is_dir():
+        _parser.error(
+            f"CAMEO directory does not exist: {CAMEO}. "
+            "Pass --cameo-dir or set FOLDARIUM_CAMEO_DIR."
+        )
+    quiz_items = _args.quiz_items.expanduser().resolve()
+    if not quiz_items.is_file():
+        _parser.error(f"quiz item manifest does not exist: {quiz_items}")
+
+import gemmi
 
 # A small, well-known set of standard CCD codes is fine to pass as ccd:, but to be
 # safe and uniform we resolve a SMILES for EVERY ligand from the RCSB ligand def.
@@ -103,9 +137,13 @@ def write_yaml(path, prot_seqs, lig_code, smiles):
 
 
 def main():
+    global CAMEO, OUT, LIGCACHE
+    parser, args = _CLI
+    OUT = args.output_dir.expanduser().resolve()
+    LIGCACHE = OUT / "_ligcache"
     OUT.mkdir(exist_ok=True)
     LIGCACHE.mkdir(exist_ok=True)
-    items = json.load(open(HERE / "quiz_items.json"))["items"]
+    items = json.load(open(args.quiz_items.expanduser().resolve()))["items"]
     print(f"{len(items)} quiz items")
 
     written, unresolved = [], []

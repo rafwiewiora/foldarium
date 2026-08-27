@@ -20,15 +20,18 @@ import tarfile, json, csv, pickle, sys, time, os, re
 from collections import defaultdict
 from rnp_matcher_v2 import parse_cif_chains, match_instances, strip_suffix
 
-RNP = "/Users/rafalwiewiora/rnp_data"
-TAR = f"{RNP}/prediction_files.tar.gz"
-PRED_DIR = f"{RNP}/predictions"
-OUT_IDX = f"{RNP}/cif_index_v2.json"
-OUT_TABLE = f"{RNP}/xmethod_plddt_table_v2.csv"
-OUT_CACHE = "/tmp/coords_cache_v2.pkl"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+RNP = paths.rnp_dir
+TAR = RNP / "prediction_files.tar.gz"
+PRED_DIR = RNP / "predictions"
+OUT_IDX = RNP / "cif_index_v2.json"
+OUT_TABLE = RNP / "xmethod_plddt_table_v2.csv"
+OUT_CACHE = str(paths.work_dir / "coords_cache_v2.pkl")
 
 METHODS = ['af3', 'boltz', 'boltz2', 'chai', 'protenix']
-CSV = {m: f"{PRED_DIR}/{m}.csv" for m in METHODS}
+CSV = {m: PRED_DIR / f"{m}.csv" for m in METHODS}
 
 # ---- load CSV metadata: (method,target,seed,sample,instchain) -> (rmsd, ranking_score)
 #      and inst_meta[(method,target)] = {instchain: (ccd, smiles)} (scored rows only for matching)
@@ -158,7 +161,7 @@ for member in tf:
     if processed % 50000 == 0:
         sys.stderr.write(f"[{int(time.time()-t0)}s] scanned {processed} members, indexed {matched} CIFs\n")
         sys.stderr.flush()
-        json.dump(index, open(OUT_IDX + '.partial', 'w'))
+        json.dump(index, open(str(OUT_IDX) + '.partial', 'w'))
         pickle.dump(cache, open(OUT_CACHE + '.partial', 'wb'), protocol=4)
         fout.flush()
     pm = parse_member(member.name)

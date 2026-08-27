@@ -2,13 +2,17 @@
 """Fetch RCSB initial_release_date for all target PDB ids (first 4 chars of target_system).
 Cache to JSON. Batched via GraphQL. For cross-check vs parquet's target_release_date."""
 import json, time, sys
-import pandas as pd
 import urllib.request
 
-CACHE = "/Users/rafalwiewiora/rnp_data/rcsb_release_dates.json"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+import pandas as pd
+
+CACHE = paths.rnp_dir / "rcsb_release_dates.json"
 URL = "https://data.rcsb.org/graphql"
 
-df = pd.read_parquet('/tmp/rnp_allsim.parquet', columns=['target_system'])
+df = pd.read_parquet(paths.work_dir / "rnp_allsim.parquet", columns=['target_system'])
 pdbs = sorted(set(df['target_system'].str[:4].str.upper().unique()))
 print(f"distinct target PDBs: {len(pdbs)}", flush=True)
 

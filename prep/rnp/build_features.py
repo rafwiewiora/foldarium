@@ -4,13 +4,17 @@
 Reuses consensus.py geometry: superpose each prediction's pocket-CA onto an af3 reference,
 transform ligand heavy atoms, greedy ligand-RMSD<2 clustering.
 
-Produces:
+Produces in the configured RnP data directory:
   - per-system feature rows (no ground truth used in features)
   - per-system candidate pose set with correctness labels (uses table rmsd for labels only)
-Writes /Users/rafalwiewiora/rnp_data/features_table.pkl and features_table.csv
+Writes features_table.pkl and features_table.csv.
 """
 import json, pickle, csv, sys, time, os, re
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
 KNOWN2={'CL','BR','NA','MG','ZN','FE','CA','MN','SE','SI','LI','CU','CO','NI','PT','AS','SB','SN','HG','CD','AG','AU','PD','BA','SR','CS','RB','TE','GE','GA','AL','TI','CR','MO','RU','RH','IR','OS','RE','HF','TA','ZR','NB','PB','BI','TL','IN','BE','SC'}
@@ -19,12 +23,12 @@ def elem_of(name):
     if len(s)>=2 and s[:2] in KNOWN2: return s[:2]
     return s[0]
 
-CACHE=os.environ.get("CACHE","/tmp/coords_cache.pkl")
-IDX="/tmp/cif_index.json"
-TABLE="/Users/rafalwiewiora/rnp_data/xmethod_plddt_table.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-OUTPKL="/Users/rafalwiewiora/rnp_data/features_table.pkl"
-OUTCSV="/Users/rafalwiewiora/rnp_data/features_table.csv"
+CACHE = os.environ.get("CACHE", str(paths.work_dir / "coords_cache.pkl"))
+IDX = paths.work_dir / "cif_index.json"
+TABLE = paths.rnp_dir / "xmethod_plddt_table.csv"
+ANNOT = paths.annotations
+OUTPKL = paths.rnp_dir / "features_table.pkl"
+OUTCSV = paths.rnp_dir / "features_table.csv"
 CLUSTER_THRESH=2.0
 POCKET_CA_R=12.0
 METHODS=['af3','boltz','chai','protenix']

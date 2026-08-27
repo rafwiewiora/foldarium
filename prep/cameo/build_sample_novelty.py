@@ -29,8 +29,9 @@ import json, sys, time, random, argparse
 from pathlib import Path
 from collections import defaultdict
 
-HERE = Path(__file__).resolve().parent
-VIEWER = HERE.parent / "viewer"
+from _paths import BENCHMARK_PREP, HERE
+
+VIEWER = BENCHMARK_PREP
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VIEWER))
 

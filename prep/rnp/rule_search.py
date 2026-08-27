@@ -6,11 +6,16 @@ Loads features_table.pkl (per-system blind features + candidate poses with corre
 Evaluates accuracy on POOL-ORACLE systems (oracle=100% by construction).
 Reports ALL and NOVEL, vs baselines. Honest grouped-CV for the learned tree.
 """
-import pickle, json, sys, numpy as np
+import pickle, json, sys
 from collections import defaultdict
 
-PKL="/Users/rafalwiewiora/rnp_data/features_table.pkl"
-OUT="/Users/rafalwiewiora/rnp_data/rule_search_results.json"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+import numpy as np
+
+PKL = paths.rnp_dir / "features_table.pkl"
+OUT = paths.rnp_dir / "rule_search_results.json"
 METHODS=['af3','boltz','chai','protenix']
 
 D=pickle.load(open(PKL,'rb'))

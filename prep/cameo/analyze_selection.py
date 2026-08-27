@@ -6,8 +6,9 @@ import json, glob, re, sys
 from pathlib import Path
 from statistics import median
 import numpy as np, gemmi
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / "viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, prep_poses as pp, build_quiz_items as bq
 
 def lig_coords(model, chain, resname):

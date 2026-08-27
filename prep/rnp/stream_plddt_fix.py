@@ -3,9 +3,12 @@
 import tarfile, json, csv, sys, time, re
 from collections import defaultdict
 
-TAR="/Users/rafalwiewiora/rnp_data/prediction_files.tar.gz"
-index=json.load(open('/tmp/cif_index.json'))
-TABLE="/Users/rafalwiewiora/rnp_data/xmethod_plddt_table.csv"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__ or "Re-process prediction files with missing ligand pLDDT values.")
+TAR = paths.rnp_dir / "prediction_files.tar.gz"
+index = json.load(open(paths.work_dir / "cif_index.json"))
+TABLE = paths.rnp_dir / "xmethod_plddt_table.csv"
 
 # find paths still missing: build set of (path) where some entry's method in {protenix} or chai-miss.
 # Simpler: reprocess any path whose entries belong to method protenix or chai.
@@ -79,5 +82,8 @@ for member in tf:
         sys.stderr.write(f"[{int(time.time()-t0)}s] {matched}/{len(want)}\n");sys.stderr.flush()
 tf.close()
 sys.stderr.write(f"fix DONE matched={matched} stillmiss={stillmiss}\n")
-json.dump({f"{'|'.join(k)}":v for k,v in fixed.items()}, open('/tmp/fixed_plddt.json','w'))
+json.dump(
+    {f"{'|'.join(k)}": v for k, v in fixed.items()},
+    open(paths.work_dir / "fixed_plddt.json", "w"),
+)
 print("saved fixed:",len(fixed))
