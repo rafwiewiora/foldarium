@@ -269,6 +269,7 @@ export function createQuizBackend({
   let flushAgain = false;
   const enqueueFailures = new Map();
   const weeklyNamedSessionIds = new Set();
+  const weeklyPostRevealSessionIds = new Set();
 
   const enqueue = (kind, value, { warnOnFailure = true } = {}) => {
     const entry = { kind, value };
@@ -440,7 +441,8 @@ export function createQuizBackend({
       return id;
     },
     async startNamedSession({
-      id = uuid(), source, difficulty, weeklyRoundId = null, displayName, initialAppState = null,
+      id = uuid(), source, difficulty, weeklyRoundId = null, displayName,
+      initialAppState = null, postReveal = false,
     }) {
       const normalizedName = String(displayName || '').trim().replace(/\s+/g, ' ');
       if (!id || !['cameo', 'rnp', 'weekly'].includes(source)
@@ -454,13 +456,15 @@ export function createQuizBackend({
       if (source === 'weekly') {
         const appState = initialAppState == null
           ? null : normalizeJsonObject(initialAppState, 'Initial app state');
-        await leaderboardRpc('start_named_weekly_quiz_session', {
+        await leaderboardRpc(postReveal
+          ? 'start_named_weekly_post_reveal_session'
+          : 'start_named_weekly_quiz_session', {
           p_session_id: id,
           p_round_id: weeklyRoundId,
           p_display_name: normalizedName,
           p_initial_app_state: appState,
         }, true);
-        weeklyNamedSessionIds.add(id);
+        (postReveal ? weeklyPostRevealSessionIds : weeklyNamedSessionIds).add(id);
       } else {
         await leaderboardRpc('start_named_quiz_session', {
           p_session_id: id,
@@ -471,11 +475,13 @@ export function createQuizBackend({
       }
       return id;
     },
-    async resumeNamedWeeklySession({ sessionId, roundId }) {
+    async resumeNamedWeeklySession({ sessionId, roundId, postReveal = false }) {
       if (!sessionId || !roundId) {
         throw new Error('Named weekly session resumption identity is invalid.');
       }
-      const rows = await leaderboardRpc('resume_named_weekly_quiz_session', {
+      const rows = await leaderboardRpc(postReveal
+        ? 'resume_named_weekly_post_reveal_session'
+        : 'resume_named_weekly_quiz_session', {
         p_session_id: sessionId,
         p_round_id: roundId,
       }, true);
@@ -487,7 +493,7 @@ export function createQuizBackend({
         || Number(rows[0]?.last_visit_started_at) < -1) {
         throw new Error('Named weekly session resumption response is invalid.');
       }
-      weeklyNamedSessionIds.add(sessionId);
+      (postReveal ? weeklyPostRevealSessionIds : weeklyNamedSessionIds).add(sessionId);
       return {
         sessionId,
         nextVisitOrdinal: Number(rows[0].next_visit_ordinal),
@@ -524,6 +530,14 @@ export function createQuizBackend({
     },
     completeSession(sessionId) {
       if (!sessionId) return;
+      if (weeklyPostRevealSessionIds.has(sessionId)) {
+        void leaderboardRpc('complete_named_weekly_post_reveal_session', {
+          p_session_id: sessionId,
+        }, true).catch(error => {
+          console.warn('Post-reveal session completion was not saved:', error.message);
+        });
+        return;
+      }
       if (weeklyNamedSessionIds.has(sessionId)) {
         void leaderboardRpc('complete_named_weekly_quiz_session', {
           p_session_id: sessionId,
@@ -551,9 +565,11 @@ export function createQuizBackend({
       if (!Array.isArray(rows)) throw new Error('Weekly quiz round response is invalid.');
       return rows[0] ?? null;
     },
-    async getWeeklyVotes(roundId) {
+    async getWeeklyVotes(roundId, { postReveal = false } = {}) {
       if (!roundId) throw new Error('Weekly round identity is invalid.');
-      return (await leaderboardRpc('get_my_weekly_quiz_votes', {
+      return (await leaderboardRpc(postReveal
+        ? 'get_my_weekly_post_reveal_votes'
+        : 'get_my_weekly_quiz_votes', {
         p_round_id: roundId,
       }, true)) ?? [];
     },
@@ -639,7 +655,7 @@ export function createQuizBackend({
     },
     async submitWeeklyVoteAttempt({
       voteAttemptId = uuid(), sessionId, roundId, itemId, questionIndex, choiceId, pickedNone,
-      viewerTrace = null, appState = null, voteComment = null,
+      viewerTrace = null, appState = null, voteComment = null, postReveal = false,
     }) {
       if (!voteAttemptId || !sessionId || !roundId || !itemId || !Number.isInteger(questionIndex)
         || questionIndex < 0 || typeof pickedNone !== 'boolean') {
@@ -663,7 +679,9 @@ export function createQuizBackend({
       const stateFromTrace = normalizedTrace.value?.app_state;
       const submittedState = normalizedState || (stateFromTrace && typeof stateFromTrace === 'object'
         ? normalizeJsonObject(stateFromTrace, 'Weekly app state') : null);
-      return leaderboardRpc('submit_weekly_quiz_vote_attempt', {
+      return leaderboardRpc(postReveal
+        ? 'submit_weekly_post_reveal_vote_attempt'
+        : 'submit_weekly_quiz_vote_attempt', {
         p_vote_attempt_id: voteAttemptId,
         p_session_id: sessionId,
         p_round_id: roundId,

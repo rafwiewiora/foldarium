@@ -430,6 +430,7 @@ function saveWeeklyResumePosition(questionIndex = idx) {
       sessionId: remoteSessionId,
       roundId: WEEKLY_ROUND.round_id,
       questionIndex,
+      phase: WEEKLY_ROUND.public_status === 'revealed' ? 'post_reveal' : 'blind',
     });
   } catch (error) {
     console.warn('Weekly refresh position was not saved:', error.message);
@@ -465,6 +466,7 @@ function setVoteStatus(message, state) {
 
 function startWeeklyThinkingTrace() {
   if (quizSource !== 'weekly' || !remoteSessionId || isRetrospectiveReview()
+      || WEEKLY_ROUND?.public_status === 'revealed'
       || typeof window.createWeeklyTraceStream !== 'function') return;
   try {
     void weeklyTraceStream?.dispose?.();
@@ -3125,7 +3127,7 @@ function showIntro() {
     $('#setuphint').innerHTML = isRetrospectiveReview()
       ? `${pool.length} retrospective questions.`
       : (status === 'revealed'
-        ? `${pool.length} prospective weekly ensembles · Wednesday results are available.`
+        ? `${pool.length} prospective weekly ensembles · results are available; new votes are recorded as post-reveal and excluded from blind-week scores.`
         : (status === 'open'
           ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
           : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`));
@@ -4105,11 +4107,15 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#protmode').style.display = (quizSource === 'rnp' || quizSource === 'weekly') ? 'none' : '';
   $('#lbl-af3').textContent = oppLabel();
   $('#lock').textContent = quizSource === 'weekly'
-    ? ((WEEKLY_ROUND?.public_status === 'revealed' || isRetrospectiveReview()) ? 'Show result' : 'Record vote')
+    ? (isRetrospectiveReview() ? 'Show result'
+      : (WEEKLY_ROUND?.public_status === 'revealed'
+        ? 'Record post-reveal vote'
+        : 'Record vote'))
     : 'Lock in answer';
   // Read-only Previews should still expose the dialog for visual/interaction
   // testing; only the database-backed Send action remains unavailable.
-  $('#suggestion-open').disabled = !(remoteSessionId || isReadOnlyPreview());
+  $('#suggestion-open').disabled = WEEKLY_ROUND?.public_status === 'revealed'
+    || !(remoteSessionId || isReadOnlyPreview());
   startWeeklyThinkingTrace();
   const questionIndex = Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
   loadQuestion(questionIndex);
@@ -4122,7 +4128,9 @@ async function resumeWeeklyQuizIfAvailable() {
   const store = window.foldariumWeeklySessionResume;
   const token = store?.read?.();
   if (!token) return false;
-  if (token.round_id !== WEEKLY_ROUND.round_id) {
+  const postReveal = WEEKLY_ROUND.public_status === 'revealed';
+  const expectedPhase = postReveal ? 'post_reveal' : 'blind';
+  if (token.round_id !== WEEKLY_ROUND.round_id || token.phase !== expectedPhase) {
     store.clear?.();
     return false;
   }
@@ -4132,6 +4140,7 @@ async function resumeWeeklyQuizIfAvailable() {
     const resumed = await backend.resumeNamedWeeklySession({
       sessionId: token.session_id,
       roundId: token.round_id,
+      postReveal,
     });
     remoteSessionId = resumed.sessionId;
     weeklyTraceSessionSeed = {
@@ -4180,8 +4189,7 @@ async function startQuiz() {
     input.focus();
     return;
   }
-  if (isReadOnlyPreview() || isRetrospectiveReview()
-    || (quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed')) {
+  if (isReadOnlyPreview() || isRetrospectiveReview()) {
     remoteSessionId = null;
     participantDisplayName = displayName;
     beginQuiz();
@@ -4204,6 +4212,7 @@ async function startQuiz() {
           leaderboard_name_version: 1,
         }
         : currentReplayableAppState(),
+      postReveal: quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed',
     });
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
@@ -4443,7 +4452,7 @@ async function reveal() {
   $('#lock').disabled = true;
   syncQuestionNavigation();
   try {
-    if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isRetrospectiveReview()) {
+    if (quizSource === 'weekly' && !isRetrospectiveReview() && !isReadOnlyPreview()) {
       setVoteStatus('Recording…', 'recording');
       await finalizeReveal();
     } else {
@@ -4458,9 +4467,13 @@ async function reveal() {
 
 async function finalizeReveal() {
   if (cur.selected == null || cur.revealed) return;
-  if (quizSource === 'weekly' && WEEKLY_ROUND?.public_status !== 'revealed' && !isRetrospectiveReview()) {
-    await finalizeWeeklyVote();
-    return;
+  const postRevealVote = quizSource === 'weekly'
+    && WEEKLY_ROUND?.public_status === 'revealed'
+    && !isRetrospectiveReview()
+    && !isReadOnlyPreview();
+  if (quizSource === 'weekly' && !isRetrospectiveReview() && !isReadOnlyPreview()) {
+    const saved = await finalizeWeeklyVote({ postReveal: postRevealVote });
+    if (!saved || !postRevealVote) return;
   }
   const viewerTrace = viewerTraceRecorder?.stop({ appState: currentReplayableAppState() }) ?? null;
   await viewerRebuild.enqueue(() => {
@@ -4483,7 +4496,8 @@ async function finalizeReveal() {
   score.randExp += (nCorrect || (difficulty === 'hard' ? 1 : 0)) / opts;
   renderRevealedQuestionUi();
   updateScore();
-  if (!isRetrospectiveReview()) logAnswer(picked, af3, viewerTrace);
+  if (!isRetrospectiveReview() && !postRevealVote) logAnswer(picked, af3, viewerTrace);
+  if (postRevealVote) rememberWeeklyItemState();
 }
 
 function renderRevealedQuestionUi() {
@@ -4521,7 +4535,10 @@ function renderRevealedQuestionUi() {
       + (!cur.item.has_correct ? ` (can’t answer “none”)` : '')
     : '';
   const v = $('#verdict'); v.style.display = '';
-  v.innerHTML = `<strong style="color:${youRight ? 'var(--good)' : 'var(--bad)'}">${youRight ? 'Correct' : 'Not quite'}</strong>${detail}`;
+  const postRevealNote = quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed'
+    ? '<span class="post-reveal-vote-note">Post-reveal vote recorded separately from blind-week results.</span>'
+    : '';
+  v.innerHTML = `<strong style="color:${youRight ? 'var(--good)' : 'var(--bad)'}">${youRight ? 'Correct' : 'Not quite'}</strong>${detail}${postRevealNote}`;
   $('#answer-ai').textContent = afMsg;
   $('#answer-details').hidden = !cur.showAnswer;
   if (cur.showAnswer) $('#answer-details').open = false;
@@ -4534,7 +4551,7 @@ function renderRevealedQuestionUi() {
   syncXtalRow();
 }
 
-async function finalizeWeeklyVote() {
+async function finalizeWeeklyVote({ postReveal = false } = {}) {
   const picked = cur.selected;
   const choiceId = picked.none ? null : picked._weeklyChoiceId;
   const verdict = $('#verdict'); verdict.style.display = '';
@@ -4580,6 +4597,7 @@ async function finalizeWeeklyVote() {
           : null,
         appState,
         voteComment: cur.voteCommentText,
+        postReveal,
       };
     }
     await backend.submitWeeklyVoteAttempt(cur.pendingWeeklyVote);
@@ -4602,6 +4620,10 @@ async function finalizeWeeklyVote() {
   cur.pendingWeeklyVote = null;
   cur.voteCommentHandled = false;
   cur.voteCommentText = null;
+  if (postReveal) {
+    rememberWeeklyItemState();
+    return true;
+  }
   rememberWeeklyItemState();
   if (idx + 1 < ITEMS.length) await loadQuestion(idx + 1);
   else {
@@ -4609,6 +4631,7 @@ async function finalizeWeeklyVote() {
     verdict.style.display = '';
     verdict.innerHTML = '<b style="color:var(--good)">All votes recorded.</b> Review or revise them with the arrows.';
   }
+  return true;
 }
 
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
@@ -5237,7 +5260,9 @@ async function init() {
       WEEKLY_ROUND = await backend?.getWeeklyRound() || null;
       if (WEEKLY_ROUND && backend) {
         const [votes, totals] = await Promise.all([
-          backend.getWeeklyVotes(WEEKLY_ROUND.round_id).catch(error => {
+          backend.getWeeklyVotes(WEEKLY_ROUND.round_id, {
+            postReveal: WEEKLY_ROUND.public_status === 'revealed',
+          }).catch(error => {
             console.warn('Weekly vote restoration unavailable:', error.message); return [];
           }),
           WEEKLY_ROUND.public_status === 'revealed'

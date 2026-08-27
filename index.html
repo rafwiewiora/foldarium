@@ -208,6 +208,7 @@
   .verdict[data-state="warning"]{border-color:#ddc283;background:#fff9e9;color:#795818}
   .verdict[data-state="error"]{border-color:#d7a2a7;background:#fff3f3;color:#862f39}
   .verdict strong{display:block;font-size:19px;margin-bottom:4px}
+  .post-reveal-vote-note{display:block;margin-top:7px;color:var(--muted);font:600 11px/1.4 var(--mono)}
   .score{border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:8px}
   .score .row{display:flex;justify-content:space-between}
   .score b{font-variant-numeric:tabular-nums}
@@ -657,7 +658,7 @@
 import './quiz-entry-mode.js';
 import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 import { createWeeklyTraceStream } from './weekly-trace-stream.js';
-import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
+import { createWeeklySessionResumeStore } from './weekly-session-resume.js?v=2026082701';
 import * as foldariumPrivateReview from './weekly-private-review.js';
 
 (function () {
@@ -790,7 +791,7 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608245');
+      await loadScript('app.js?v=202608246');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

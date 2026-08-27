@@ -26,7 +26,7 @@ test('weekly thinking trace covers periodic, navigation, vote, visibility, and c
 test('classic answer persistence keeps its legacy viewer trace path', async () => {
   const app = await readFile(appUrl, 'utf8');
   assert.match(app, /const viewerTrace = viewerTraceRecorder\?\.stop/);
-  assert.match(app, /updateScore\(\);\s*if \(!isRetrospectiveReview\(\)\) logAnswer\(picked, af3, viewerTrace\)/);
+  assert.match(app, /updateScore\(\);\s*if \(!isRetrospectiveReview\(\) && !postRevealVote\) logAnswer\(picked, af3, viewerTrace\)/);
   assert.match(app, /recordAnswer\(remoteSessionId, idx, \{ \.\.\.rec, viewer_trace: viewerTrace \}\)/);
 });
 

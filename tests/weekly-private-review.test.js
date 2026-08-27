@@ -200,12 +200,12 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.match(html, /id="xtal-status"/);
   assert.match(html, /applyPrivateReviewBundleWhenReady/);
   assert.match(html, /foldarium-private-review-ready/);
-  assert.match(html, /app\.js\?v=202608245/);
+  assert.match(html, /app\.js\?v=202608246/);
   assert.match(app, /if \(WEEKLY_ONLY\) \{\s*showIntro\(\);\s*await startQuiz\(\);\s*\}/);
   assert.doesNotMatch(app, /Private pre-close review loaded|Answers stay non-public/);
   assert.doesNotMatch(app, /readStoredBundle/);
   assert.doesNotMatch(app, /if \(privateBundle\)/);
-  assert.match(app, /if \(!isRetrospectiveReview\(\)\) logAnswer/);
+  assert.match(app, /if \(!isRetrospectiveReview\(\) && !postRevealVote\) logAnswer/);
   assert.doesNotMatch(app, /applyPrivateReviewRound/);
 });
 

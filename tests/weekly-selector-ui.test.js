@@ -299,7 +299,7 @@ test('programmatic additions do not replace the manual Weekly session and vote f
   const [app, html] = await Promise.all([read('app.js'), read('index.html')]);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(app, /submitWeeklyVoteAttempt\(/);
-  assert.match(app, /async function finalizeWeeklyVote\(\)/);
+  assert.match(app, /async function finalizeWeeklyVote\(\{ postReveal = false \} = \{\}\)/);
   assert.match(html, /id="participant-name"/);
   assert.match(html, /id="choices"/);
   assert.match(html, /id="lock"/);
