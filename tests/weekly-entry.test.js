@@ -65,6 +65,7 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /Review the released Xtal structure/);
   assert.match(app, /retrospectiveLink\.href = `\/weekly\?retrospective_round=\$\{encodeURIComponent\(WEEKLY_ROUND\.round_id\)\}`/);
   assert.match(app, /showRevealedModes[\s\S]*start'\)\.style\.display/);
+  assert.match(app, /crystalReviewAllowed = cur\?\.item\?\.source !== 'weekly' \|\| isRetrospectiveReview\(\)/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {
