@@ -32,10 +32,12 @@ subject to wwPDB usage and attribution policies. CAMEO metadata and prediction
 outputs remain subject to the originating service's terms. Runs-n-Poses inputs
 come from its published release and retain that release's terms.
 
-Checked-in molecular files are research/demo fixtures. Their inclusion does
-not grant rights to redistribute unrelated upstream archives, model weights,
-or generated prediction collections. Preserve accession identifiers and cite
-the originating databases and methods in scientific use.
+Optional molecular research/demo files are distributed separately through
+[`rafwiewiora/foldarium-data`](https://github.com/rafwiewiora/foldarium-data).
+Their availability does not grant rights to redistribute unrelated upstream
+archives, model weights, or generated prediction collections. Preserve
+accession identifiers and cite the originating databases and methods in
+scientific use.
 
 ## Generated artifacts
 
