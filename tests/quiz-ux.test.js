@@ -76,7 +76,7 @@ test('One at a time exposes review controls during voting and retrospective revi
   assert.match(html, /id="one-select"[^>]*>Select<\/button>/);
   assert.match(html, /id="one-reject"[^>]*>Reject<\/button>/);
   assert.match(app, /const retrospective = !!choice && retrospectiveAnswerActive\(\)/);
-  assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly'[\s\S]*&& \(!cur\.revealed \|\| retrospective\)[\s\S]*&& !\(retrospective && isArchiveRetrospective\(\)\)/);
+  assert.match(app, /const visible = !!choice && cur\.item\.source === 'weekly'[\s\S]*&& \(!cur\.revealed \|\| retrospective\);/);
   assert.match(app, /if \(!cur \|\| displayMode !== 'one'\) return null/);
   assert.match(app, /Click a ligand to zoom in; click white space to/);
   assert.match(app, /setVoteStatus\('Recording…', 'recording'\)/);
