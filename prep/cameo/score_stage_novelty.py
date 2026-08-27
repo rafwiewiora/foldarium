@@ -27,29 +27,24 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "pipeline" / "src"))
-sys.path.insert(0, str(REPOSITORY_ROOT / "benchmark" / "prep"))
 
-import numpy as np  # noqa: E402
-
-import build_training_similarity as bts  # noqa: E402
 from foldarium_pipeline.contracts import canonical_json, stable_id  # noqa: E402
 from foldarium_pipeline.supabase import SupabaseCoordinator  # noqa: E402
-
-CUTOFF = "2021-09-30"
-NOVEL_THRESHOLD = 0.25
-SCORER_VERSION = "foldseek-pdb100-carried-ligand-overlap/v1"
+from foldarium_pipeline.training_similarity import (  # noqa: E402
+    NOVELTY_THRESHOLD,
+    TRAINING_CUTOFF,
+    atom_cloud_for_residue,
+    collect_training_analogs,
+    download_rcsb_structure,
+    file_sha256,
+    read_model,
+    search_pre_cutoff,
+    similarity_result,
+)
 
 
 class StageNoveltyError(RuntimeError):
     """Raised when a staged item cannot be classified safely."""
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _load_object(path: Path, label: str) -> dict[str, Any]:
@@ -71,19 +66,11 @@ def _save_object(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def _stage_ligand(model: Any) -> Any:
-    candidates = [
-        residue
-        for chain in model
-        for residue in chain
-        if residue.het_flag == "H" and not residue.is_water()
-    ]
-    if len(candidates) != 1:
-        raise StageNoveltyError("xtal_lig.pdb must contain exactly one ligand residue")
-    return candidates[0]
-
-
-def score_item(item: dict[str, Any], stage: Path) -> dict[str, Any]:
+def score_item(
+    item: dict[str, Any],
+    stage: Path,
+    cache: Path | None = None,
+) -> dict[str, Any]:
     """Return one complete novelty record or raise without a classification."""
 
     item_id = str(item.get("id", "")).upper()
@@ -95,100 +82,46 @@ def score_item(item: dict[str, Any], stage: Path) -> dict[str, Any]:
     if not protein_path.is_file() or not ligand_path.is_file():
         raise StageNoveltyError("staged protein or crystal ligand is missing")
 
-    protein_model = bts.load(str(protein_path))
-    ligand_model = bts.load(str(ligand_path))
-    query_ligand = _stage_ligand(ligand_model)
-    query_positions, query_radii = bts.lig_arrays(query_ligand)
-    sequence = bts.longest_seq(protein_model)
-    if not sequence:
-        raise StageNoveltyError("staged protein has no searchable polymer")
-
-    hits = bts.search_pre_cutoff(sequence, item_id, _cif=str(protein_path))
-    if hits is None:
-        raise StageNoveltyError("Foldseek search failed; novelty remains unknown")
-    maximum_identity = max(
-        (hit["identity"] for hit in hits if hit.get("identity") is not None),
-        default=None,
+    cache_directory = cache or stage / "_novelty-cache"
+    ligand_model = read_model(ligand_path)
+    ligand_residues = [
+        residue
+        for chain in ligand_model
+        for residue in chain
+        if residue.het_flag == "H" and not residue.is_water()
+    ]
+    if len(ligand_residues) != 1:
+        raise StageNoveltyError(
+            "xtal_lig.pdb must contain exactly one ligand residue"
+        )
+    query_ligand = atom_cloud_for_residue(ligand_residues[0])
+    hits = search_pre_cutoff(
+        protein_path,
+        exclude_pdb=item_id,
+        cache_directory=cache_directory,
+        cache_label="cameo",
     )
-    query_polymer = bts._first_poly(protein_model)
-    query_ca = bts._poly_ca(query_polymer) if query_polymer is not None else None
-    if query_ca is None:
-        raise StageNoveltyError("staged protein has no Foldseek-aligned polymer")
-
-    best: tuple[float, str, str, float, float | None] | None = None
-    for hit in hits[:25]:
-        if not hit.get("qAln"):
-            continue
-        try:
-            reference_model = bts.load(hit["pdb"])
-            superposition = bts.align_superpose(hit, query_ca, query_positions)
-        except Exception:
-            continue
-        if superposition is None:
-            continue
-        transform, rmsd, _local_residues = superposition
-        if rmsd > bts.MAX_LOCAL_RMSD:
-            continue
-        ligand_names = sorted(
-            {
-                residue.name
-                for chain in reference_model
-                for residue in chain
-                if not residue.is_water()
-                and residue.het_flag == "H"
-                and bts.druglike(residue.name)
-            }
-        )
-        for ligand_name in ligand_names:
-            reference_ligand = bts.lig_atoms(reference_model, ligand_name)
-            if reference_ligand is None:
-                continue
-            atoms = [atom for atom in reference_ligand if atom.element.name != "H"]
-            carried = [transform.apply(atom.pos) for atom in atoms]
-            reference_positions = np.array([[pos.x, pos.y, pos.z] for pos in carried])
-            reference_radii = np.array([bts.vdw(atom.element.name) for atom in atoms])
-            overlap = bts.vol_tanimoto(
-                query_positions, query_radii, reference_positions, reference_radii
-            )
-            if best is None or overlap > best[0]:
-                best = (overlap, hit["pdb"], ligand_name, rmsd, hit.get("identity"))
-
-    result: dict[str, Any] = {
-        "item_id": item_id,
-        "week": item.get("week"),
-        "ligand": item.get("ligand"),
-        "protein_sha256": _sha256(protein_path),
-        "xtal_ligand_sha256": _sha256(ligand_path),
-        "cutoff": CUTOFF,
-        "novel_threshold": NOVEL_THRESHOLD,
-        "scorer_version": SCORER_VERSION,
-        "foldseek_database": "pdb100",
-        "train_max_protein_identity": (
-            round(maximum_identity, 3) if maximum_identity is not None else None
+    analogs, failures = collect_training_analogs(
+        protein_path,
+        query_ligand,
+        hits,
+        reference_loader=lambda pdb_id: download_rcsb_structure(
+            pdb_id, cache_directory
         ),
-        "evaluated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if best is None:
-        result.update(
-            {
-                "train_pdb": None,
-                "train_het": None,
-                "train_identity": None,
-                "train_align_rmsd": None,
-                "train_shape_overlap": None,
-                "novel": True,
-            }
+    )
+    result = similarity_result(query_ligand, analogs, failures, hits)
+    if result["classification"] == "unknown":
+        raise StageNoveltyError(
+            "training candidate evaluation failed; novelty remains unknown"
         )
-        return result
-    overlap, pdb_id, ligand_name, rmsd, identity = best
     result.update(
         {
-            "train_pdb": pdb_id,
-            "train_het": ligand_name,
-            "train_identity": round(identity, 3) if identity is not None else None,
-            "train_align_rmsd": round(rmsd, 2),
-            "train_shape_overlap": round(overlap, 3),
-            "novel": overlap < NOVEL_THRESHOLD,
+            "item_id": item_id,
+            "week": item.get("week"),
+            "ligand": item.get("ligand"),
+            "protein_sha256": file_sha256(protein_path),
+            "xtal_ligand_sha256": file_sha256(ligand_path),
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
     return result
@@ -249,8 +182,8 @@ def curation_rows(results: dict[str, Any]) -> list[dict[str, Any]]:
         provenance = {
             "scorer_version": result.get("scorer_version"),
             "foldseek_database": result.get("foldseek_database"),
-            "cutoff": result.get("cutoff"),
-            "novel_threshold": result.get("novel_threshold"),
+            "cutoff": result.get("cutoff", TRAINING_CUTOFF),
+            "novel_threshold": result.get("novel_threshold", NOVELTY_THRESHOLD),
             "protein_sha256": result.get("protein_sha256"),
             "xtal_ligand_sha256": result.get("xtal_ligand_sha256"),
             "evaluated_at": result.get("evaluated_at"),
@@ -323,11 +256,6 @@ def main(argv: list[str] | None = None) -> int:
     results = _load_object(output, "novelty output") if output.exists() else {}
     only = {value.strip().upper() for value in args.only.split(",")} if args.only else None
 
-    bts.FSHITS = cache / "foldseek-hits"
-    bts.REFCACHE = cache / "rcsb-structures"
-    bts.FSHITS.mkdir(parents=True, exist_ok=True)
-    bts.REFCACHE.mkdir(parents=True, exist_ok=True)
-
     completed = 0
     for item in items:
         if not isinstance(item, dict):
@@ -338,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         if item_id in results and only is None:
             continue
         try:
-            result = score_item(item, stage)
+            result = score_item(item, stage, cache)
         except Exception as exc:
             print(f"{item_id}: HARD-ERROR {type(exc).__name__}: {str(exc)[:160]}", flush=True)
             break
