@@ -68,6 +68,9 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /retrospectiveLink\.href = `\/weekly\?retrospective_round=\$\{encodeURIComponent\(WEEKLY_ROUND\.round_id\)\}`/);
   assert.match(app, /showRevealedModes[\s\S]*start'\)\.style\.display/);
   assert.match(app, /crystalReviewAllowed = cur\?\.item\?\.source !== 'weekly' \|\| isRetrospectiveReview\(\)/);
+  assert.match(app, /quizSource === 'weekly' \? 'Ligand pLDDT'/);
+  assert.match(app, /plddt_pick_sample: plddtPick\?\.af3_sample \?\? -1/);
+  assert.match(app, /opponentChoiceCorrect = choice => quizSource === 'weekly'[\s\S]*choice\?\.correct === true/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {

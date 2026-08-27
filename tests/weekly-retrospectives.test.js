@@ -8,6 +8,7 @@ import {
   ARCHIVE_ALL_TIME_FORMAT_VERSION,
   ARCHIVE_DETAIL_FORMAT_VERSION,
   ARCHIVE_LIST_FORMAT_VERSION,
+  LIGAND_PLDDT_BASELINE_IDENTITY,
   canonicalJson,
   decodeArchiveCursor,
   projectPublicAssetUri,
@@ -116,6 +117,13 @@ function buildWeek({
           pose_uri: 'supabase://structures/weekly/pose-a.pdb',
           cluster_id: 'cluster-a',
           is_rep: true,
+          confidence: {
+            metric: 'ligand_plddt',
+            value: 80,
+            scale_min: 0,
+            scale_max: 100,
+            aggregation: 'arithmetic-mean-selected-ligand-heavy-atoms',
+          },
           smina_score: {
             metric: 'smina_affinity',
             protocol: 'score_only',
@@ -131,6 +139,13 @@ function buildWeek({
           pose_uri: 'supabase://structures/weekly/pose-b.pdb',
           cluster_id: 'cluster-b',
           is_rep: true,
+          confidence: {
+            metric: 'ligand_plddt',
+            value: 90,
+            scale_min: 0,
+            scale_max: 100,
+            aggregation: 'arithmetic-mean-selected-ligand-heavy-atoms',
+          },
           smina_score: {
             metric: 'smina_affinity',
             protocol: 'score_only',
@@ -578,6 +593,12 @@ test('list uses newest-first opaque keyset cursors and validates limits', async 
   assert.equal(first.body.publications[0].summary.human_participant_count, 1);
   assert.equal(first.body.publications[0].summary.human_entries[0].participant, 'PocketFox');
   assert.equal(first.body.publications[0].summary.automated_entries[0].participant, 'Claude Opus');
+  assert.deepEqual(
+    first.body.publications[0].summary.automated_entries.find(
+      row => row.participant === LIGAND_PLDDT_BASELINE_IDENTITY,
+    ),
+    score(LIGAND_PLDDT_BASELINE_IDENTITY, 'baseline', 0),
+  );
   assert.equal(first.body.publications[0].summary.automated_winner.participant, 'Claude Opus');
   assert.ok(first.body.next_cursor);
   assert.doesNotMatch(first.body.next_cursor, /weekly|archive/);
@@ -645,6 +666,12 @@ test('public API reveals chosen pseudonyms even for a one-player artifact', asyn
       display_names: ['PocketFox'],
     }],
   });
+  assert.deepEqual(
+    detail.body.retrospective.questions[0].automated_entries.find(
+      row => row.participant === LIGAND_PLDDT_BASELINE_IDENTITY,
+    ),
+    responseRow(LIGAND_PLDDT_BASELINE_IDENTITY, 'baseline', 'choice-b', false),
+  );
   assert.match(detail.serialized, /PocketFox/);
 });
 
