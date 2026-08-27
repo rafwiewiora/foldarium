@@ -1,8 +1,8 @@
 export const OUTCOME_FILTERS = Object.freeze([
-  ['pose-solved', 'Correct pose · solved'],
-  ['pose-unsolved', 'Correct pose · unsolved'],
-  ['none-solved', 'None · solved'],
-  ['none-unsolved', 'None · unsolved'],
+  ['pose-solved', 'Pose · human correct'],
+  ['pose-unsolved', 'Pose · no human correct'],
+  ['none-solved', 'None · human correct'],
+  ['none-unsolved', 'None · no human correct'],
 ]);
 
 const OUTCOME_LABELS = new Map(OUTCOME_FILTERS);
@@ -63,7 +63,7 @@ function formatKind(value) {
 export function buildOutcomeRail(outcomes, documentRef = document) {
   const rail = documentRef.createElement('div');
   rail.className = 'outcome-rail';
-  rail.setAttribute('aria-label', 'Question outcomes');
+  rail.setAttribute('aria-label', 'Human outcomes as a share of questions');
   const knownTotal = OUTCOME_FILTERS.reduce((sum, [key]) => (
     sum + (Number(outcomes?.[key.replace('-', '_')]) || 0)
   ), 0);
@@ -77,6 +77,12 @@ export function buildOutcomeRail(outcomes, documentRef = document) {
     name.textContent = label.replace('Correct pose · ', 'Pose ').replace('None · ', 'None ');
     const track = documentRef.createElement('span');
     track.className = 'rail-track';
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-label', label);
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', String(knownTotal));
+    track.setAttribute('aria-valuenow', String(count));
+    track.title = `${count} of ${knownTotal} questions`;
     const fill = documentRef.createElement('span');
     fill.className = 'rail-fill';
     fill.style.width = `${100 * count / total}%`;
@@ -91,6 +97,7 @@ export function buildOutcomeRail(outcomes, documentRef = document) {
 
 function buildOutcomeSummary(outcomes) {
   const summary = element('div', 'outcome-summary');
+  summary.append(element('span', 'outcome-caption', 'Human outcomes · share of questions'));
   summary.append(buildOutcomeRail(outcomes));
   const hidden = Number(outcomes?.suppressed) || 0;
   if (hidden) {
@@ -258,6 +265,11 @@ function answerLine(label, value) {
   return line;
 }
 
+export function humanAnswerSummary(human) {
+  const answered = Number(human?.answered_count) || 0;
+  return answered ? `${Number(human?.correct_count) || 0}/${answered} correct` : 'No answers';
+}
+
 function renderQuestionRow(row) {
   const node = element('article', 'question-row');
   node.dataset.outcome = row.outcome;
@@ -273,8 +285,8 @@ function renderQuestionRow(row) {
   const answers = element('div', 'answer-block');
   const human = row.question.human_aggregate;
   answers.append(answerLine(
-    'Players',
-    `${human.correct_count}/${human.answered_count} correct`,
+    'Human players',
+    humanAnswerSummary(human),
   ));
   for (const answer of human.answers || []) {
     answers.append(answerLine(
@@ -282,7 +294,11 @@ function renderQuestionRow(row) {
       answer.display_names.join(', '),
     ));
   }
-  for (const automated of row.question.automated_entries || []) {
+  const automatedEntries = row.question.automated_entries || [];
+  if (automatedEntries.length) {
+    answers.append(element('div', 'answer-section-label', 'Automated methods'));
+  }
+  for (const automated of automatedEntries) {
     answers.append(answerLine(
       automated.participant,
       `${choiceLabel(automated.choice_id, automated.picked_none, row.blindItem)} · ${automated.correct ? 'correct' : 'wrong'}`,
