@@ -230,7 +230,10 @@ const interactionBlocked = () => viewerTransitionBusy || revealRequested || lock
 const viewerControlBlocked = () => viewerTransitionBusy || revealRequested
   || (locked() && !retrospectiveAnswerActive());
 const oppLabel = () => (quizSource === 'rnp' ? 'Best automated pick (ligand pLDDT)'
-  : (quizSource === 'weekly' ? 'Weekly benchmark' : 'AlphaFold3 (pLDDT-ranked)'));
+  : (quizSource === 'weekly' ? 'Ligand pLDDT' : 'AlphaFold3 (pLDDT-ranked)'));
+const opponentChoiceCorrect = choice => quizSource === 'weekly'
+  ? choice?.correct === true
+  : acceptedChoiceCorrect(choice);
 
 function currentReplayableAppState({ includeVoteComment = false, continuousTrace = null } = {}) {
   const selectionKind = !cur?.selected ? null
@@ -4525,7 +4528,7 @@ async function finalizeReveal() {
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
-  const af3Right = !!(af3 && acceptedChoiceCorrect(af3));
+  const af3Right = !!(af3 && opponentChoiceCorrect(af3));
   score.n++; score.you += youRight; score.af3 += af3Right;
   bumpLocalWeeklyScore(youRight);
   const answerChoices = cur.answerChoices.length ? cur.answerChoices : cur.clusters.map(c => c.rep);
@@ -4544,7 +4547,7 @@ function renderRevealedQuestionUi() {
   const af3 = cur.clusters.flatMap(c => c.members)
     .find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
-  const af3Right = !!(af3 && acceptedChoiceCorrect(af3));
+  const af3Right = !!(af3 && opponentChoiceCorrect(af3));
   renderRevealList(picked, af3);
   $('#lock').style.display = 'none'; $('#choices').style.display = 'none';
   const bestMatch = cur.answerRevealBest ?? bestRawCorrectPose();
@@ -5179,6 +5182,13 @@ async function init() {
       });
       const ligand = typeof item.ligand === 'string'
         ? item.ligand : (item.ligand?.component_id || item.ligand?.name || 'ligand');
+      const plddtPick = [...choices]
+        .filter(choice => choice._confidence?.metric === 'ligand_plddt'
+          && Number.isFinite(choice._confidence.value))
+        .sort((left, right) => (
+          right._confidence.value - left._confidence.value
+          || left._weeklyChoiceId.localeCompare(right._weeklyChoiceId)
+        ))[0] || null;
       return {
         id: item.id,
         ligand,
@@ -5189,7 +5199,7 @@ async function init() {
         afpocket_union: item.pocket_uri || choices[0]?.afpocket_file,
         choices,
         n_clusters: new Set(choices.map(choice => choice.cluster)).size,
-        plddt_pick_sample: -1,
+        plddt_pick_sample: plddtPick?.af3_sample ?? -1,
         n_heavy: item.ligand?.heavy_atoms || HEAVY_MIN,
         source: 'weekly',
         clustering_available: clusteringAvailable,
