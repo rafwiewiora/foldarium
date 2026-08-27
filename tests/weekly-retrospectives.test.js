@@ -576,6 +576,8 @@ test('list uses newest-first opaque keyset cursors and validates limits', async 
     suppressed: 0,
   });
   assert.equal(first.body.publications[0].summary.human_participant_count, 1);
+  assert.equal(first.body.publications[0].summary.human_entries[0].participant, 'PocketFox');
+  assert.equal(first.body.publications[0].summary.automated_entries[0].participant, 'Claude Opus');
   assert.equal(first.body.publications[0].summary.automated_winner.participant, 'Claude Opus');
   assert.ok(first.body.next_cursor);
   assert.doesNotMatch(first.body.next_cursor, /weekly|archive/);

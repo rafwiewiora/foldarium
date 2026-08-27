@@ -173,6 +173,7 @@ let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
 let WEEKLY_QUESTION_RESULTS = null;
 let WEEKLY_ARCHIVE_DETAIL = null;
+let WEEKLY_RETROSPECTIVE_SUMMARY = null;
 let retrospectiveQuestionFilter = 'all';
 let WEEKLY_LEADERBOARD_ERROR = '';
 let localWeeklyScore = { correct: 0, answered: 0 };
@@ -3499,22 +3500,26 @@ function renderWeeklySelectorLeaderboard() {
     host.replaceChildren();
     return;
   }
+  const rows = WEEKLY_RETROSPECTIVE_SUMMARY?.automated_entries;
+  if (!Array.isArray(rows)) {
+    host.hidden = true;
+    host.replaceChildren();
+    return;
+  }
   host.hidden = false;
-  if (WEEKLY_SELECTOR_RESULTS_ERROR && !WEEKLY_SELECTOR_RESULTS) {
-    host.innerHTML = `<p class="hint">${escapeSelectorText(WEEKLY_SELECTOR_RESULTS_ERROR)}</p>`;
-    return;
-  }
-  const rows = WEEKLY_SELECTOR_RESULTS?.rows || [];
-  if (!WEEKLY_SELECTOR_RESULTS) {
-    host.innerHTML = '<p class="hint">Selector leaderboard is loading…</p>';
-    return;
-  }
   if (!rows.length) {
-    host.innerHTML = '<p class="hint">No complete programmatic selector runs yet.</p>';
+    host.innerHTML = '<p class="hint">No automated results are available.</p>';
     return;
   }
-  host.innerHTML = `<div class="weekly-selector-heading">Programmatic selectors · dual-mode v2</div>${
-    rows.map(row => `<div class="weekly-selector-row">${formatSelectorScoreLine(row)}</div>`).join('')
+  const sorted = [...rows].sort((left, right) => (
+    right.correct - left.correct
+    || right.accuracy - left.accuracy
+    || left.participant.localeCompare(right.participant)
+  ));
+  host.innerHTML = `<div class="weekly-selector-heading">Automated methods</div>${
+    sorted.map(row => `<div class="weekly-selector-row"><b>${
+      escapeSelectorText(row.participant)
+    }</b> · ${row.correct}/${row.total} · ${Math.round(row.accuracy)}%</div>`).join('')
   }`;
 }
 
@@ -3577,9 +3582,6 @@ function renderWeeklyResultsStatus() {
   }
   renderWeeklyLeaderboard();
   renderWeeklySelectorLeaderboard();
-  if (revealed && !WEEKLY_SELECTOR_RESULTS && !WEEKLY_SELECTOR_RESULTS_ERROR) {
-    void loadWeeklySelectorResults().then(() => renderWeeklyResultsStatus());
-  }
 }
 
 function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null }) {
@@ -3885,7 +3887,8 @@ function renderWeeklyLeaderboard() {
     return;
   }
   if (WEEKLY_LEADERBOARD_ERROR && !WEEKLY_LEADERBOARD) {
-    host.innerHTML = `<p class="weekly-scorecard-empty">${escapeLeaderboardText(WEEKLY_LEADERBOARD_ERROR)}</p>`;
+    host.hidden = true;
+    host.replaceChildren();
     return;
   }
   const total = WEEKLY_LEADERBOARD?.item_count || ITEMS.length || 0;
@@ -3895,7 +3898,8 @@ function renderWeeklyLeaderboard() {
   const localAccuracy = localAnswered ? Math.round(100 * localCorrect / localAnswered) : null;
   const localCoverage = total ? Math.round(100 * localAnswered / total) : null;
   const sections = [];
-  sections.push(`<div class="weekly-scorecard-section">
+  if (!$('#wrap')?.classList.contains('intro')) {
+    sections.push(`<div class="weekly-scorecard-section">
       <div class="weekly-scorecard-heading">Your session</div>
       <div class="weekly-scorecard-row local">${formatWeeklyScoreLine({
         displayName: `${localName} (local, not ranked)`,
@@ -3907,12 +3911,13 @@ function renderWeeklyLeaderboard() {
       })}</div>
       <p class="weekly-scorecard-note">Updates as you reveal answers. Not saved to the leaderboard.</p>
     </div>`);
+  }
   const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
   const partial = WEEKLY_LEADERBOARD?.partial_runs || [];
   if (!WEEKLY_LEADERBOARD) {
     sections.push('<p class="weekly-scorecard-empty">Leaderboard is loading…</p>');
   } else if (!complete.length && !partial.length) {
-    sections.push('<p class="weekly-scorecard-empty">No leaderboard runs are available yet.</p>');
+    sections.push('<p class="weekly-scorecard-empty">No human players participated this week.</p>');
   } else {
     if (complete.length) {
       sections.push(`<div class="weekly-scorecard-section">
@@ -3947,9 +3952,47 @@ function renderWeeklyLeaderboard() {
   host.innerHTML = `<div class="weekly-scorecard">${sections.join('')}</div>`;
 }
 
+function weeklyLeaderboardFromRetrospectiveSummary(publication) {
+  const rows = publication?.summary?.human_entries;
+  if (publication?.round_id !== WEEKLY_ROUND?.round_id
+      || !Number.isInteger(publication?.item_count)
+      || !Array.isArray(rows)
+      || !Array.isArray(publication?.summary?.automated_entries)) {
+    throw new Error('Published retrospective summary is invalid.');
+  }
+  const sorted = [...rows].sort((left, right) => (
+    right.correct - left.correct
+    || right.accuracy - left.accuracy
+    || left.participant.localeCompare(right.participant)
+  ));
+  const toRun = row => ({
+    display_name: row.participant,
+    correct: row.correct,
+    answered: row.answered,
+    total: row.total,
+    accuracy: row.accuracy,
+    coverage: row.coverage,
+  });
+  const completeRuns = sorted
+    .filter(row => row.complete === true)
+    .map((row, index) => ({ ...toRun(row), rank: index + 1 }));
+  const partialRuns = sorted
+    .filter(row => row.complete !== true)
+    .map(toRun);
+  return {
+    format_version: 'foldarium.weekly-leaderboard/v1',
+    round_id: publication.round_id,
+    item_count: publication.item_count,
+    participant_count: rows.length,
+    complete_runs: completeRuns,
+    partial_runs: partialRuns,
+  };
+}
+
 async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
   WEEKLY_LEADERBOARD_ERROR = '';
   if (bundleLeaderboard != null) {
+    WEEKLY_RETROSPECTIVE_SUMMARY = null;
     try {
       window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
         bundleLeaderboard,
@@ -3965,20 +4008,32 @@ async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
   }
   if (!WEEKLY_ROUND?.round_id || WEEKLY_ROUND.public_status !== 'revealed') {
     WEEKLY_LEADERBOARD = null;
+    WEEKLY_RETROSPECTIVE_SUMMARY = null;
     renderWeeklyResultsStatus();
     return;
   }
   try {
-    const backend = researchBackend();
-    if (!backend?.getWeeklyResults) throw new Error('Weekly results are unavailable.');
-    WEEKLY_LEADERBOARD = await backend.getWeeklyResults(WEEKLY_ROUND.round_id);
+    const response = await fetch('/api/weekly-retrospectives?limit=50');
+    const payload = await response.json().catch(() => null);
+    if (!response.ok
+        || payload?.format_version !== 'foldarium.weekly-retrospective-list/v1'
+        || !Array.isArray(payload.publications)) {
+      throw new Error('Published retrospective list is unavailable.');
+    }
+    const publication = payload.publications.find(
+      row => row.round_id === WEEKLY_ROUND.round_id,
+    );
+    if (!publication) throw new Error('Published retrospective is unavailable.');
+    WEEKLY_RETROSPECTIVE_SUMMARY = publication.summary;
+    WEEKLY_LEADERBOARD = weeklyLeaderboardFromRetrospectiveSummary(publication);
     window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
       WEEKLY_LEADERBOARD,
       { roundId: WEEKLY_ROUND.round_id },
     );
   } catch (error) {
     WEEKLY_LEADERBOARD = null;
-    WEEKLY_LEADERBOARD_ERROR = `Leaderboard could not be loaded. ${error.message}`;
+    WEEKLY_RETROSPECTIVE_SUMMARY = null;
+    WEEKLY_LEADERBOARD_ERROR = 'Published results are temporarily unavailable.';
     console.warn('Weekly leaderboard unavailable:', error.message);
   }
   renderWeeklyResultsStatus();
@@ -5218,7 +5273,6 @@ async function init() {
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));
     });
     renderWeeklyResultsStatus();
-    if (WEEKLY_ROUND?.public_status === 'revealed') void loadWeeklySelectorResults();
     startWeeklyCountdown();
   } else {
     document.querySelectorAll('#quizsrc button').forEach(b => b.onclick = () => {

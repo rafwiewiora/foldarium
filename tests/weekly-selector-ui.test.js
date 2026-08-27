@@ -245,21 +245,15 @@ test('selector leaderboard renders independent Cluster and Exact tracks and esca
   assert.match(benchmark, /Post-close benchmark · requested default effort/);
 });
 
-test('selector leaderboard remains reveal-gated and validates v2 result envelopes', async () => {
+test('automated leaderboard remains reveal-gated and escapes retrospective identities', async () => {
   const app = await read('app.js');
   const host = { hidden: true, innerHTML: '', replaceChildren() { this.innerHTML = ''; } };
   const escapeSelectorText = evaluateDeclaration(app, 'function escapeSelectorText(value)', {});
-  const formatSelectorScoreLine = evaluateDeclaration(
-    app,
-    'function formatSelectorScoreLine(row)',
-    { escapeSelectorText, Number },
-  );
   const sandbox = {
     WEEKLY_ONLY: true,
     WEEKLY_ROUND: { round_id: 'weekly-test', public_status: 'open' },
-    WEEKLY_SELECTOR_RESULTS: null,
-    WEEKLY_SELECTOR_RESULTS_ERROR: '',
-    formatSelectorScoreLine,
+    WEEKLY_RETROSPECTIVE_SUMMARY: null,
+    escapeSelectorText,
     $: selector => selector === '#weekly-selector-leaderboard' ? host : null,
   };
   const render = evaluateDeclaration(app, 'function renderWeeklySelectorLeaderboard()', sandbox);
@@ -267,25 +261,17 @@ test('selector leaderboard remains reveal-gated and validates v2 result envelope
   assert.equal(host.hidden, true);
 
   sandbox.WEEKLY_ROUND.public_status = 'revealed';
-  sandbox.WEEKLY_SELECTOR_RESULTS = {
-    format_version: 'foldarium.weekly-selector-results/v2',
-    rows: [{
-      identity: {
-        display_name: '<script>',
-        method_name: 'rules',
-        method_version: '2',
-        provider: 'example',
-        model_name: 'rules',
-        model_version: '2',
-      },
-      clustered: { correct: 1, item_count: 1, accuracy: 100, rank: 1 },
-      unclustered: { correct: 1, item_count: 1, accuracy: 100, rank: 1 },
+  sandbox.WEEKLY_RETROSPECTIVE_SUMMARY = {
+    automated_entries: [{
+      participant: '<script>',
+      correct: 1,
+      total: 1,
+      accuracy: 100,
     }],
-    questions: [],
   };
   render();
   assert.equal(host.hidden, false);
-  assert.match(host.innerHTML, /dual-mode v2/);
+  assert.match(host.innerHTML, /Automated methods/);
   assert.match(host.innerHTML, /&lt;script&gt;/);
   assert.doesNotMatch(host.innerHTML, /<script>/);
 });
