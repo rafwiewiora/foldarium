@@ -160,6 +160,50 @@ def source_rows() -> dict:
     }
 
 
+BENCHMARK_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+
+def benchmark_payload(
+    *,
+    round_id: str = ROUND_ID,
+    submission_id: str = BENCHMARK_ID,
+    unclustered_kind: str = "exact",
+    choice_id: str = "choice-a",
+) -> dict:
+    if unclustered_kind == "none":
+        unclustered = {"selection_kind": "none"}
+    else:
+        unclustered = {"selection_kind": "exact", "choice_id": choice_id}
+    return {
+        "schema_version": "foldarium.weekly-selector-submission/v2",
+        "submission_id": submission_id,
+        "environment": "production",
+        "round_id": round_id,
+        "blind_manifest_sha256": "a" * 64,
+        "kit_sha256": "b" * 64,
+        "items": [
+            {
+                "item_id": "item-1",
+                "clustered": {"selection_kind": "exact", "choice_id": "choice-b"},
+                "unclustered": unclustered,
+            }
+        ],
+    }
+
+
+def post_close_benchmark_row(
+    *,
+    display_name: str = "GPT-5.6 Sol",
+    payload: dict | None = None,
+) -> dict:
+    benchmark_payload_value = payload or benchmark_payload()
+    return {
+        "run_class": "post_close_benchmark",
+        "display_name": display_name,
+        "payload": benchmark_payload_value,
+    }
+
+
 def source_rows_with_human_count(count: int) -> dict:
     rows = source_rows()
     human_ids = [HUMAN_ID] + [
@@ -347,6 +391,170 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         ):
             build_retrospective_source_snapshot(ROUND_ID, **rows)
 
+    def test_aug_8_snapshot_ignores_empty_benchmark_list(self) -> None:
+        rows = source_rows()
+        rows["post_close_benchmarks"] = []
+        baseline = build_retrospective_source_snapshot(ROUND_ID, **rows)
+        unchanged = build_retrospective_source_snapshot(
+            ROUND_ID,
+            votes=rows["votes"],
+            vote_attempts=rows["vote_attempts"],
+            current_sessions=rows["current_sessions"],
+            automated_identities=rows["automated_identities"],
+        )
+        self.assertEqual(baseline, unchanged)
+
+    def test_post_close_benchmark_exact_and_none_decisions_are_included(self) -> None:
+        none_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        rows = source_rows()
+        rows["post_close_benchmarks"] = [
+            post_close_benchmark_row(),
+            post_close_benchmark_row(
+                display_name="Codex GPT-5.6",
+                payload=benchmark_payload(
+                    submission_id=none_id,
+                    unclustered_kind="none",
+                ),
+            ),
+        ]
+        snapshot = build_retrospective_source_snapshot(
+            ROUND_ID,
+            item_count=1,
+            **rows,
+        )
+        benchmark_participants = [
+            participant
+            for participant in snapshot["participants"]
+            if participant["participant_link"] in {BENCHMARK_ID, none_id}
+        ]
+        self.assertEqual(
+            sorted(row["automated_identity"] for row in benchmark_participants),
+            ["Codex GPT-5.6", "GPT-5.6 Sol"],
+        )
+        for participant in benchmark_participants:
+            self.assertEqual(participant["participant_kind"], "automated")
+            self.assertIsNone(participant["display_name"])
+            self.assertEqual(participant["current_session_count"], 0)
+        exact_vote = next(
+            vote
+            for vote in snapshot["votes"]
+            if vote["participant_link"] == BENCHMARK_ID
+        )
+        none_vote = next(
+            vote for vote in snapshot["votes"] if vote["participant_link"] == none_id
+        )
+        self.assertEqual(exact_vote["selection_kind"], "exact")
+        self.assertEqual(exact_vote["choice_id"], "choice-a")
+        self.assertFalse(exact_vote["picked_none"])
+        self.assertEqual(none_vote["selection_kind"], "none")
+        self.assertIsNone(none_vote["choice_id"])
+        self.assertTrue(none_vote["picked_none"])
+
+    def test_post_close_benchmark_clustered_decisions_are_ignored(self) -> None:
+        rows = source_rows()
+        payload = benchmark_payload()
+        payload["items"][0]["unclustered"] = {"selection_kind": "none"}
+        payload["items"][0]["clustered"] = {
+            "selection_kind": "exact",
+            "choice_id": "choice-b",
+        }
+        rows["post_close_benchmarks"] = [post_close_benchmark_row(payload=payload)]
+        snapshot = build_retrospective_source_snapshot(
+            ROUND_ID,
+            item_count=1,
+            **rows,
+        )
+        vote = next(
+            vote
+            for vote in snapshot["votes"]
+            if vote["participant_link"] == BENCHMARK_ID
+        )
+        self.assertEqual(vote["selection_kind"], "none")
+        self.assertTrue(vote["picked_none"])
+
+    def test_post_close_benchmark_rejects_unknown_duplicate_and_malformed_rows(
+        self,
+    ) -> None:
+        rows = source_rows()
+        rows["post_close_benchmarks"] = [
+            post_close_benchmark_row(display_name="Unreviewed Model")
+        ]
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "not code-approved"
+        ):
+            build_retrospective_source_snapshot(ROUND_ID, item_count=1, **rows)
+
+        rows = source_rows()
+        rows["post_close_benchmarks"] = [
+            post_close_benchmark_row(),
+            post_close_benchmark_row(
+                payload=benchmark_payload(
+                    submission_id="ffffffff-ffff-4fff-8fff-ffffffffffff"
+                ),
+            ),
+        ]
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "duplicate automated identity"
+        ):
+            build_retrospective_source_snapshot(ROUND_ID, item_count=1, **rows)
+
+        rows = source_rows()
+        malformed = benchmark_payload()
+        malformed["submission_id"] = "not-a-uuid"
+        rows["post_close_benchmarks"] = [post_close_benchmark_row(payload=malformed)]
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "must be a UUID"
+        ):
+            build_retrospective_source_snapshot(ROUND_ID, item_count=1, **rows)
+
+        rows = source_rows()
+        incomplete = benchmark_payload()
+        incomplete["items"] = []
+        rows["post_close_benchmarks"] = [post_close_benchmark_row(payload=incomplete)]
+        with self.assertRaisesRegex(
+            RetrospectiveArchiveError, "items are incomplete"
+        ):
+            build_retrospective_source_snapshot(ROUND_ID, item_count=1, **rows)
+
+    def test_post_close_benchmark_artifacts_exclude_runtime_and_provenance_fields(
+        self,
+    ) -> None:
+        rows = source_rows()
+        rows["post_close_benchmarks"] = [post_close_benchmark_row()]
+        snapshot = build_retrospective_source_snapshot(
+            ROUND_ID,
+            item_count=1,
+            **rows,
+        )
+        evaluation = evaluation_descriptor()
+        artifact = {
+            "blind_manifest": blind_manifest(),
+            "reveal_manifest": reveal_manifest(),
+        }
+        with patch(
+            "foldarium_pipeline.retrospective_archive._verify_evaluation",
+            return_value=(evaluation, artifact),
+        ):
+            public_bytes, admin_bytes, _ = build_retrospective_artifacts(
+                round_record(),
+                evaluation,
+                b"evaluation",
+                snapshot,
+            )
+        combined = (public_bytes + admin_bytes).decode()
+        for forbidden in (
+            BENCHMARK_ID,
+            "runtime_sha256",
+            "execution_sha256",
+            "payload_digest",
+            "blindness_attestation",
+            "clustered",
+            "submission_id",
+        ):
+            self.assertNotIn(forbidden, combined)
+        public = json.loads(public_bytes)
+        self.assertIn("GPT-5.6 Sol", [row["participant"] for row in public["automated_entries"]])
+
     def test_public_and_admin_artifacts_are_sanitized_and_separately_scoped(self) -> None:
         evaluation = evaluation_descriptor()
         artifact = {
@@ -504,7 +712,7 @@ class RetrospectiveArchiveTests(unittest.TestCase):
             def download_content_object(self, object_uri, **kwargs):
                 return self.object_by_uri.get(object_uri, b"evaluation")
 
-            def weekly_retrospective_source_rows(self, round_id):
+            def weekly_retrospective_source_rows(self, round_id, *, environment="production"):
                 return deepcopy(self.rows)
 
             def weekly_retrospective_publication(self, round_id):

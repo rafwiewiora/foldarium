@@ -42,6 +42,7 @@ APPROVED_AUTOMATED_IDENTITIES = frozenset(
     {
         "Claude Opus",
         "Codex GPT-5.6",
+        "GPT-5.6 Sol",
     }
 )
 SMINA_IDENTITY = "Smina"
@@ -68,6 +69,21 @@ _FORBIDDEN_ARTIFACT_KEYS = {
     "initial_app_state",
     "auth",
     "object_uri",
+    "execution_id",
+    "execution_sha256",
+    "payload",
+    "payload_digest",
+    "runtime_sha256",
+    "config_sha256",
+    "tools_sha256",
+    "input_manifest_sha256",
+    "prompt_sha256",
+    "blindness_attestation",
+    "blindness_attestation_sha256",
+    "output_sha256",
+    "provenance",
+    "engine",
+    "usage",
 }
 
 
@@ -140,6 +156,160 @@ def _timestamp_sort_key(value: Any, field: str) -> tuple[datetime, str]:
     return parsed, text
 
 
+def _benchmark_unclustered_vote(
+    raw_item: Mapping[str, Any],
+    *,
+    index: int,
+) -> dict[str, Any]:
+    item_id = _text(raw_item.get("item_id"), f"benchmark item_id[{index}]")
+    unclustered = raw_item.get("unclustered")
+    if not isinstance(unclustered, Mapping):
+        raise RetrospectiveArchiveError("benchmark item unclustered is invalid")
+    selection_kind = unclustered.get("selection_kind")
+    if selection_kind == "none":
+        if set(unclustered) != {"selection_kind"}:
+            raise RetrospectiveArchiveError("benchmark none decision is malformed")
+        return {
+            "item_id": item_id,
+            "choice_id": None,
+            "picked_none": True,
+            "selection_kind": "none",
+        }
+    if selection_kind == "exact":
+        if set(unclustered) != {"selection_kind", "choice_id"}:
+            raise RetrospectiveArchiveError("benchmark exact decision is malformed")
+        choice_id = _text(unclustered.get("choice_id"), f"benchmark choice_id[{index}]")
+        return {
+            "item_id": item_id,
+            "choice_id": choice_id,
+            "picked_none": False,
+            "selection_kind": "exact",
+        }
+    raise RetrospectiveArchiveError("benchmark unclustered decision is invalid")
+
+
+def _normalize_post_close_benchmark_rows(
+    round_id: str,
+    benchmark_rows: list[Mapping[str, Any]],
+    *,
+    item_count: int | None,
+    ballot_participant_links: set[str],
+    active_automated_identities: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not benchmark_rows:
+        return [], []
+    if item_count is None or item_count < 1:
+        raise RetrospectiveArchiveError(
+            "post-close benchmarks require a positive item_count"
+        )
+
+    normalized_rows = _rows(benchmark_rows, "post_close_benchmarks")
+    participants: list[dict[str, Any]] = []
+    votes: list[dict[str, Any]] = []
+    seen_automated_names: set[str] = set()
+
+    for row_index, row in enumerate(
+        sorted(
+            normalized_rows,
+            key=lambda candidate: (
+                str(candidate.get("display_name", "")).casefold(),
+                str(
+                    (
+                        candidate.get("payload", {})
+                        if isinstance(candidate.get("payload"), Mapping)
+                        else {}
+                    ).get("submission_id", "")
+                ).casefold(),
+            ),
+        )
+    ):
+        if row.get("run_class") != "post_close_benchmark":
+            raise RetrospectiveArchiveError("post-close benchmark run_class is invalid")
+        display_name = _text(row.get("display_name"), "benchmark display_name")
+        if display_name not in APPROVED_AUTOMATED_IDENTITIES:
+            raise RetrospectiveArchiveError(
+                "post-close benchmark identity is not code-approved"
+            )
+        if display_name in active_automated_identities:
+            raise RetrospectiveArchiveError(
+                "post-close benchmark duplicates a ballot automated identity"
+            )
+        if display_name in seen_automated_names:
+            raise RetrospectiveArchiveError(
+                "post-close benchmarks contain a duplicate automated identity"
+            )
+        seen_automated_names.add(display_name)
+
+        payload = _object(row.get("payload"), f"post_close_benchmarks[{row_index}].payload")
+        if payload.get("round_id") != round_id:
+            raise RetrospectiveArchiveError("benchmark payload round_id mismatch")
+        participant_link = _participant_link(
+            payload.get("submission_id"), "benchmark submission_id"
+        )
+        if participant_link in ballot_participant_links:
+            raise RetrospectiveArchiveError(
+                "post-close benchmark participant_link collides with a ballot"
+            )
+        ballot_participant_links.add(participant_link)
+
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list) or len(raw_items) != item_count:
+            raise RetrospectiveArchiveError(
+                "post-close benchmark payload items are incomplete"
+            )
+
+        seen_items: set[str] = set()
+        participant_votes: list[dict[str, Any]] = []
+        for index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, Mapping):
+                raise RetrospectiveArchiveError("benchmark payload item is invalid")
+            vote = _benchmark_unclustered_vote(raw_item, index=index)
+            item_id = vote["item_id"]
+            if item_id in seen_items:
+                raise RetrospectiveArchiveError("benchmark payload item_id is duplicated")
+            seen_items.add(item_id)
+            participant_votes.append(
+                {
+                    "participant_link": participant_link,
+                    **vote,
+                }
+            )
+        if len(seen_items) != item_count:
+            raise RetrospectiveArchiveError(
+                "post-close benchmark payload items are incomplete"
+            )
+
+        participant_votes.sort(
+            key=lambda vote: (
+                vote["item_id"],
+                vote["picked_none"],
+                vote["choice_id"] or "",
+            )
+        )
+        votes.extend(participant_votes)
+        participants.append(
+            {
+                "participant_link": participant_link,
+                "participant_kind": "automated",
+                "automated_identity": display_name,
+                "display_name": None,
+                "current_session_count": 0,
+            }
+        )
+        seen_automated_names.add(display_name)
+
+    participants.sort(key=lambda row: row["participant_link"])
+    votes.sort(
+        key=lambda row: (
+            row["participant_link"],
+            row["item_id"],
+            row["picked_none"],
+            row["choice_id"] or "",
+        )
+    )
+    return participants, votes
+
+
 def build_retrospective_source_snapshot(
     round_id: str,
     *,
@@ -147,6 +317,8 @@ def build_retrospective_source_snapshot(
     vote_attempts: list[Mapping[str, Any]],
     current_sessions: list[Mapping[str, Any]],
     automated_identities: list[Mapping[str, Any]],
+    post_close_benchmarks: list[Mapping[str, Any]] | None = None,
+    item_count: int | None = None,
 ) -> dict[str, Any]:
     """Normalize final ballots and minimal session lineage into stable input.
 
@@ -285,9 +457,10 @@ def build_retrospective_source_snapshot(
             row["choice_id"] or "",
         )
     )
+    ballot_participant_links = set(participant_links)
     participants = []
     active_automated_identities: set[str] = set()
-    for participant in sorted(participant_links):
+    for participant in sorted(ballot_participant_links):
         automated_identity = automation_by_participant.get(participant)
         names = current_names.get(participant, set())
         human_display_name = None
@@ -317,6 +490,25 @@ def build_retrospective_source_snapshot(
                 "current_session_count": current_session_counts.get(participant, 0),
             }
         )
+
+    benchmark_participants, benchmark_votes = _normalize_post_close_benchmark_rows(
+        round_id,
+        list(post_close_benchmarks or []),
+        item_count=item_count,
+        ballot_participant_links=ballot_participant_links,
+        active_automated_identities=active_automated_identities,
+    )
+    participants.extend(benchmark_participants)
+    participants.sort(key=lambda row: row["participant_link"])
+    normalized_votes.extend(benchmark_votes)
+    normalized_votes.sort(
+        key=lambda row: (
+            row["participant_link"],
+            row["item_id"],
+            row["picked_none"],
+            row["choice_id"] or "",
+        )
+    )
     return {
         "format_version": RETROSPECTIVE_SOURCE_FORMAT_VERSION,
         "round_id": round_id,
@@ -948,13 +1140,18 @@ def materialize_retrospective_publication(
         evaluation.get("artifact_object_uri"),
         expected_sha256=evaluation.get("artifact_sha256"),
     )
-    source_rows = coordinator.weekly_retrospective_source_rows(round_id)
+    source_rows = coordinator.weekly_retrospective_source_rows(
+        round_id,
+        environment=_text(round_record.get("environment"), "round environment"),
+    )
     source_snapshot = build_retrospective_source_snapshot(
         round_id,
         votes=source_rows["votes"],
         vote_attempts=source_rows["vote_attempts"],
         current_sessions=source_rows["current_sessions"],
         automated_identities=source_rows["automated_identities"],
+        post_close_benchmarks=source_rows.get("post_close_benchmarks"),
+        item_count=_positive_int(evaluation.get("item_count"), "item_count"),
     )
     source_content = encode_retrospective_source_snapshot(source_snapshot)
     public_content, admin_content, _summary = build_retrospective_artifacts(

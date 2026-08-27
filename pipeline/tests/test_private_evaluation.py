@@ -16,11 +16,14 @@ from foldarium_pipeline.private_evaluation import (
     PRIVATE_EVALUATION_FORMAT_VERSION,
     PRODUCTION_BETA_CATCHUP_ROUND_ID,
     PrivateEvaluationError,
+    _recovered_ligand_eligibility_for_legacy_items,
     build_private_evaluation_artifact,
     describe_private_evaluation_artifact,
     materialize_postclose_weekly_evaluation,
     materialize_private_preclose_evaluation,
+    recover_legacy_ligand_eligibility,
 )
+from foldarium_pipeline.sizing import count_smiles_heavy_atoms
 from foldarium_pipeline.quiz import build_blind_manifest, manifest_sha256
 from foldarium_pipeline.supabase import PRIVATE_WEEKLY_EVALUATION_FIELDS, SupabasePublicationError
 from foldarium_pipeline.wednesday_reveal import (
@@ -834,6 +837,114 @@ class LegacyPrivateEvaluationRecoveryTests(unittest.TestCase):
             ligand_eligibility_from_target(package),
             fixture_ligand_eligibility(),
         )
+
+    def test_legacy_recovery_uses_item_heavy_atoms_when_package_smiles_counts_explicit_h(
+        self,
+    ) -> None:
+        item = source_items()[0]
+        smiles = "CCCCCCCCCCCCCCCCC[H]"
+        package = target_package_for_item(item, smiles=smiles)
+        package["metadata"]["selected_ligand"]["heavy_atoms"] = count_smiles_heavy_atoms(
+            smiles
+        )
+        self.assertEqual(item["ligand"]["heavy_atoms"], 17)
+        self.assertEqual(count_smiles_heavy_atoms(smiles), 18)
+
+        class Coordinator:
+            def fetch_campaign_target_packages(self, campaign_id, target_ids):
+                return {
+                    item["target_id"]: {"package": package},
+                }
+
+        recovered = _recovered_ligand_eligibility_for_legacy_items(
+            Coordinator(),
+            {"campaign_id": "wwpdb-2026-08-08"},
+            [item["target_id"]],
+            private_index={"items": [item]},
+        )
+        eligibility = recovered[item["target_id"].upper()]
+        self.assertEqual(eligibility["heavy_atoms"], 17)
+        self.assertEqual(eligibility["smiles"], smiles)
+        self.assertTrue(eligibility["passed"])
+        package_eligibility = ligand_eligibility_from_target(package)
+        self.assertEqual(package_eligibility["heavy_atoms"], 18)
+        self.assertNotEqual(
+            package_eligibility["heavy_atoms"],
+            item["ligand"]["heavy_atoms"],
+        )
+
+    def test_legacy_recovery_rejects_package_component_mismatch(self) -> None:
+        item = source_items()[0]
+        package = target_package_for_item(item)
+        package["metadata"]["selected_ligand"]["component_id"] = "OTHER"
+        package["entities"][1]["chain_ids"] = ["B"]
+
+        class Coordinator:
+            def fetch_campaign_target_packages(self, campaign_id, target_ids):
+                return {item["target_id"]: {"package": package}}
+
+        with self.assertRaisesRegex(
+            PrivateEvaluationError,
+            "package component_id disagrees with item ligand",
+        ):
+            _recovered_ligand_eligibility_for_legacy_items(
+                Coordinator(),
+                {"campaign_id": "wwpdb-2026-08-08"},
+                [item["target_id"]],
+                private_index={"items": [item]},
+            )
+
+    def test_legacy_recovery_rejects_conflicting_item_bindings(self) -> None:
+        item = source_items()[0]
+        conflicting = deepcopy(item)
+        conflicting["id"] = "item-conflict"
+        conflicting["ligand"] = {
+            "component_id": item["ligand"]["component_id"],
+            "heavy_atoms": item["ligand"]["heavy_atoms"] + 1,
+        }
+
+        class Coordinator:
+            def fetch_campaign_target_packages(self, campaign_id, target_ids):
+                raise AssertionError("package fetch must not run")
+
+        with self.assertRaisesRegex(
+            PrivateEvaluationError,
+            "disagree on ligand binding",
+        ):
+            _recovered_ligand_eligibility_for_legacy_items(
+                Coordinator(),
+                {"campaign_id": "wwpdb-2026-08-08"},
+                [item["target_id"]],
+                private_index={"items": [item, conflicting]},
+            )
+
+    def test_recover_legacy_ligand_eligibility_end_to_end(self) -> None:
+        round_record, private, _private_content = legacy_round_fixture()
+        item = private["items"][0]
+        smiles = "CCCCCCCCCCCCCCCCC[H]"
+        package = target_package_for_item(item, smiles=smiles)
+        package["metadata"]["selected_ligand"]["heavy_atoms"] = count_smiles_heavy_atoms(
+            smiles
+        )
+        item["ligand"]["heavy_atoms"] = 17
+        private_content = canonical_json(private).encode("utf-8")
+        round_record["metadata"]["private_index"]["sha256"] = hashlib.sha256(
+            private_content
+        ).hexdigest()
+
+        class Coordinator:
+            def fetch_campaign_target_packages(self, campaign_id, target_ids):
+                return {item["target_id"]: {"package": package}}
+
+        coordinator = Coordinator()
+        recovered = recover_legacy_ligand_eligibility(
+            coordinator,
+            round_record,
+            private_content,
+        )
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual(recovered[item["target_id"].upper()]["heavy_atoms"], 17)
 
 
 if __name__ == "__main__":

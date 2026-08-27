@@ -22,7 +22,10 @@ from urllib.parse import urlsplit
 from .contracts import canonical_json, stable_id
 from .evaluation import evaluate_ligand_pose
 from .quiz import manifest_sha256
-from .weekly_quiz import ligand_eligibility_from_target
+from .weekly_quiz import (
+    _selected_ligand,
+)
+from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, ligand_rejection_reason
 from .wednesday_reveal import (
     ACCEPTANCE_POLICY_VERSION,
     CORRECT_RMSD_ANGSTROM,
@@ -880,28 +883,140 @@ def _legacy_target_ids_missing_eligibility(
     return sorted(missing)
 
 
+def _private_index_object(private_index_content: bytes) -> dict[str, Any]:
+    try:
+        decoded = json.loads(private_index_content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PrivateEvaluationError("private index is not valid UTF-8 JSON") from exc
+    if not isinstance(decoded, Mapping):
+        raise PrivateEvaluationError("private index must be an object")
+    return deepcopy(dict(decoded))
+
+
+def _legacy_item_ligand_bindings(
+    private_index: Mapping[str, Any],
+    target_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    items = private_index.get("items")
+    if not isinstance(items, list):
+        raise PrivateEvaluationError("private index has no items")
+    required = {target_id.strip().upper() for target_id in target_ids}
+    bindings: dict[str, dict[str, Any]] = {}
+    for raw_item in items:
+        if not isinstance(raw_item, Mapping):
+            continue
+        target_id = raw_item.get("target_id")
+        ligand = raw_item.get("ligand")
+        if not isinstance(target_id, str) or not target_id.strip():
+            continue
+        normalized_target = target_id.strip().upper()
+        if normalized_target not in required:
+            continue
+        if not isinstance(ligand, Mapping):
+            raise PrivateEvaluationError(
+                f"legacy recovery private item for {normalized_target} has no ligand"
+            )
+        component_id = ligand.get("component_id")
+        heavy_atoms = ligand.get("heavy_atoms")
+        if not isinstance(component_id, str) or not component_id.strip():
+            raise PrivateEvaluationError(
+                f"legacy recovery ligand component_id is invalid for {normalized_target}"
+            )
+        if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
+            raise PrivateEvaluationError(
+                f"legacy recovery ligand heavy_atoms is invalid for {normalized_target}"
+            )
+        normalized_component = component_id.strip().upper()
+        binding = {
+            "component_id": normalized_component,
+            "heavy_atoms": heavy_atoms,
+        }
+        previous = bindings.get(normalized_target)
+        if previous is not None and previous != binding:
+            raise PrivateEvaluationError(
+                f"legacy recovery private items disagree on ligand binding for {normalized_target}"
+            )
+        bindings[normalized_target] = binding
+    missing = sorted(required.difference(bindings))
+    if missing:
+        raise PrivateEvaluationError(
+            "legacy recovery private index is missing ligand bindings for "
+            + ", ".join(missing)
+        )
+    return bindings
+
+
+def _legacy_recovered_ligand_eligibility(
+    component_id: str,
+    heavy_atoms: int,
+    smiles: str,
+) -> dict[str, Any]:
+    """Rebuild eligibility for legacy rounds using immutable item ligand binding."""
+
+    if not isinstance(component_id, str) or not component_id.strip():
+        raise PrivateEvaluationError("legacy recovery ligand component_id is invalid")
+    if isinstance(heavy_atoms, bool) or not isinstance(heavy_atoms, int) or heavy_atoms < 1:
+        raise PrivateEvaluationError("legacy recovery ligand heavy_atoms is invalid")
+    if not isinstance(smiles, str) or not smiles.strip():
+        raise PrivateEvaluationError("legacy recovery ligand SMILES is invalid")
+    normalized_component = component_id.strip().upper()
+    normalized_smiles = smiles.strip()
+    rejection_reason = ligand_rejection_reason(
+        {"component_id": normalized_component, "smiles": normalized_smiles},
+        heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+    )
+    passed = rejection_reason is None and heavy_atoms >= HEAVY_ATOM_MINIMUM
+    if passed is False and rejection_reason is None and heavy_atoms < HEAVY_ATOM_MINIMUM:
+        rejection_reason = "below-heavy-atom-minimum"
+    return {
+        "policy": SELECTION_POLICY_VERSION,
+        "passed": passed,
+        "component_id": normalized_component,
+        "heavy_atoms": heavy_atoms,
+        "smiles": normalized_smiles,
+        "smiles_sha256": hashlib.sha256(normalized_smiles.encode("utf-8")).hexdigest(),
+        "reason": rejection_reason,
+    }
+
+
 def _recovered_ligand_eligibility_for_legacy_items(
     coordinator: Any,
     round_record: Mapping[str, Any],
     target_ids: list[str],
+    *,
+    private_index: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
     campaign_id = round_record.get("campaign_id")
     if not isinstance(campaign_id, str) or not campaign_id:
         raise PrivateEvaluationError("round has no campaign_id for legacy recovery")
+    bindings = _legacy_item_ligand_bindings(private_index, target_ids)
     packages = coordinator.fetch_campaign_target_packages(campaign_id, target_ids)
     recovered: dict[str, dict[str, Any]] = {}
     for target_id in target_ids:
-        package_row = packages.get(target_id)
+        normalized_target = target_id.strip().upper()
+        binding = bindings[normalized_target]
+        package_row = packages.get(normalized_target)
         if not isinstance(package_row, Mapping):
             raise PrivateEvaluationError(
-                f"legacy recovery did not return a package for {target_id}"
+                f"legacy recovery did not return a package for {normalized_target}"
             )
         package = package_row.get("package")
         if not isinstance(package, Mapping):
             raise PrivateEvaluationError(
-                f"legacy recovery package for {target_id} is not an object"
+                f"legacy recovery package for {normalized_target} is not an object"
             )
-        recovered[target_id] = ligand_eligibility_from_target(package)
+        package_component, _package_heavy_atoms, _chain_ids, smiles = _selected_ligand(
+            package
+        )
+        if package_component != binding["component_id"]:
+            raise PrivateEvaluationError(
+                "legacy recovery package component_id disagrees with item ligand"
+            )
+        recovered[normalized_target] = _legacy_recovered_ligand_eligibility(
+            binding["component_id"],
+            binding["heavy_atoms"],
+            smiles,
+        )
     return recovered
 
 
@@ -917,10 +1032,12 @@ def recover_legacy_ligand_eligibility(
     )
     if not legacy_target_ids:
         return None
+    private_index = _private_index_object(private_index_content)
     return _recovered_ligand_eligibility_for_legacy_items(
         coordinator,
         round_record,
         legacy_target_ids,
+        private_index=private_index,
     )
 
 

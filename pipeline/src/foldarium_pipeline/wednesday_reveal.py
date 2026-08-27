@@ -26,13 +26,17 @@ from urllib.request import Request, urlopen
 
 from .clustering import choice_order_digest
 from .contracts import canonical_json, stable_id
-from .evaluation import EVALUATOR_VERSION, evaluate_ligand_pose
+from .evaluation import (
+    EVALUATOR_VERSION,
+    evaluate_ligand_pose,
+    released_partial_reference_override_for_item,
+)
 from .quiz import QUIZ_SCHEMA_VERSION, build_reveal_manifest, manifest_sha256
 from .selection import SELECTION_POLICY_VERSION
 from .weekly_quiz import (
     LEGACY_LIGAND_ORDER_POLICY,
     SUPPORTED_LEGACY_LIGAND_ORDER,
-    legacy_ligand_topology_audit,
+    legacy_ligand_topology_digest,
 )
 
 RCSB_DOWNLOAD_ORIGIN = "https://files.rcsb.org/download"
@@ -295,7 +299,7 @@ def _validate_legacy_clustering_ligand_binding(
     smiles = eligibility.get("smiles")
     if not isinstance(smiles, str) or not smiles.strip():
         raise WednesdayRevealError("legacy recovered eligibility SMILES is missing")
-    topology_audit = legacy_ligand_topology_audit(smiles)
+    topology_audit = legacy_ligand_topology_digest(smiles)
     if mapping.get("source_topology_sha256") != topology_audit["source_topology_sha256"]:
         raise WednesdayRevealError(
             "legacy ligand_atom_mapping topology digest does not match task SMILES"
@@ -439,6 +443,14 @@ def _validated_round(
         ):
             raise WednesdayRevealError("private index selected ligand is invalid")
 
+        partial_reference_override = released_partial_reference_override_for_item(
+            round_id,
+            item_id,
+            target_id=target_id,
+            component_id=component,
+            heavy_atoms=heavy_atoms,
+        )
+
         eligibility = item.get("ligand_eligibility")
         recovered: Mapping[str, Any] | None = None
         if isinstance(recovered_ligand_eligibility, Mapping):
@@ -504,6 +516,8 @@ def _validated_round(
             raise WednesdayRevealError("private choices are incomplete for a blind item")
         item["ligand"] = dict(ligand)
         item["ligand_eligibility"] = validated_eligibility
+        if partial_reference_override is not None:
+            item["released_partial_reference_override"] = partial_reference_override
         item["choices"] = normalized_choices
         private_items.append(item)
         seen_items.add(item_id)
@@ -586,6 +600,7 @@ def _evaluation_fields(score: Mapping[str, Any]) -> dict[str, Any]:
         "reference_heavy_atoms_expected",
         "reference_heavy_atoms_observed",
         "reference_heavy_atoms_scored",
+        "reference_heavy_atoms_minimum_observed",
     ):
         if field in score:
             result[field] = _positive_int(score[field], f"evaluator result {field}")
@@ -602,6 +617,7 @@ def _evaluation_fields(score: Mapping[str, Any]) -> dict[str, Any]:
         "task_smiles_sha256",
         "reference_ligand_altloc",
         "predicted_ligand_altloc",
+        "released_partial_reference_override_policy",
     ):
         if isinstance(score.get(field), str) and score[field]:
             result[field] = score[field]
@@ -720,14 +736,33 @@ def _evaluate_validated_round(
                 prediction,
                 f"prediction {choice['id']}",
             )
+            evaluator_kwargs: dict[str, Any] = {
+                "component_id": ligand["component_id"],
+                "heavy_atoms": ligand["heavy_atoms"],
+                "ligand_smiles": eligibility["smiles"],
+                "ligand_order_policy": LEGACY_LIGAND_ORDER_POLICY,
+            }
+            partial_reference_override = item.get("released_partial_reference_override")
+            if partial_reference_override is not None:
+                if not isinstance(partial_reference_override, Mapping):
+                    raise WednesdayRevealError(
+                        f"released partial-reference override is invalid for {item['id']}"
+                    )
+                minimum_observed = partial_reference_override.get(
+                    "minimum_observed_heavy_atoms"
+                )
+                if isinstance(minimum_observed, bool) or not isinstance(
+                    minimum_observed, int
+                ):
+                    raise WednesdayRevealError(
+                        f"released partial-reference override is invalid for {item['id']}"
+                    )
+                evaluator_kwargs["minimum_reference_heavy_atoms"] = minimum_observed
             try:
                 raw_score = evaluator(
                     reference_path,
                     prediction_path,
-                    component_id=ligand["component_id"],
-                    heavy_atoms=ligand["heavy_atoms"],
-                    ligand_smiles=eligibility["smiles"],
-                    ligand_order_policy=LEGACY_LIGAND_ORDER_POLICY,
+                    **evaluator_kwargs,
                 )
             except Exception as exc:
                 raise WednesdayRevealError(
