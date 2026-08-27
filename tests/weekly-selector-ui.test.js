@@ -48,11 +48,9 @@ function submission() {
   };
 }
 
-test('weekly intro documents explicit dual-mode v2 and exposes provenance inputs', async () => {
+test('weekly intro omits programmatic controls while keeping the results leaderboard', async () => {
   const html = await read('index.html');
-  assert.match(html, /Programmatic voting · v2/);
-  assert.match(html, /independent clustered \(Cluster or None\) and unclustered \(exact Pose or None\)/);
-  for (const id of [
+  for (const removedId of [
     'programmatic-voting',
     'selector-download-kit',
     'selector-offline-tool',
@@ -74,17 +72,10 @@ test('weekly intro documents explicit dual-mode v2 and exposes provenance inputs
     'selector-submit-file',
     'selector-api-docs',
     'programmatic-voting-status',
-    'weekly-selector-leaderboard',
   ]) {
-    assert.match(html, new RegExp(`id="${id}"`));
+    assert.doesNotMatch(html, new RegExp(`id="${removedId}"`));
   }
-  assert.match(html, /Complete dual-mode v2 JSON/);
-  assert.match(html, /Dual-mode v2 JSON \/ API contract/);
-  assert.match(
-    html,
-    /html\[data-quiz-mode="weekly"\]\[data-programmatic-voting="true"\] #programmatic-voting\{display:flex\}/,
-  );
-  assert.match(html, /#wrap:not\(\.intro\) #programmatic-voting\{display:none!important\}/);
+  assert.match(html, /id="weekly-selector-leaderboard"/);
 });
 
 test('token issuance sends the round-bound v2 identity and provenance contract', async () => {
