@@ -14,6 +14,7 @@ paths = [
 regexes = [
   '''4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945''',
   '''e09a6d42af2538ede670dd502ae83f8b6b918e53695b3453ade5e551cfd30f85''',
+  '''3396a4cf1cc25eea26f092a85f4af8fc8689f7037684131276554612d44d6c43''',
   '''one-time-plaintext-secret''',
   '''0f94f059-b192-4c35-b9c0-f6520800cf07''',
 ]
