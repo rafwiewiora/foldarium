@@ -14,6 +14,7 @@ database, download model weights, or start a scheduler.
 - blind weekly quiz assembly and Selector-kit generation;
 - receptor-aligned, graph-symmetry-aware ligand RMSD evaluation;
 - Wednesday reference evaluation and retrospective publication;
+- fail-closed post-reveal and blind training-similarity audits;
 - optional Smina/ProLIF metrics and audited LLM scoring clients;
 - Supabase/Postgres control-plane migrations.
 
@@ -67,6 +68,33 @@ foldarium-pipeline weekly-plan \
 
 `weekly-plan` performs public downloads and writes a deterministic plan. It does
 not write to Supabase or launch predictions.
+
+## Audit published Weekly training similarity
+
+Install the evaluation extra, keep the resumable cache outside Git, and run the
+exact post-reveal label separately from the blind proxy:
+
+```bash
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-exact.json \
+  --mode exact
+
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-blind.json \
+  --mode blind
+```
+
+The command records search, download, parse, and incomplete-candidate failures
+as `unknown`. `--workers`, `--limit`, `--only`, and `--force` support bounded
+pilots and resumable reruns. The blind scorer's input type contains only the
+archived predicted receptor, predicted pocket, and candidate poses.
+
+For a version-pinned local or batch Foldseek backend,
+`pipeline/scripts/weekly_foldseek_batch.py prepare` emits 100 first-chain query
+PDBs plus a digest manifest. Run Foldseek with the documented eight-column
+format, then use its `import` command to seed the same fail-closed hit cache.
 
 ## Run one task locally
 
