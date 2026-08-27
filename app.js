@@ -326,6 +326,31 @@ function weeklyQuestionResultForItem(item) {
   return WEEKLY_QUESTION_RESULTS?.items?.find(result => result.item_id === item?.id) || null;
 }
 
+function restoreWeeklyPriorVote(questionState, prior, clusters) {
+  if (!questionState || !prior || !Array.isArray(clusters)) return false;
+  const choices = clusters.flatMap(cluster => cluster.members);
+  if (prior.picked_none) {
+    questionState.selected = {
+      none: true,
+      correct: !choices.some(acceptedChoiceCorrect),
+      label: 'None of these',
+    };
+    questionState.selectionExact = true;
+    questionState.selectedAsCluster = false;
+    questionState.answerChoices = choices;
+    return true;
+  }
+  if (!prior.choice_id) return false;
+  const choice = choices.find(member => member._weeklyChoiceId === prior.choice_id);
+  if (!choice) return false;
+  const exact = prior.selection_kind === 'exact';
+  questionState.selected = choice;
+  questionState.selectionExact = exact;
+  questionState.selectedAsCluster = !exact;
+  questionState.answerChoices = choices;
+  return true;
+}
+
 function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter) {
   if (filter === 'all') return true;
   const hasPose = weeklyItemHasCorrectPose(item);
@@ -2872,26 +2897,7 @@ async function loadQuestion(i) {
         cur.showAnswer = false;
       }
       if (item.source === 'weekly' && !savedWeeklyState) {
-        const prior = WEEKLY_VOTES.get(item.id);
-        if (prior?.picked_none) {
-          const choices = clusters.flatMap(cluster => cluster.members);
-          cur.selected = {
-            none: true,
-            correct: !choices.some(acceptedChoiceCorrect),
-            label: 'None of these',
-          };
-          cur.selectionExact = true;
-          cur.answerChoices = choices;
-        } else if (prior?.choice_id) {
-          const choice = clusters.flatMap(cluster => cluster.members)
-            .find(member => member._weeklyChoiceId === prior.choice_id);
-          if (choice) {
-            cur.selected = choice;
-            cur.selectionExact = false;
-            cur.selectedAsCluster = true;
-            cur.answerChoices = clusters.flatMap(cluster => cluster.members);
-          }
-        }
+        restoreWeeklyPriorVote(cur, WEEKLY_VOTES.get(item.id), clusters);
       }
       gridMethodIndex = savedWeeklyState?.savedGridPage || 0;
       activePaneId = null;

@@ -39,6 +39,48 @@ function navigationElements() {
   ]);
 }
 
+test('restored Weekly votes preserve exact, cluster, and none provenance', async () => {
+  const app = await readApp();
+  const exactChoice = { _weeklyChoiceId: 'choice-exact', correct: true };
+  const clusterChoice = { _weeklyChoiceId: 'choice-cluster', correct: false };
+  const clusters = [{ members: [exactChoice, clusterChoice] }];
+  const context = installDeclarations(app, [
+    'function restoreWeeklyPriorVote(questionState, prior, clusters)',
+  ], {
+    acceptedChoiceCorrect: choice => choice.correct,
+  });
+
+  const exactState = {};
+  assert.equal(context.restoreWeeklyPriorVote(exactState, {
+    choice_id: 'choice-exact',
+    picked_none: false,
+    selection_kind: 'exact',
+  }, clusters), true);
+  assert.equal(exactState.selected, exactChoice);
+  assert.equal(exactState.selectionExact, true);
+  assert.equal(exactState.selectedAsCluster, false);
+
+  const clusterState = {};
+  context.restoreWeeklyPriorVote(clusterState, {
+    choice_id: 'choice-cluster',
+    picked_none: false,
+    selection_kind: 'cluster',
+  }, clusters);
+  assert.equal(clusterState.selected, clusterChoice);
+  assert.equal(clusterState.selectionExact, false);
+  assert.equal(clusterState.selectedAsCluster, true);
+
+  const noneState = {};
+  context.restoreWeeklyPriorVote(noneState, {
+    choice_id: null,
+    picked_none: true,
+    selection_kind: 'none',
+  }, clusters);
+  assert.equal(noneState.selected.none, true);
+  assert.equal(noneState.selectionExact, true);
+  assert.equal(noneState.selectedAsCluster, false);
+});
+
 test('weekly vote completion releases question arrows after the next question rebuild', async () => {
   const app = await readApp();
 
