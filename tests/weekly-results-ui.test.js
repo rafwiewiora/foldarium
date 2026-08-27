@@ -562,10 +562,10 @@ test('weekly named sessions opt into leaderboard identity in initial app state',
 
 test('index exposes leaderboard name copy and scorecard shell', async () => {
   const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
-  assert.match(html, /Leaderboard name/);
+  assert.match(html, /Player name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608249/);
+  assert.match(html, /app\.js\?v=202608250/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
@@ -619,11 +619,12 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
   const renderWeeklyLeaderboard = evaluateDeclaration(app, 'function renderWeeklyLeaderboard()', sandbox);
   renderWeeklyLeaderboard();
   assert.equal(host.hidden, false);
-  assert.match(host.innerHTML, /Complete runs/);
-  assert.match(host.innerHTML, /Partial runs \(beta\)/);
+  assert.match(host.innerHTML, /Leaderboard/);
+  assert.match(host.innerHTML, /Other players/);
   assert.match(host.innerHTML, /Claude Opus/);
   assert.match(host.innerHTML, /Codex GPT-5\.6/);
-  assert.match(host.innerHTML, /Reviewer \(local, not ranked\)/);
+  assert.match(host.innerHTML, /Reviewer/);
+  assert.doesNotMatch(host.innerHTML, /% cov|local, not ranked/);
   assert.doesNotMatch(host.innerHTML, /#1 · <b>Claude Opus<\/b>/);
 });
 
@@ -692,8 +693,9 @@ test('revealed Weekly derives human and automated scores from retrospective summ
   renderAutomated();
   assert.equal(host.hidden, false);
   assert.match(host.innerHTML, /Automated methods/);
-  assert.match(host.innerHTML, /Claude Opus<\/b> · 1\/2 · 50%/);
-  assert.match(host.innerHTML, /Smina<\/b> · 0\/2 · 0%/);
+  assert.match(host.innerHTML, /Claude Opus<\/b> · 1\/2 correct/);
+  assert.match(host.innerHTML, /Smina<\/b> · 0\/2 correct/);
+  assert.doesNotMatch(host.innerHTML, /%/);
 });
 
 test('revealed Weekly login omits a zeroed local session and reports no human players', async () => {
@@ -874,6 +876,8 @@ test('weekly leaderboard escapes participant names before rendering HTML', async
   });
   assert.doesNotMatch(rendered, /<img/);
   assert.match(rendered, /&lt;img/);
+  assert.match(rendered, /1\/2 correct/);
+  assert.doesNotMatch(rendered, /%|cov/);
 });
 
 test('validateWeeklyLeaderboard rejects forbidden identity and answer fields recursively', () => {

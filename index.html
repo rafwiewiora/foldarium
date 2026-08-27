@@ -224,9 +224,16 @@
   .weekly-scorecard-note,.weekly-scorecard-empty{margin:0;color:var(--muted);font-size:11px;line-height:1.4}
   .revealed-weekly-modes{display:grid;gap:8px}
   .revealed-weekly-modes[hidden]{display:none}
-  .revealed-weekly-modes .setup-label{margin-bottom:0}
+  .weekly-release-status{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;
+    padding:11px 12px;border:1px solid #a9d9bb;border-radius:9px;background:#f3fbf6}
+  .weekly-release-status>span{padding:4px 6px;border-radius:5px;background:var(--good);color:#fff;
+    font:750 9px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+  .weekly-release-status div{display:grid;gap:2px;min-width:0}
+  .weekly-release-status strong{font-size:12.5px;line-height:1.3}
+  .weekly-release-status small{color:var(--muted);font-size:10.5px;line-height:1.35}
+  .weekly-answer-mix{margin:0;color:var(--muted);font-size:10.5px;line-height:1.4}
   .weekly-mode-card{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;
-    min-height:64px;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;
+    min-height:56px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;
     color:var(--ink);text-align:left;text-decoration:none;box-sizing:border-box}
   button.weekly-mode-card{cursor:pointer}
   button.weekly-mode-card:not(:disabled):hover,.weekly-mode-card[href]:hover{border-color:var(--accent);background:#f4fbfe}
@@ -480,7 +487,7 @@
     </div>
 
     <section class="participant-setup" id="participant-setup">
-      <label>Leaderboard name
+      <label>Player name
         <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
       </label>
       <p class="hint" id="participant-name-hint">Shown on the results leaderboard after release.</p>
@@ -506,14 +513,21 @@
       <div class="hint" id="setuphint"></div>
     </div>
     <section class="revealed-weekly-modes" id="revealed-weekly-modes" hidden>
-      <div class="setup-label">Choose a mode</div>
+      <header class="weekly-release-status">
+        <span>Revealed</span>
+        <div>
+          <strong>This week’s Weekly is revealed</strong>
+          <small>Next blind Weekly opens Saturday.</small>
+        </div>
+      </header>
+      <p class="weekly-answer-mix" id="weekly-answer-mix"></p>
       <button class="weekly-mode-card" id="play-for-fun-start" type="button">
         <strong>Play for fun</strong>
-        <span>Record a post-reveal vote, see the opponents and answer, but keep the crystal structure hidden.</span>
+        <span>No Xtal · opponents shown after each answer.</span>
       </button>
       <a class="weekly-mode-card retrospective" id="current-retrospective-link" href="/weekly/retrospectives">
-        <strong>Molecular retrospective</strong>
-        <span>Review the released Xtal structure, RMSDs, proteins, and player results.</span>
+        <strong>Review with Xtal</strong>
+        <span>Crystal structure, RMSDs, proteins, and player results.</span>
       </a>
     </section>
 
@@ -814,7 +828,7 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608249');
+      await loadScript('app.js?v=202608250');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

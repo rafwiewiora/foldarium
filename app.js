@@ -3134,6 +3134,15 @@ function showIntro() {
     const showRevealedModes = status === 'revealed' && !isRetrospectiveReview();
     const modes = $('#revealed-weekly-modes');
     if (modes) modes.hidden = !showRevealedModes;
+    const answerMix = $('#weekly-answer-mix');
+    if (answerMix) {
+      const poseAnswerCount = pool.filter(item => item.has_correct).length;
+      answerMix.textContent = showRevealedModes
+        ? `${pool.length} questions · ${poseAnswerCount} with a correct pose · ${
+          pool.length - poseAnswerCount
+        } where “None” is correct`
+        : '';
+    }
     const retrospectiveLink = $('#current-retrospective-link');
     if (retrospectiveLink && WEEKLY_ROUND?.round_id) {
       retrospectiveLink.href = `/weekly?retrospective_round=${encodeURIComponent(WEEKLY_ROUND.round_id)}`;
@@ -3544,7 +3553,7 @@ function renderWeeklySelectorLeaderboard() {
   host.innerHTML = `<div class="weekly-selector-heading">Automated methods</div>${
     sorted.map(row => `<div class="weekly-selector-row"><b>${
       escapeSelectorText(row.participant)
-    }</b> · ${row.correct}/${row.total} · ${Math.round(row.accuracy)}%</div>`).join('')
+    }</b> · ${row.correct}/${row.total} correct</div>`).join('')
   }`;
 }
 
@@ -3591,17 +3600,18 @@ function renderWeeklyResultsStatus() {
     renderWeeklyLeaderboard();
     return;
   }
-  copy.hidden = false;
-  if (heading) heading.textContent = 'Results & leaderboard';
   const revealed = WEEKLY_ROUND?.public_status === 'revealed';
+  copy.hidden = revealed && !WEEKLY_LEADERBOARD_ERROR;
+  if (heading) heading.textContent = revealed ? 'Blind-week results' : 'Results';
   panel.dataset.status = revealed ? 'revealed' : 'pending';
   if (WEEKLY_LEADERBOARD_ERROR) {
+    copy.hidden = false;
     copy.textContent = WEEKLY_LEADERBOARD_ERROR;
   } else if (revealed && WEEKLY_LEADERBOARD) {
-    copy.textContent = 'Wednesday results loaded. Reveal choices to update your local score.';
+    copy.textContent = '';
   } else {
     copy.textContent = revealed
-      ? 'Results are available. Reveal a choice for scores and vote totals.'
+      ? ''
       : (DEV2_FEEDBACK.formatReleaseCountdown?.(WEEKLY_ROUND?.closes_at)
         || 'Results Wednesday.');
   }
@@ -3611,11 +3621,8 @@ function renderWeeklyResultsStatus() {
 
 function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null }) {
   const name = escapeLeaderboardText(displayName || 'Participant');
-  const score = `${correct}/${answered}`;
-  const pct = Number.isFinite(accuracy) ? `${Math.round(accuracy)}%` : '—';
-  const cov = Number.isFinite(coverage) ? `${Math.round(coverage)}% cov` : '';
   const rankLabel = rank == null ? '' : `#${rank} · `;
-  return `${rankLabel}<b>${name}</b> · ${score} · ${pct}${cov ? ` · ${cov}` : ''}`;
+  return `${rankLabel}<b>${name}</b> · ${correct}/${answered} correct`;
 }
 
 function escapeLeaderboardText(value) {
@@ -3927,14 +3934,14 @@ function renderWeeklyLeaderboard() {
     sections.push(`<div class="weekly-scorecard-section">
       <div class="weekly-scorecard-heading">Your session</div>
       <div class="weekly-scorecard-row local">${formatWeeklyScoreLine({
-        displayName: `${localName} (local, not ranked)`,
+        displayName: localName,
         correct: localCorrect,
         answered: localAnswered,
         total,
         accuracy: localAccuracy ?? 0,
         coverage: localCoverage ?? 0,
       })}</div>
-      <p class="weekly-scorecard-note">Updates as you reveal answers. Not saved to the leaderboard.</p>
+      <p class="weekly-scorecard-note">Play-for-fun score · not ranked.</p>
     </div>`);
   }
   const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
@@ -3946,7 +3953,7 @@ function renderWeeklyLeaderboard() {
   } else {
     if (complete.length) {
       sections.push(`<div class="weekly-scorecard-section">
-        <div class="weekly-scorecard-heading">Complete runs</div>
+        <div class="weekly-scorecard-heading">Leaderboard</div>
         ${complete.map(row => `<div class="weekly-scorecard-row">${formatWeeklyScoreLine({
           displayName: row.display_name,
           correct: row.correct,
@@ -3962,7 +3969,7 @@ function renderWeeklyLeaderboard() {
     }
     if (partial.length) {
       sections.push(`<div class="weekly-scorecard-section">
-        <div class="weekly-scorecard-heading">Partial runs (beta)</div>
+        <div class="weekly-scorecard-heading">Other players</div>
         ${partial.map(row => `<div class="weekly-scorecard-row partial">${formatWeeklyScoreLine({
           displayName: row.display_name,
           correct: row.correct,
