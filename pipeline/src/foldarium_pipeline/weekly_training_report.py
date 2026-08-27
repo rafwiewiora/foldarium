@@ -644,7 +644,11 @@ def write_artifacts(
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     records = report["records"]
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(records[0]) if records else [])
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=list(records[0]) if records else [],
+            lineterminator="\n",
+        )
         if records:
             writer.writeheader()
             writer.writerows(records)
