@@ -4,7 +4,9 @@ lipid / too-small / other). Also flag potential over-exclusion (a >=6-atom rejec
 obvious junk category)."""
 import glob, re, sys
 from collections import Counter, defaultdict
-sys.path.insert(0, "."); sys.path.insert(0, "../viewer")
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, build_systems as bs
 from statistics import median
 

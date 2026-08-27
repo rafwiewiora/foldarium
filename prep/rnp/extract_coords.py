@@ -8,9 +8,12 @@ Streams; never extracts the whole archive.
 """
 import tarfile, json, pickle, sys, time
 
-TAR="/Users/rafalwiewiora/rnp_data/prediction_files.tar.gz"
-IDX="/tmp/cif_index.json"
-OUT="/tmp/coords_cache.pkl"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+TAR = paths.rnp_dir / "prediction_files.tar.gz"
+IDX = paths.work_dir / "cif_index.json"
+OUT = str(paths.work_dir / "coords_cache.pkl")
 
 idx=json.load(open(IDX))
 # path -> set of pred_chains we care about (usually one)

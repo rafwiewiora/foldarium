@@ -10,16 +10,19 @@ Writes quiz_items_rnp.json (list) + data_rnp/<id>/*. Resumable: skips items whos
 """
 import json, pickle, os, sys, re
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
-RNP="/Users/rafalwiewiora/rnp_data"
-QUIZ="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/quiz"
-DATA=f"{QUIZ}/data_rnp_v2"
+QUIZ = paths.quiz_dir
+DATA = QUIZ / "data_rnp_v2"
 DATA_REL="data_rnp_v2"
-PLAN=f"{RNP}/rnp_quiz_plan_v2.pkl"
-REFPROT="/tmp/ref_protein_atoms_v2.pkl"
-GTPATH="/tmp/groundtruth_v2.pkl"
-OUTJSON=f"{QUIZ}/quiz_items_rnp_v2.json"
+PLAN = paths.rnp_dir / "rnp_quiz_plan_v2.pkl"
+REFPROT = paths.work_dir / "ref_protein_atoms_v2.pkl"
+GTPATH = paths.work_dir / "groundtruth_v2.pkl"
+OUTJSON = QUIZ / "quiz_items_rnp_v2.json"
 POCKET_R=5.0
 POCKET_CA_R=12.0
 
@@ -68,7 +71,7 @@ for pi,p in enumerate(plan):
     sysid=target  # system_id
     # unique item id: target + instchain (sanitized) to avoid collisions for multi-ligand systems
     iid=f"{target}__{instchain}".replace('.','_')
-    dd=f"{DATA}/{iid}"; os.makedirs(dd, exist_ok=True)
+    dd = DATA / iid; os.makedirs(dd, exist_ok=True)
 
     # --- reference protein (full atoms), restrict to the reference pocket chain ---
     rp=refprot.get(p['ref_path'])
@@ -97,18 +100,18 @@ for pi,p in enumerate(plan):
         all_pose_xyz.append(np.array(c['xyz']))
     near=np.vstack(all_pose_xyz)
 
-    write_protein(prot_atoms, f"{dd}/protein.pdb")
-    np_pocket=write_protein(prot_atoms, f"{dd}/pocket.pdb", near=near)
+    write_protein(prot_atoms, dd / "protein.pdb")
+    np_pocket=write_protein(prot_atoms, dd / "pocket.pdb", near=near)
     if np_pocket==0:
         # fallback: pocket = whole protein chain
-        write_protein(prot_atoms, f"{dd}/pocket.pdb")
+        write_protein(prot_atoms, dd / "pocket.pdb")
 
     # --- write anonymized poses ---
     choices=[]
     for k,c in enumerate(p['choices']):
         elems=c['elems']; names=c['names']; xyz=c['xyz']
         atoms=[(elems[j], names[j], tuple(xyz[j])) for j in range(len(elems))]
-        write_lig(atoms, f"{dd}/pose-{k}.pdb")
+        write_lig(atoms, dd / f"pose-{k}.pdb")
         choices.append({
             'af3_sample':k, 'pose_file':f"{DATA_REL}/{iid}/pose-{k}.pdb",
             'rmsd':c['rmsd'], 'correct':c['correct'], 'plddt':c['plddt'],
@@ -136,7 +139,7 @@ for pi,p in enumerate(plan):
             if len(P)>=6:
                 R,t=kabsch(np.array(P),np.array(Q))
                 ligatoms=[(el,nm,tuple((R@np.array(xyz))+t)) for el,nm,xyz in g['lig'][instchain]]
-                write_lig(ligatoms, f"{dd}/xtal_lig.pdb")
+                write_lig(ligatoms, dd / "xtal_lig.pdb")
                 xtal_file=f"{DATA_REL}/{iid}/xtal_lig.pdb"
                 stats['xtal_ok']+=1
             else: stats['xtal_too_few_ca']+=1

@@ -7,6 +7,12 @@ carrying per-pose RMSD-to-crystal, ligand-pLDDT, and method; plus `n_heavy`, `no
 ## CAMEO 3D (prospective) — `cameo/`
 Source: weekly CAMEO co-folding server (AF3, `server993`), last ~12 months.
 
+Historical-dump commands read extracted models from `FOLDARIUM_CAMEO_DIR` or,
+by default, `cameo_data/extracted/modeling` under the repository root.
+`process_cameo.py` and `build_boltz_inputs.py` also expose `--cameo-dir`.
+Shared benchmark helpers are loaded from this repository's `benchmark/prep`
+directory rather than an external sibling checkout.
+
 **Filter funnel** (`cameo/funnel.py` — run it to reproduce the exact counts):
 
 | stage | count | % |
@@ -25,14 +31,30 @@ game); `oracle − game-able` = the **all-correct / trivial** bucket. Each bucke
 - `build_quiz_items.py` — game-able (a correct + a wrong pose)
 - `archive_build_allwrong.py` — all-wrong (no correct pose)
 - `archive_build_allcorrect.py` — all-correct (positive control)
+- `cameo/public_catchup.py` — current public CAMEO pages/AF3/reference coordinates; scan,
+  stage, then explicitly apply missing released weeks without the historical local dump
+- `cameo/score_stage_novelty.py` — resumable Foldseek/RCSB novelty scoring directly against a
+  catch-up stage's exported receptor and crystal ligand; `--update-report` copies only completed
+  boolean classifications into `catchup-report.json`
 
 Shared steps: `align_to_crystal.py` (superpose poses onto the crystal frame), `add_xtal_perpose.py` /
 `add_af3_proteins.py` / `use_af3_protein.py` (crystal ref + AF3-protein toggle). Novelty:
 `build_train_sim_quiz.py` / `build_sample_novelty.py` / `build_ligand_novelty.py` (Foldseek → pre-cutoff →
-ligand shape overlap). `process_cameo.py` is the core (collect models, pick the drug-like het, per-model RMSD).
+ligand shape overlap). Their public API dependency is the checked-in
+`foldarium_pipeline.foldseek` client; it searches only `pdb100`, batches RCSB release-date checks, and
+fails without assigning novelty when an upstream request is unavailable. `process_cameo.py` is the core
+(collect models, pick the drug-like het, per-model RMSD).
 
 ## Runs-n-Poses (retrospective) — `rnp/`
 Source: the RnP Zenodo release (`prediction_files.tar.gz`, 5 methods) + `all_similarity_scores.parquet`.
+
+All legacy RnP commands accept the same portable path options. Use `--rnp-dir` for
+the extracted/archive data, `--quiz-dir` for generated quiz assets,
+`--annotations` for `rnp_annotations.csv`, and `--work-dir` for large scratch
+caches. The corresponding environment variables are
+`FOLDARIUM_RNP_DATA_DIR`, `FOLDARIUM_QUIZ_DIR`,
+`FOLDARIUM_RNP_ANNOTATIONS`, and `FOLDARIUM_RNP_WORK_DIR`; run any command with
+`--help` for defaults and the expected layout.
 
 Full-archive rebuild pipeline:
 1. `rnp_matcher_v2.py` — map each scored ligand-instance-chain to its CIF pose chain by heavy-atom count.

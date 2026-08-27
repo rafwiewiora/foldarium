@@ -1,11 +1,16 @@
 #!/usr/bin/env python
 """Re-tag all RnP quiz items with novel + train_qcov from authoritative computed novelty.
 Drop 178 malformed items (id ends '__', no crystal ref). Assert zero untagged."""
-import json, pandas as pd
+import json
 
-QF = '/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/quiz/quiz_items_rnp.json'
+from _paths import parse_paths
 
-nov = pd.read_parquet('/Users/rafalwiewiora/rnp_data/novelty_computed.parquet')
+paths = parse_paths(__doc__)
+import pandas as pd
+
+QF = paths.quiz_dir / "quiz_items_rnp.json"
+
+nov = pd.read_parquet(paths.rnp_dir / "novelty_computed.parquet")
 # build itemid -> (novel, qcov)
 def mkid(s, l): return (str(s) + '__' + str(l)).replace('.', '_')
 id2 = {}

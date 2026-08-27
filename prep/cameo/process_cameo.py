@@ -22,15 +22,35 @@ Per target:
 Outputs: quiz/data/<TARGET>/{protein.pdb, pose-<s>.pdb, pocket-<s>.pdb, pocket-union.pdb}
 and quiz/quiz_items.json (backed up first as quiz_items.json.bak2).
 """
-import json, re, glob, shutil, sys, math, random
+import argparse, json, re, glob, shutil, sys, math, random
 from pathlib import Path
 from statistics import median
 from collections import defaultdict
+
+from _paths import BENCHMARK_PREP, HERE, add_cameo_dir_argument, default_cameo_dir
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_cameo_dir_argument(parser)
+    return parser, parser.parse_args()
+
+
+_CLI = _parse_args() if __name__ == "__main__" else None
+CAMEO = default_cameo_dir()
+if _CLI is not None:
+    _parser, _args = _CLI
+    CAMEO = _args.cameo_dir.expanduser().resolve()
+    if not CAMEO.is_dir():
+        _parser.error(
+            f"CAMEO directory does not exist: {CAMEO}. "
+            "Pass --cameo-dir or set FOLDARIUM_CAMEO_DIR."
+        )
+
 import numpy as np
 import gemmi
 
-HERE = Path(__file__).resolve().parent
-VIEWER = HERE.parent / "viewer"
+VIEWER = BENCHMARK_PREP
 DATA = HERE / "data"
 sys.path.insert(0, str(VIEWER))
 
@@ -43,7 +63,6 @@ import build_quiz_items as bq         # cluster, read_protein_atoms, write_pocke
 import compute_overlaps as co         # read_lig_pdb (for clustering coords, same as build_quiz_items)
 import difflib
 
-CAMEO = Path("/Users/rafalwiewiora/cameo_data/extracted/modeling")
 XTAL_CACHE = HERE / "_xtal_cache"     # cache pristine crystal cifs to avoid re-download
 XTAL_CACHE.mkdir(exist_ok=True)
 
@@ -225,6 +244,7 @@ def nearest_crystal_chain_to_poses(xmodel, xpolys, pose_coords):
 
 
 def main():
+    global CAMEO
     random.seed(7)
     dates = sorted(p.name for p in CAMEO.iterdir() if p.is_dir())
     print(f"CAMEO weeks: {dates}")

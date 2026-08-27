@@ -1,18 +1,46 @@
-# regenerated multi-GB pose/crystal data — rebuild with prep/ (see prep/README.md)
-app/data/
-app/data_rnp/
-_xtal_cache/
-# leaderboard DBs, python caches, cruft
+.DS_Store
+Thumbs.db
+
+# Local databases
 *.db
 *.sqlite
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# JavaScript
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+*.log
+
+# Python
 __pycache__/
 *.pyc
-.DS_Store
-# local release bundles built from the source archives
-artifacts/
-# benchmark similarity viewer: exclude regenerable per-system data (the baked demo/ IS kept)
-benchmark/app/systems/
-benchmark/**/_refcache/
-benchmark/**/_fshits/
-benchmark/**/*.bak*
-benchmark/**/*.log
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Rust and generated WebAssembly
+target/
+
+# Service CLIs and editor state
+supabase/.temp/
+.cursor/
+.idea/
+.vscode/
+
+# Private or generated scientific artifacts
+private-artifacts/
+pipeline-output/
+weekly-selector-runs/
+/local/

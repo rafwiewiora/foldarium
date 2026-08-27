@@ -7,9 +7,12 @@ Merge into /tmp/coords_cache.pkl (4-method).
 """
 import tarfile, json, pickle, sys, time, re
 
-TAR="/Users/rafalwiewiora/rnp_data/prediction_files.tar.gz"
-IDX="/tmp/cif_index.json"
-CACHE="/tmp/coords_cache.pkl"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+TAR = paths.rnp_dir / "prediction_files.tar.gz"
+IDX = paths.work_dir / "cif_index.json"
+CACHE = paths.work_dir / "coords_cache.pkl"
 
 idx=json.load(open(IDX))
 want={}

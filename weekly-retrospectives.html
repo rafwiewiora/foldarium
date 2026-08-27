@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Foldarium · Weekly retrospectives</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/foldarium-mark.svg?v=2026082501"/>
+  <link rel="stylesheet" href="/weekly-retrospectives.css?v=2026082603"/>
+</head>
+<body>
+  <div id="archive-app">
+    <header class="site-header">
+      <a class="brand" href="/weekly/retrospectives" aria-label="Foldarium weekly retrospectives">
+        <img src="/assets/foldarium-mark.svg?v=2026082501" alt="" width="38" height="38"/>
+        <div><strong>Foldarium</strong><span>Weekly retrospectives</span></div>
+      </a>
+      <a class="weekly-link" href="/weekly">Current quiz</a>
+    </header>
+
+    <nav class="archive-tabs" aria-label="Retrospective views">
+      <a id="archive-tab" href="/weekly/retrospectives">Archive</a>
+      <a id="all-time-tab" href="/weekly/retrospectives?view=all-time">All-time</a>
+    </nav>
+
+    <main class="archive-shell">
+      <section id="archive-view" aria-labelledby="archive-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Molecular-pose quiz history</p>
+            <h1 id="archive-heading">Weekly archive</h1>
+          </div>
+          <button id="choose-round" class="button quiet" type="button" hidden>Choose round</button>
+        </div>
+        <div id="archive-layout" class="archive-layout">
+          <div id="round-list" class="round-list" aria-live="polite"></div>
+          <aside id="round-detail" class="round-detail" hidden aria-live="polite"></aside>
+        </div>
+        <button id="load-more" class="button quiet load-more" type="button" hidden>Load older weeks</button>
+      </section>
+
+      <section id="all-time-view" hidden aria-labelledby="all-time-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Cumulative automated performance</p>
+            <h1 id="all-time-heading">All-time rankings</h1>
+          </div>
+        </div>
+        <div class="ranking-controls" aria-label="Ranking controls">
+          <div class="segmented" id="ranking-view">
+            <button type="button" data-ranking="total_correct">Total correct</button>
+            <button type="button" data-ranking="weighted_average_accuracy">Average accuracy</button>
+          </div>
+          <div class="segmented" id="participant-filter">
+            <button type="button" data-kind="">All</button>
+            <button type="button" data-kind="human" title="Show player pseudonyms">Human</button>
+            <button type="button" data-kind="llm">LLM</button>
+            <button type="button" data-kind="baseline">Baseline</button>
+          </div>
+        </div>
+        <div id="all-time-status" class="status" role="status" aria-live="polite"></div>
+        <div id="all-time-table" class="ranking-table"></div>
+      </section>
+    </main>
+
+    <dialog id="round-chooser" class="round-chooser" aria-labelledby="round-chooser-title">
+      <div class="chooser-head">
+        <h2 id="round-chooser-title">Choose a week</h2>
+        <button id="close-round-chooser" class="icon-button" type="button" aria-label="Close">×</button>
+      </div>
+      <div id="round-chooser-list" class="chooser-list"></div>
+    </dialog>
+  </div>
+  <script type="module" src="/weekly-retrospectives.js?v=2026082604"></script>
+</body>
+</html>

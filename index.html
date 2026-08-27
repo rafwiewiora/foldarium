@@ -3,146 +3,817 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Pose Quiz · which predicted pose is correct?</title>
-<link rel="icon" href="data:,"/>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.css"/>
+<title>Foldarium · Pose Quiz</title>
+<link rel="icon" type="image/svg+xml" href="/assets/foldarium-mark.svg?v=2026082501"/>
 <style>
+  @font-face{font-family:"Geist Sans";font-style:normal;font-display:swap;font-weight:100 900;
+    src:url("https://cdn.jsdelivr.net/fontsource/fonts/geist:vf@5.3.0/latin-wght-normal.woff2") format("woff2-variations")}
   :root{
-    --bg:#0d1117; --panel:#11161d; --line:#222c38; --ink:#e6edf3; --muted:#8b98a8;
-    --faint:#5a6675; --accent:#3fb6e0; --good:#2BA84A; --bad:#E23B2E; --gold:#F6BD16;
+    --bg:#f3f5f7; --panel:#fff; --line:#dce1e7; --ink:#101418; --muted:#59636f;
+    --faint:#737e8c; --accent:#1687b8; --good:#167c36; --bad:#c93128; --gold:#b77900;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
     font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}
+  #side,#viewer-question,#view-options,.badge{font-family:"Geist Sans",ui-sans-serif,system-ui,sans-serif}
+  #side{--ink:#171a1f;--muted:#66717f;--faint:#8a94a3;--line:#e2e6eb;color:var(--ink)}
+  #side h1{font-size:18px;letter-spacing:.065em}
+  #side .sub{font-size:12.5px;color:var(--muted);letter-spacing:.025em;line-height:1.45}
+  #side .q{font-size:11.5px;color:var(--faint);letter-spacing:.075em}
+  #side .choice{font-size:14px;line-height:1.4}
+  #side .setup-label{color:var(--muted)}
+  #side .setup-options small,#side .hint{color:var(--faint)}
+  #side .choice .tag{color:var(--faint)}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}
+  .brand-mark{width:38px;height:38px;flex:none;display:block}
+  .brand-copy{min-width:0}
+  .brand-copy h1{margin:0}
+  .brand-copy .sub strong{color:var(--ink);font-weight:650}
+  button,input,summary{font-family:inherit}
+  #wrap[hidden],#archive-review-loading[hidden]{display:none!important}
+  #archive-review-loading{min-height:100vh;display:grid;place-items:center;padding:24px;color:var(--muted)}
+  #archive-review-loading .archive-loading-card{display:flex;align-items:center;gap:12px;
+    padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);
+    font-size:13px;font-weight:650}
+  #archive-review-loading .archive-loading-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+    animation:archive-loading-pulse .9s ease-in-out infinite alternate}
+  @keyframes archive-loading-pulse{to{opacity:.25;transform:scale(.72)}}
+  @media(prefers-reduced-motion:reduce){#archive-review-loading .archive-loading-dot{animation:none}}
   #wrap{display:flex;height:100vh}
-  #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
-    padding:18px 18px 14px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
-  #stage{flex:1;position:relative;min-width:0;background:#fff}
+  #side{width:380px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+    padding:26px 24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto}
+  #stage{--grid-controls-clearance:96px;--grid-top-clearance:84px;flex:1;position:relative;
+    min-width:0;background:#fff}
   #app{position:absolute;inset:0}
+  #stage.grid-active #app{visibility:hidden}
   #stage canvas{transition:opacity .14s ease-out}
-  #stage.loading-system canvas{opacity:0;transition:none}
+  #stage.loading-system #app canvas{opacity:0;transition:none}
   #gridview{display:none;position:absolute;inset:0;z-index:20;overflow:auto;padding:10px;background:#e9eef3;
     transition:opacity .14s ease-out}
-  #gridview.on{display:block}
-  #stage.loading-system #gridview{opacity:0;transition:none}
+  #gridview.on{display:block;top:var(--grid-top-clearance);bottom:var(--grid-controls-clearance)}
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
+    margin-inline:auto;
     min-height:100%;transition:opacity .14s ease-out}
   #gridview.loading-grid #gridcells{opacity:0;transition:none}
   .grid-card{position:relative;flex:0 0 var(--grid-card-w,300px);width:var(--grid-card-w,300px);
     height:var(--grid-card-h,225px);min-width:0;overflow:hidden;background:#fff;
     border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
   .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
+  .grid-card.inspecting{border-color:#6c7b8a;box-shadow:0 0 0 2px #6c7b8a2c}
+  .grid-card.rejected,#app.rejected{opacity:.32;filter:grayscale(.8)}
+  .grid-card.rejected:hover,.grid-card.rejected:focus-within,
+  #app.rejected:hover,#app.rejected:focus-within{opacity:.62}
   .grid-card.correct{border-color:var(--good)}
   .grid-card.wrong{border-color:var(--bad)}
+  .grid-card.failed{border-color:var(--bad);background:#fff4f2}
   .grid-host{position:absolute;inset:0}
-  .grid-head{position:absolute;z-index:5;top:8px;left:8px;display:flex;align-items:center;gap:7px;
-    max-width:calc(100% - 16px);padding:5px 8px;border:1px solid #d5dde5;border-radius:6px;
-    background:#ffffffeb;color:#273444;font:600 11px/1.2 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
+  .grid-head{position:absolute;z-index:5;top:8px;left:8px;display:flex;align-items:center;gap:5px;
+    width:calc(100% - 16px);min-width:0;box-sizing:border-box;overflow:hidden;white-space:nowrap;
+    padding:5px 8px;border:1px solid #d5dde5;border-radius:6px;background:#ffffffeb;color:#273444;
+    font:600 11px/1.2 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
   .grid-head:disabled{cursor:default}
   .grid-dot{width:10px;height:10px;border-radius:3px;flex:none}
-  .grid-meta{color:#667587;font-weight:500;white-space:nowrap}
+  .grid-title{flex:none;white-space:nowrap}
+  .grid-rmsd{flex:none;font-size:inherit;font-weight:600;white-space:nowrap}
+  .grid-rmsd.correct{color:var(--good)}
+  .grid-rmsd.wrong{color:var(--bad)}
+  .grid-meta{flex:0 1 auto;min-width:0;overflow:hidden;text-align:left;text-overflow:ellipsis;color:#667587;
+    font-weight:500;white-space:nowrap}
+  .pose-info{position:relative;display:inline-grid;place-items:center;flex:none;margin-left:auto;width:18px;height:18px;
+    border:1px solid currentColor;border-radius:50%;color:var(--muted);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;
+    cursor:help;outline:none}
+  .pose-info:hover,.pose-info:focus-visible{color:var(--accent)}
+  .pose-tooltip{position:fixed;z-index:100;width:min(390px,calc(100vw - 16px));
+    padding:6px;border:1px solid #d7e0e7;border-top:3px solid var(--accent);border-radius:10px;
+    background:#fffffff8;color:var(--ink);font:500 11px/1.35 ui-sans-serif,system-ui,sans-serif;
+    box-shadow:0 12px 34px #16202b30;pointer-events:none;backdrop-filter:blur(8px)}
+  .pose-tooltip[hidden]{display:none}
+  .pose-tooltip-row{padding:7px}
+  .pose-tooltip-row+.pose-tooltip-row{border-top:1px solid #e4e9ee}
+  .pose-tooltip-method{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;
+    background:#e9f5fa;color:#116d94;font-size:10px;font-weight:750;letter-spacing:.02em}
+  .pose-tooltip-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:6px}
+  .pose-tooltip-metric{min-width:0;padding:6px 7px;border-radius:6px;background:#f4f7f9}
+  .pose-tooltip-metric small{display:block;overflow:hidden;color:#788491;font-size:8.5px;font-weight:650;
+    letter-spacing:.045em;text-overflow:ellipsis;text-transform:uppercase;white-space:nowrap}
+  .pose-tooltip-metric strong{display:block;margin-top:2px;color:#25313d;font-size:11px;font-weight:680;
+    overflow-wrap:anywhere}
   .grid-error{position:absolute;inset:0;display:grid;place-items:center;padding:20px;color:#8b2d25;
     font-size:12px;text-align:center;background:#fff}
+  .grid-review-actions{position:absolute;z-index:6;right:8px;bottom:8px;display:flex;gap:5px}
+  .grid-review-actions[hidden]{display:none}
+  .grid-review-actions button{min-height:30px;padding:5px 9px;border:1px solid #d5dde5;border-radius:7px;
+    background:#fffffff2;color:#425161;font:650 10.5px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;
+    box-shadow:0 1px 4px #16202b16}
+  .grid-review-actions button:hover,.grid-review-actions button.on{border-color:var(--accent);color:var(--accent)}
+  .grid-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
+  #one-review-actions{position:absolute;z-index:31;top:96px;left:16px;display:flex;gap:6px;
+    padding:5px;border:1px solid #d5dde5;border-radius:9px;background:#fffffff2;
+    box-shadow:0 3px 12px #16202b1f;backdrop-filter:blur(7px)}
+  #one-review-actions[hidden]{display:none}
+  #one-review-actions button{min-height:34px;padding:7px 12px;border:1px solid #d5dde5;border-radius:7px;
+    background:#fff;color:#425161;font-size:12px;font-weight:650;cursor:pointer}
+  #one-review-actions button:hover,#one-review-actions button.on{border-color:var(--accent);color:var(--accent)}
+  #one-review-actions .reject.on{border-color:#9a5960;color:#8b3038;background:#fff4f4}
+  .grid-card .msp-highlight-toast-wrapper{right:6px!important;bottom:48px!important;
+    max-width:calc(100% - 12px)!important}
+  .grid-card .msp-highlight-info{max-width:220px!important;max-height:27px!important;overflow:hidden!important;
+    padding:3px 6px!important;border:1px solid #d9dfe4;border-radius:5px;background:#fffffff2!important;
+    color:#5b6672!important;font-size:9px!important;line-height:1.15!important;white-space:nowrap!important;
+    text-overflow:ellipsis;box-shadow:0 2px 7px #16202b18}
+  .grid-card .msp-highlight-info-additional{font-size:inherit!important;color:#6f7984!important}
+  .grid-card .msp-highlight-info-hr{display:none!important}
+  .grid-card .msp-viewport-controls{display:none!important}
   #gridpages{overflow-x:auto}
   #gridpages button{flex:0 0 auto;min-width:52px;white-space:nowrap}
-  h1{font-size:15px;letter-spacing:.14em;text-transform:uppercase;margin:0;font-weight:600}
-  .sub{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-top:4px}
-  #setup{margin-top:2px}
-  .q{font-size:12px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase}
-  .lig{font-size:18px;font-weight:600}
-  .lig small{font-size:12px;color:var(--muted);font-weight:400}
-  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-  .seg button{flex:1;background:transparent;color:var(--muted);border:0;padding:8px;font-size:12px;cursor:pointer}
-  .seg button.on{background:#1b2330;color:var(--ink)}
-  .choices{display:flex;flex-direction:column;gap:7px}
-  .choice{display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);
-    border-radius:8px;cursor:pointer;background:transparent;color:var(--ink);font-size:13px;text-align:left;transition:.12s}
+  h1{font-size:19px;letter-spacing:.08em;text-transform:uppercase;margin:0;font-weight:700}
+  .sub{font-size:12px;color:var(--muted);letter-spacing:.04em;line-height:1.5;margin-top:5px}
+  #setup{margin-top:4px;display:flex;flex-direction:column;gap:18px}
+  .setup-label{font-size:12px;color:var(--muted);font-weight:600;margin-bottom:7px}
+  .q{font-size:12px;color:var(--faint);font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+  #question-head{display:flex;justify-content:space-between;gap:16px}
+  .lig{font-size:21px;line-height:1.3;font-weight:650}
+  .lig small{font-size:13px;color:var(--muted);font-weight:400}
+  .seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;min-height:48px;background:transparent;color:var(--muted);border:0;padding:10px 12px;
+    font-size:13px;cursor:pointer}
+  .seg button.on{background:#edf3f6;color:var(--ink)}
+  .setup-options button{display:flex;flex-direction:column;align-items:flex-start;gap:3px;text-align:left}
+  .setup-options small{font-size:11.5px;color:var(--faint);font-weight:400;line-height:1.3}
+  .instruction{font-size:14px;line-height:1.5;color:var(--muted)}
+  .instruction.alignment-warning{color:#8a5d15;font-weight:600}
+  details{background:#fff;border:1px solid var(--line);border-radius:9px}
+  details[hidden]{display:none}
+  summary{min-height:44px;padding:12px 13px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:600}
+  .details-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:10px}
+  button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .choices{display:flex;flex-direction:column;gap:9px}
+  .choice{min-height:44px;display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);
+    border-radius:9px;cursor:pointer;background:#fff;color:var(--ink);font-size:14px;text-align:left;transition:.12s}
   .choice:hover{border-color:var(--accent)}
-  .choice.sel{border-color:var(--accent);background:#15212b}
-  .sw{width:14px;height:14px;border-radius:3px;flex:none;border:1px solid rgba(255,255,255,.25)}
-  .choice .tag{margin-left:auto;font-size:11px;color:var(--muted)}
-  .choice.correct{border-color:var(--good);background:#11261a}
-  .choice.wrong{border-color:var(--bad);background:#261413}
-  .choice .rmsd{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12px}
-  button.primary{background:var(--accent);color:#06131a;border:0;border-radius:8px;padding:11px;
-    font-size:13px;font-weight:600;cursor:pointer}
+  .choice.sel{border-color:var(--accent);background:#edf8fc;outline:2px solid var(--accent);outline-offset:-2px}
+  .sw{width:15px;height:15px;border-radius:4px;flex:none;border:1px solid rgba(0,0,0,.16)}
+  .choice .tag{margin-left:auto;font-size:12px;color:var(--muted)}
+  .choice.sel .tag{color:var(--accent);font-weight:600}
+  .choice.correct{border-color:var(--good);background:#eef8f1}
+  .choice.wrong{border-color:var(--bad);background:#fff1f0}
+  .choice .rmsd{flex:none;margin-left:auto;font-variant-numeric:tabular-nums;font-size:13px;white-space:nowrap}
+  #answer-choices{gap:7px}
+  #answer-choices .choice{min-height:40px;padding:8px 10px;gap:9px}
+  #answer-choices .choice .nm{display:flex;align-items:center;gap:6px;flex:1;min-width:0;
+    overflow:hidden;white-space:nowrap}
+  #answer-choices .answer-choice-title{flex:none;font-weight:650}
+  #answer-choices .answer-choice-count{flex:none;color:var(--muted);font-size:11px;font-weight:500}
+  #answer-choices .answer-choice-status{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);
+    font-size:11px;font-weight:600}
+  #answer-choices .choice.correct .answer-choice-status{color:#287f3c}
+  #answer-choices .choice.wrong .answer-choice-status{color:#a64038}
+  #answer-choices .choice .rmsd{font-size:12px;font-weight:750}
+  #choices{gap:8px;background:transparent}
+  #choices .choice{min-height:50px;padding:9px 11px;gap:10px;border:1px solid var(--line);
+    border-left:5px solid var(--choice-color);border-radius:9px;background:#fff;color:var(--ink);
+    font-size:14px;font-weight:600;text-shadow:none;box-shadow:0 1px 2px #16202b0a}
+  #choices .choice:hover{background:#f8fafb;border-color:#c7d0da;border-left-color:var(--choice-color);filter:none}
+  #choices .choice.sel{background:#eef7fb;border-color:var(--accent);border-left-color:var(--choice-color);
+    outline:0;box-shadow:0 0 0 1px var(--accent)}
+  #choices .choice.none{border-left-style:dashed}
+  #choices .choice.rejected{opacity:.38;text-decoration:line-through}
+  #choices .sw{display:none}
+  #choices .choice .nm{flex:1;min-width:0}
+  #choices .pose-count{margin-left:5px;color:var(--muted);font-size:12px;font-weight:500;white-space:nowrap}
+  #choices .choice .tag{display:flex;align-items:center;justify-content:flex-end;min-width:0;margin-left:4px;
+    color:var(--accent);font-size:11px;font-weight:650;text-shadow:none;white-space:nowrap}
+  #choices .pose-info{margin-left:4px;width:20px;height:20px;background:#f7f9fb;color:#6c7785}
+  button.primary{min-height:44px;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:12px 14px;
+    font-size:14px;font-weight:650;cursor:pointer}
   button.primary:disabled{opacity:.4;cursor:default}
-  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;
-    padding:10px;font-size:13px;cursor:pointer}
-  button.ghost.mini{padding:7px 10px;font-size:11.5px;color:var(--muted);align-self:flex-start}
+  button.ghost{min-height:42px;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:9px;
+    padding:11px 13px;font-size:14px;cursor:pointer}
+  button.ghost.mini{padding:8px 11px;font-size:12.5px;color:var(--muted);align-self:flex-start}
   button.ghost.on{border-color:var(--accent);color:var(--accent)}
-  .verdict{font-size:13px;line-height:1.5;padding:10px 12px;border-radius:8px;background:#141b24;border:1px solid var(--line)}
-  .score{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:6px}
+  .verdict{font-size:14px;line-height:1.55;padding:14px;border-radius:9px;background:#f6f8fa;border:1px solid var(--line)}
+  .verdict[data-state]{font-weight:650;box-shadow:0 2px 10px #16202b10}
+  .verdict[data-state="recording"]{border-color:#9dcfe4;background:#edf8fc;color:#176686}
+  .verdict[data-state="saved"]{border-color:#9bcca8;background:#eef9f1;color:#216d39}
+  .verdict[data-state="warning"]{border-color:#ddc283;background:#fff9e9;color:#795818}
+  .verdict[data-state="error"]{border-color:#d7a2a7;background:#fff3f3;color:#862f39}
+  .verdict strong{display:block;font-size:19px;margin-bottom:4px}
+  .post-reveal-vote-note{display:block;margin-top:7px;color:var(--muted);font:600 11px/1.4 var(--mono)}
+  .score{border-top:1px solid var(--line);padding-top:12px;font-size:13px;display:flex;flex-direction:column;gap:8px}
   .score .row{display:flex;justify-content:space-between}
   .score b{font-variant-numeric:tabular-nums}
-  .hint{font-size:11px;color:var(--faint);line-height:1.5}
-  .badge{position:absolute;top:14px;left:16px;font-size:11px;color:#5a6675;background:#ffffffcc;
-    z-index:10;padding:4px 9px;border-radius:6px;border:1px solid #e3e8ee}
+  .weekly-results{display:none;margin-top:auto;border-top:1px solid var(--line);padding-top:12px}
+  .weekly-results .hint{margin-top:6px}
+  .weekly-scorecard{display:flex;flex-direction:column;gap:10px;margin-top:8px;font-size:12px}
+  .weekly-scorecard-section{display:flex;flex-direction:column;gap:4px}
+  .weekly-scorecard-heading{font-size:11px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase}
+  .weekly-scorecard-row{padding:7px 9px;border-radius:6px;background:#f7f9fb;border:1px solid var(--line);
+    color:var(--ink);line-height:1.35;font-variant-numeric:tabular-nums}
+  .weekly-scorecard-row.local{border-color:#a8d7e9;background:#edf8fc}
+  .weekly-scorecard-row.partial{opacity:.92}
+  .weekly-scorecard-note,.weekly-scorecard-empty{margin:0;color:var(--muted);font-size:11px;line-height:1.4}
+  .revealed-weekly-modes{display:grid;gap:8px}
+  .revealed-weekly-modes[hidden]{display:none}
+  .weekly-release-status{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px;
+    padding:11px 12px;border:1px solid #a9d9bb;border-radius:9px;background:#f3fbf6}
+  .weekly-release-status>span{padding:4px 6px;border-radius:5px;background:var(--good);color:#fff;
+    font:750 9px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+  .weekly-release-status div{display:grid;gap:2px;min-width:0}
+  .weekly-release-status strong{font-size:12.5px;line-height:1.3}
+  .weekly-release-status small{color:var(--muted);font-size:10.5px;line-height:1.35}
+  .weekly-answer-mix{margin:0;color:var(--muted);font-size:10.5px;line-height:1.4}
+  .weekly-mode-card{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;
+    min-height:56px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;
+    color:var(--ink);text-align:left;text-decoration:none;box-sizing:border-box}
+  button.weekly-mode-card{cursor:pointer}
+  button.weekly-mode-card:not(:disabled):hover,.weekly-mode-card[href]:hover{border-color:var(--accent);background:#f4fbfe}
+  button.weekly-mode-card:disabled{opacity:.48;cursor:default}
+  .weekly-mode-card strong{font-size:13px}
+  .weekly-mode-card span{color:var(--muted);font-size:10.5px;line-height:1.4}
+  .weekly-mode-card.retrospective{border-color:#cfc4f5;background:#faf8ff}
+  .weekly-question-result{display:flex;flex-direction:column;gap:7px;margin-top:8px;font-size:12px}
+  .weekly-question-result-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:9px 10px;border:1px solid #a8d7e9;border-radius:7px;background:#edf8fc}
+  .weekly-question-result-summary>div{display:flex;align-items:baseline;gap:6px;min-width:0}
+  .weekly-question-result-summary strong{font-size:18px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .weekly-question-result-summary span{font-size:11px;line-height:1.3}
+  .weekly-question-result-info{position:relative;flex:none}
+  .weekly-question-result-info summary{display:grid;place-items:center;width:auto;height:24px;min-height:0;padding:0 7px;
+    border:1px solid #76b7d3;border-radius:999px;color:#126f97;background:#fff;font-size:10px;font-weight:700;
+    cursor:pointer;list-style:none}
+  .weekly-question-result-info summary::-webkit-details-marker{display:none}
+  .weekly-question-result-info summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .weekly-question-result-popover{position:absolute;z-index:50;right:0;bottom:calc(100% + 7px);
+    width:min(300px,calc(100vw - 48px));padding:9px 10px;border:1px solid #bed1dd;border-radius:7px;
+    background:#fff;color:var(--ink);box-shadow:0 8px 22px #16202b24;line-height:1.45}
+  .weekly-question-result-popover div+div{margin-top:5px;padding-top:5px;border-top:1px solid #edf0f3}
+  .weekly-question-result-heading{color:var(--faint);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .weekly-question-result-ranking{display:flex;flex-direction:column;gap:4px}
+  .weekly-question-result-answer{display:grid;grid-template-columns:20px minmax(0,1fr) 52px 72px;align-items:center;
+    gap:6px;height:42px;box-sizing:border-box;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#f7f9fb}
+  .weekly-question-result-answer>span:last-child{color:var(--muted);font-variant-numeric:tabular-nums;
+    white-space:nowrap;text-align:right}
+  .weekly-question-result-rank{display:grid;place-items:center;width:18px;height:18px;border-radius:4px;background:#dfe8ee;
+    color:#445461;font-size:10px;font-weight:750}
+  .weekly-question-result-correct{color:var(--good);font-size:10px;font-weight:750;text-transform:uppercase}
+  .weekly-question-result-correct.cluster-accepted{color:var(--gold)}
+  #answer-details[data-private-review="true"]{border:0;border-radius:0;background:transparent}
+  #answer-details[data-private-review="true"]>summary,
+  #answer-details[data-private-review="true"] #answer-ai,
+  #answer-details[data-private-review="true"] #myview,
+  #answer-details[data-private-review="true"] #xtalrow,
+  #answer-details[data-private-review="true"] #score{display:none!important}
+  #answer-details[data-private-review="true"]>.details-body{padding:0}
+  #answer-details[data-private-review="true"] #answer-choices{gap:8px}
+  #answer-details[data-private-review="true"] #answer-choices .choice{min-height:50px;padding:9px 11px;
+    gap:8px;border:1px solid var(--line);border-left:5px solid var(--choice-color);border-radius:9px;
+    background:#fff;color:var(--ink);font-size:14px;font-weight:600;box-shadow:0 1px 2px #16202b0a}
+  #answer-details[data-private-review="true"] #answer-choices .choice:hover{background:#f8fafb;
+    border-color:#c7d0da;border-left-color:var(--choice-color)}
+  #answer-details[data-private-review="true"] #answer-choices .choice.correct{
+    border:2px solid var(--good);border-left-width:5px}
+  #answer-details[data-private-review="true"] #answer-choices .choice.cluster-accepted{
+    border-color:var(--line);border-left-color:var(--gold);background:#fff}
+  #answer-details[data-private-review="true"] #answer-choices .sw,
+  #answer-details[data-private-review="true"] #answer-choices .answer-choice-status{display:none}
+  #answer-details[data-private-review="true"] #answer-choices .nm{display:flex;flex:1;min-width:0;
+    align-items:center;gap:5px;overflow:hidden;white-space:nowrap}
+  #answer-details[data-private-review="true"] #answer-choices .answer-choice-count{font-size:12px}
+  #answer-details[data-private-review="true"] #answer-choices .rmsd{margin-left:auto;padding:5px 8px;
+    border-radius:6px;background:var(--choice-color);color:#fff;font-size:13px;font-weight:750;
+    line-height:1;letter-spacing:0;box-shadow:0 2px 7px #16202b28;font-variant-numeric:tabular-nums}
+  #answer-details[data-private-review="true"] #answer-choices .pose-info{width:20px;height:20px;
+    margin-left:3px;background:#f7f9fb;color:#6c7785}
+  #private-review-banner{display:none;margin:0;color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase}
+  #private-review-banner[data-active="true"]{display:block}
+  #private-review-banner[hidden]{display:none!important}
+  #archive-review-banner{display:none;margin:0;color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase}
+  #archive-review-banner[data-active="true"]{display:block}
+  #archive-review-banner a{color:var(--accent);text-decoration:none}
+  #archive-review-banner[hidden]{display:none!important}
+  #private-review-control{display:none;gap:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:#fff}
+  #private-review-control[hidden]{display:none!important}
+  #private-review-control .sub{margin:0}
+  #private-review-control input{width:100%;background:#fff;border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:10px 12px;font-size:14px}
+  #private-review-status{min-height:1.2em;margin:0;font-size:12px;color:var(--muted)}
+  #private-review-status[data-tone="error"]{color:var(--bad)}
+  #private-review-status[data-tone="active"]{color:#6f5712}
+  html[data-quiz-mode="weekly"] #private-review-control{display:flex;flex-direction:column}
+  .vote-submit-row{display:flex;align-items:stretch;gap:8px}
+  .vote-submit-row #lock{flex:1;min-width:0}
+  .vote-comment-option{display:none;align-items:center;justify-content:center;gap:6px;margin:0;
+    padding:0 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);
+    font-size:11.5px;font-weight:600;line-height:1.2;cursor:pointer;white-space:nowrap}
+  .vote-comment-option input{accent-color:var(--accent)}
+  .question-progress{display:flex;align-items:center;gap:8px;min-width:0}
+  .question-nav{display:none;align-items:center;gap:3px}
+  .question-nav button{width:27px;height:27px;padding:0;border:1px solid var(--line);border-radius:7px;
+    background:#fff;color:var(--muted);font-size:14px;font-weight:700;line-height:1;cursor:pointer}
+  .question-nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .question-nav button:disabled{opacity:.3;cursor:default}
+  .retrospective-question-filter{display:flex;align-items:center;gap:7px}
+  .retrospective-question-filter[hidden]{display:none}
+  .retrospective-question-filter span{color:var(--faint);font-size:10px;font-weight:700;
+    letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+  .retrospective-question-filter select{min-width:0;width:100%;height:30px;padding:0 28px 0 9px;
+    border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);
+    font-family:inherit;font-size:11px;font-weight:600}
+  .quick-start-open{align-self:flex-start;min-height:27px;padding:4px 8px;border:1px solid var(--line);
+    border-radius:7px;background:#fff;color:var(--muted);font-size:11px;font-weight:650;cursor:pointer}
+  .quick-start-open:hover{border-color:var(--accent);color:var(--accent)}
+  .quick-start-open[hidden]{display:none}
+  dialog{width:min(520px,calc(100vw - 32px));background:var(--panel);color:var(--ink);
+    border:1px solid var(--line);border-radius:12px;padding:0;box-shadow:0 22px 80px #000a}
+  dialog::backdrop{background:#05080cb8;backdrop-filter:blur(2px)}
+  .dialog-form{display:flex;flex-direction:column;gap:12px;padding:20px}
+  .dialog-form h2{font-size:15px;letter-spacing:.08em;margin:0}
+  .dialog-form label{font-size:12px;color:var(--muted)}
+  .dialog-form input,.dialog-form textarea{width:100%;margin-top:6px;background:#fff;
+    border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
+  .dialog-form textarea{min-height:130px;resize:vertical}
+  .dialog-form input:focus,.dialog-form textarea:focus{outline:none;border-color:var(--accent)}
+  .dialog-actions{display:flex;justify-content:flex-end;gap:8px}
+  .dialog-status{min-height:1.3em;margin:0;color:var(--muted);font-size:12px;line-height:1.4}
+  .dialog-status:empty{display:none}
+  .quick-start-form{gap:15px}
+  .quick-start-form h2{letter-spacing:0}
+  .quick-start-intro{margin:-7px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+  .quick-start-list{display:grid;gap:11px;margin:0;padding:0;list-style:none;counter-reset:quick-start}
+  .quick-start-list li{display:grid;grid-template-columns:25px 1fr;gap:9px;align-items:start;
+    color:var(--muted);font-size:12px;line-height:1.45;counter-increment:quick-start}
+  .quick-start-list li::before{content:counter(quick-start);display:grid;place-items:center;width:24px;height:24px;
+    border-radius:50%;background:#e9f5fa;color:#116d94;font-size:11px;font-weight:750}
+  .quick-start-list strong{display:block;margin-bottom:2px;color:var(--ink);font-size:12.5px}
+  .quick-start-list p{margin:0}
+  .quick-start-note{margin:0;padding:9px 10px;border-radius:7px;background:#f4f7f9;color:var(--muted);
+    font-size:11.5px;line-height:1.45}
+  .privacy-note{margin:0;padding:9px 10px;border:1px solid var(--line);border-radius:7px;
+    background:#f6f8fa;color:var(--muted);font-size:11px;line-height:1.45}
+  .participant-setup{display:flex;flex-direction:column;gap:8px;padding:11px;border:1px solid var(--line);
+    border-radius:9px;background:#f6f8fa}
+  .participant-setup label{font-size:12px;color:var(--muted)}
+  .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
+    color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
+  .participant-setup input:focus{outline:none;border-color:var(--accent)}
+  .weekly-selector-leaderboard{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+  .weekly-selector-leaderboard[hidden]{display:none!important}
+  .weekly-selector-row{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;
+    font-size:12.5px;line-height:1.45;color:var(--ink)}
+  .weekly-selector-row b{font-weight:650}
+  .weekly-selector-heading{font-size:11px;color:var(--faint);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:#edf8fc;
+    color:#116d94;border-color:#b8dce9;font-weight:700;box-shadow:0 3px 12px #16202b18}
+  html[data-quiz-mode="weekly"] #setup,
+  html[data-quiz-mode="weekly"] #leaderboard-link,
+  html[data-quiz-mode="weekly"] #score,
+  html[data-quiz-mode="weekly"] #score-summary{display:none!important}
+  html[data-quiz-mode="weekly"] #lock{min-height:44px;padding-inline:20px;background:var(--accent);
+    color:#fff;border-color:var(--accent);font-weight:700;box-shadow:0 3px 10px #1687b82b}
+  html[data-quiz-mode="weekly"] #lock:not(:disabled):hover{background:#1178a4;color:#fff;border-color:#1178a4}
+  html[data-quiz-mode="weekly"] #lock:disabled{background:#dce7ec;color:#7d8a94;border-color:#d3dee4;box-shadow:none}
+  html[data-quiz-mode="weekly"] #weekly-results{display:block}
+  #archive-link{display:none}
+  html[data-quiz-mode="weekly"] #archive-link{display:inline}
+  .hint{font-size:12px;color:var(--faint);line-height:1.55}
+  #stage-topbar{position:absolute;z-index:30;top:14px;left:16px;right:64px;display:flex;
+    align-items:flex-start;gap:12px;min-width:0;pointer-events:none}
+  #viewer-question{position:static;display:flex;flex:1 1 620px;min-width:0;flex-direction:column;
+    gap:2px;max-width:760px;padding:10px 13px;background:#fffffff2;pointer-events:auto;
+    border:1px solid var(--line);border-radius:9px}
+  #viewer-question .lig{font-size:18px;line-height:1.3}
+  #viewer-question .lig a{color:inherit;text-decoration-color:#8a94a3;text-decoration-thickness:1px;
+    text-underline-offset:3px}
+  #viewer-question .lig a:hover{color:var(--accent);text-decoration-color:currentColor}
+  #viewer-question .lig small{font-size:12px}
+  #viewer-question .instruction{font-size:13px;line-height:1.4}
+  #choices .choice.correct{border-color:var(--good);background:#eef9f1}
+  #choices .choice.wrong{border-color:#d7a2a7}
+  #choices .choice .tag.answer-status{font-weight:750;letter-spacing:.035em}
+  #choices .choice.correct .tag.answer-status{color:var(--good)}
+  #choices .choice.wrong .tag.answer-status{color:var(--bad)}
+  .badge{position:static;flex:0 1 auto;min-width:0;max-width:min(520px,45%);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:620;color:#536172;
+    background:#fffffff0;padding:7px 12px;border-radius:8px;border:1px solid #dbe3e9;
+    box-shadow:0 2px 9px #16202b14;backdrop-filter:blur(6px);pointer-events:auto}
+  #view-options{position:absolute;z-index:30;left:50%;bottom:16px;transform:translateX(-50%);
+    width:min(760px,calc(100% - 32px));display:flex;justify-content:center;align-items:center;
+    background:transparent;border:0}
+  #view-options[hidden]{display:none}
+  #view-options .details-body{width:100%;max-height:min(48vh,420px);padding:0;display:flex;
+    flex-flow:row wrap;justify-content:center;align-items:center;gap:6px;overflow-y:auto}
+  #view-options .control-group{display:flex;align-items:center;gap:5px;padding:5px 6px 5px 9px;
+    border:1px solid var(--line);border-radius:11px;background:#fffffff2;box-shadow:0 2px 9px #16202b10}
+  #view-options .control-label{color:#7a8693;font-size:9px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+  #view-options .seg,#view-options .view-actions{display:flex;gap:4px;background:transparent;border:0;overflow:visible}
+  #view-options button,#lock{flex:none;min-height:38px;padding:8px 12px;background:#fff;color:var(--muted);
+    border:1px solid var(--line);border-radius:9px;font-size:12.5px}
+  #view-options button.on{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #view-options .view-actions button{display:flex;align-items:center;gap:8px;padding-inline:9px;background:#fff}
+  #view-options .view-actions button::after{content:"";width:27px;height:16px;flex:none;border-radius:999px;
+    background:radial-gradient(circle at 8px 50%,#fff 0 4.5px,transparent 5px),#c7d0d9;
+    box-shadow:inset 0 0 0 1px #aeb9c4;transition:background .14s ease}
+  #view-options .view-actions button.on::after{background:
+    radial-gradient(circle at calc(100% - 8px) 50%,#fff 0 4.5px,transparent 5px),var(--accent);
+    box-shadow:inset 0 0 0 1px #107ba9}
+  #lock:not(:disabled):hover{background:#edf3f6;color:var(--ink);border-color:#cbd5df}
+  #view-options .hint{flex-basis:100%;padding:5px 8px;text-align:center;background:#ffffffeb;border-radius:7px}
+  #wrap.intro #stage{display:none}
+  #wrap.intro #side{width:100%;max-width:480px;margin:auto;border-inline:1px solid var(--line);justify-content:center}
+  #wrap.intro #question-head,
+  #wrap.intro #choices,
+  #wrap.intro #lock,
+  #wrap.intro #verdict,
+  #wrap.intro #answer-details{display:none!important}
+  #wrap.question-loading #choices,
+  #wrap.question-loading #answer-details{display:none!important}
+  @media (max-width: 760px){
+    #wrap{height:100dvh;flex-direction:column}
+    #stage{order:1;flex:1;min-height:50dvh}
+    #side{order:2;width:100%;height:48dvh;max-height:48dvh;padding:20px;gap:14px;border-right:0;border-top:1px solid var(--line)}
+    #wrap.intro #side{height:100dvh;max-height:none;justify-content:center}
+    #stage-topbar{top:8px;left:8px;right:8px}
+    #viewer-question{max-width:none;padding:8px 10px}
+    #view-options{bottom:8px;width:calc(100% - 16px)}
+    .badge{display:none}
+    #view-options .control-label{display:none}
+  }
 </style>
 </head>
 <body>
-<div id="wrap">
+<main id="archive-review-loading" hidden aria-live="polite">
+  <div class="archive-loading-card">
+    <span class="archive-loading-dot" aria-hidden="true"></span>
+    Loading molecular review…
+  </div>
+</main>
+<div id="wrap" class="intro" hidden>
   <div id="side">
-    <div>
-      <h1>Pose Quiz</h1>
-      <div class="sub">which predicted pose is correct? · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></div>
+    <div id="private-review-banner" hidden aria-live="polite">
+      Retrospective
+    </div>
+    <div id="archive-review-banner" hidden aria-live="polite">
+      <a id="archive-review-back" href="/weekly/retrospectives">Archive retrospective · back to results</a>
+    </div>
+    <div class="brand">
+      <img class="brand-mark" src="/assets/foldarium-mark.svg?v=2026082501" alt=""/>
+      <div class="brand-copy">
+        <h1>Foldarium</h1>
+        <div class="sub"><strong>Pose Quiz</strong> · Pick the correct predicted pose.<span id="leaderboard-link"> · <a href="leaderboard.html" target="_blank" style="color:var(--accent);text-decoration:none">leaderboard ↗</a></span><span id="archive-link"> · <a href="/weekly/retrospectives" style="color:var(--accent);text-decoration:none">Past results</a></span></div>
+      </div>
     </div>
 
+    <section class="participant-setup" id="participant-setup">
+      <label>Player name
+        <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
+      </label>
+      <p class="hint" id="participant-name-hint">Shown on the results leaderboard after release.</p>
+      <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
+    </section>
+
     <div id="setup">
-      <div class="seg" id="quizsrc">
-        <button data-q="cameo" class="on">CAMEO</button>
-        <button data-q="rnp">Runs-n-Poses</button>
+      <div>
+        <div class="setup-label">Dataset</div>
+        <div class="seg setup-options" id="quizsrc">
+          <button data-q="cameo" class="on" aria-pressed="true"><span>CAMEO</span><small>AlphaFold3 poses</small></button>
+          <button data-q="rnp" aria-pressed="false"><span>Runs-n-Poses</span><small>Multiple methods</small></button>
+          <button data-q="weekly" aria-pressed="false" disabled><span>Weekly blind</span><small>Prospective predictions</small></button>
+        </div>
       </div>
-      <div class="seg" id="diff" style="margin-top:6px">
-        <button data-d="easy" class="on">Easy</button>
-        <button data-d="hard">Hard</button>
+      <div>
+        <div class="setup-label">Difficulty</div>
+        <div class="seg setup-options" id="diff">
+          <button data-d="easy" class="on" aria-pressed="true"><span>Easy</span><small>A correct pose is included</small></button>
+          <button data-d="hard" aria-pressed="false"><span>Hard</span><small>“None” may be correct</small></button>
+        </div>
       </div>
       <div class="hint" id="setuphint"></div>
     </div>
+    <section class="revealed-weekly-modes" id="revealed-weekly-modes" hidden>
+      <header class="weekly-release-status">
+        <span>Revealed</span>
+        <div>
+          <strong>This week’s Weekly is revealed</strong>
+          <small>Next blind Weekly opens Saturday.</small>
+        </div>
+      </header>
+      <p class="weekly-answer-mix" id="weekly-answer-mix"></p>
+      <button class="weekly-mode-card" id="play-for-fun-start" type="button">
+        <strong>Play for fun</strong>
+        <span>No Xtal · opponents shown after each answer.</span>
+      </button>
+      <a class="weekly-mode-card retrospective" id="current-retrospective-link" href="/weekly/retrospectives">
+        <strong>Review with Xtal</strong>
+        <span>Crystal structure, RMSDs, proteins, and player results.</span>
+      </a>
+    </section>
 
-    <div class="q" id="progress">question — / —</div>
-    <div class="lig" id="ligand">—</div>
-
-    <div class="seg" id="mode">
-      <button data-m="all" class="on">Show all</button>
-      <button data-m="one">One at a time</button>
-      <button data-m="grid">Grid</button>
+    <div id="question-head">
+      <div class="question-progress">
+        <div class="q" id="progress">question — / —</div>
+        <div class="question-nav" id="question-nav" aria-label="Question navigation">
+          <button id="question-prev" type="button" aria-label="Previous question" title="Previous question">←</button>
+          <button id="question-next" type="button" aria-label="Next question" title="Next question">→</button>
+        </div>
+      </div>
+      <div class="q" id="score-summary">score 0 / 0</div>
+      <button class="quick-start-open" id="quick-start-open" type="button"
+        aria-haspopup="dialog" aria-controls="quick-start-dialog" hidden>Quick start</button>
     </div>
-    <div class="seg" id="gridpages" style="display:none;margin-top:6px"></div>
-    <div class="seg" id="protmode" style="margin-top:6px">
-      <button data-p="crystal" class="on">Crystal protein</button>
-      <button data-p="af3">AF3 protein</button>
-    </div>
-    <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
-    <div class="hint" id="modehint">Near-identical poses are grouped into clusters (one colour each) — pick the cluster you believe is the correct predicted pose. Nearby pocket residues are shown as sticks. The crystal answer is hidden.</div>
+    <label class="retrospective-question-filter" id="retrospective-question-filter" hidden>
+      <span>Show</span>
+      <select id="retrospective-question-filter-select" aria-label="Filter retrospective questions"></select>
+    </label>
 
-    <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
     <div class="choices" id="choices"></div>
 
-    <button class="primary" id="lock" disabled>Lock in answer</button>
-    <div class="verdict" id="verdict" style="display:none"></div>
-    <button class="primary" id="start" style="display:none">Start quiz →</button>
-    <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
-    <label id="xtalrow" style="display:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 0">
-      <input type="checkbox" id="showXtal" style="vertical-align:middle"/> Show crystal reference <span style="color:#C026D3">(true pose, magenta)</span></label>
+    <div class="vote-submit-row" id="vote-submit-row">
+      <button class="primary" id="lock" disabled>Submit answer</button>
+      <label class="vote-comment-option" id="vote-comment-option" title="Ask for a comment after recording this vote">
+        <input id="vote-comment-enabled" type="checkbox" checked/> Add comment
+      </label>
+    </div>
+    <div class="verdict" id="verdict" role="status" aria-live="polite" style="display:none"></div>
+    <button class="primary" id="start" style="display:none">Start →</button>
     <div style="display:flex;gap:6px">
       <button class="ghost" id="prev" style="display:none;flex:1">← Prev</button>
-      <button class="ghost" id="next" style="display:none;flex:1">Next question →</button>
+      <button class="primary" id="next" style="display:none;flex:1">Next question →</button>
     </div>
 
-    <div class="score">
-      <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
-      <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
-      <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
-    </div>
+    <details id="answer-details" hidden>
+      <summary>Answer details</summary>
+      <div class="details-body">
+        <div class="choices" id="answer-choices"></div>
+        <div class="hint" id="answer-ai"></div>
+        <button class="ghost mini" id="myview" style="display:none">← Back to my view (hide answer)</button>
+        <div id="xtalrow" style="display:none;font-size:12px;color:var(--muted);padding:2px 0">
+          <label style="cursor:pointer">
+            <input type="checkbox" id="showXtal" style="vertical-align:middle"/>
+            <span id="xtal-label">Show crystal reference <span style="color:#8B5CF6">(true pose, violet)</span></span>
+          </label>
+          <a id="rcsb-link" href="#" target="_blank" rel="noopener noreferrer" style="display:none;margin-left:8px">Open in RCSB ↗</a>
+          <span id="xtal-status" role="status" style="display:block;color:var(--bad);margin-top:4px"></span>
+        </div>
+        <div class="score" id="score">
+          <div class="row"><span>You</span><b id="sc-you">0 / 0</b></div>
+          <div class="row"><span id="lbl-af3">AI baseline (ligand pLDDT)</span><b id="sc-af3">0 / 0</b></div>
+          <div class="row" style="color:var(--muted)"><span>random (1 / poses)</span><b id="sc-rand">—</b></div>
+        </div>
+      </div>
+    </details>
+    <section class="weekly-results" id="weekly-results" aria-live="polite">
+      <div class="q" id="weekly-results-heading">Results &amp; leaderboard</div>
+      <div class="hint" id="weekly-results-copy">Available Wednesday.</div>
+      <div id="weekly-leaderboard" hidden></div>
+      <div class="weekly-selector-leaderboard" id="weekly-selector-leaderboard" hidden></div>
+    </section>
+
+    <section id="private-review-control" hidden>
+      <p class="dialog-status" id="private-review-status" role="status" aria-live="polite"></p>
+    </section>
   </div>
   <div id="stage">
     <div id="app"></div>
-    <div class="badge" id="badge">binding pocket · ligand hidden · poses anonymised</div>
+    <div id="stage-topbar">
+      <div id="viewer-question">
+        <div class="lig" id="ligand">—</div>
+        <div class="instruction" id="instruction" style="display:none">Pick the pose that best fits the binding pocket.</div>
+      </div>
+      <div class="badge" id="badge">crystal reference hidden · poses anonymised</div>
+    </div>
+    <div id="one-review-actions" hidden>
+      <button id="one-select" data-review="select" type="button">Select</button>
+      <button id="one-reject" class="reject" data-review="reject" type="button">Reject</button>
+    </div>
     <div id="gridview"><div id="gridcells"></div></div>
+    <div id="view-options" hidden>
+      <div class="details-body">
+        <div class="control-group">
+          <span class="control-label">Layout</span>
+          <div class="seg" id="mode">
+            <button data-m="all" class="on" aria-pressed="true">Show all</button>
+            <button data-m="one" aria-pressed="false">One at a time</button>
+            <button data-m="grid" aria-pressed="false">Grid</button>
+          </div>
+        </div>
+        <div class="seg" id="gridpages" style="display:none"></div>
+        <div class="seg" id="protmode">
+          <button data-p="crystal" class="on" aria-pressed="true">Crystal protein</button>
+          <button data-p="af3" aria-pressed="false">AF3 protein</button>
+        </div>
+        <div class="control-group">
+          <span class="control-label">View</span>
+          <div class="view-actions">
+            <button class="ghost mini" id="surface" style="display:none">Surface</button>
+            <button class="ghost mini" id="hbonds" style="display:none">H-bonds</button>
+            <span class="hint" id="hbond-status" role="status" aria-live="polite"></span>
+            <button class="ghost mini" id="uncluster" style="display:none">Uncluster poses</button>
+            <button class="ghost mini" id="protein-ensemble" style="display:none">Ghost proteins</button>
+          </div>
+        </div>
+        <div class="hint" id="modehint"></div>
+      </div>
+    </div>
   </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js"></script>
-<script src="app.js"></script>
+<button class="ghost mini" id="suggestion-open" type="button" disabled hidden>✦ Feedback</button>
+<div class="pose-tooltip" id="pose-tooltip" role="tooltip" hidden></div>
+<dialog id="quick-start-dialog" aria-labelledby="quick-start-title" aria-describedby="quick-start-intro">
+  <form class="dialog-form quick-start-form" method="dialog">
+    <h2 id="quick-start-title">Quick start</h2>
+    <p class="quick-start-intro" id="quick-start-intro">A short guide to inspecting and recording a weekly prediction.</p>
+    <ol class="quick-start-list">
+      <li>
+        <div><strong>Move around</strong><p>Click or tap a ligand to zoom in; click white space to zoom out. Drag to rotate, right-drag or Ctrl-drag to pan, and scroll or pinch to zoom.</p></div>
+      </li>
+      <li>
+        <div><strong>Choose a layout</strong><p><b>Show all</b> overlays poses, <b>One at a time</b> isolates them, and <b>Grid</b> compares them side by side.</p></div>
+      </li>
+      <li>
+        <div><strong>Review the evidence</strong><p><b>Select</b> your best pose and <b>Reject</b> any you rule out. Surface and H-bonds are optional viewing aids.</p></div>
+      </li>
+      <li>
+        <div><strong>Save and revisit</strong><p><b>Record vote</b> saves each question immediately, even if you do not finish. <b>Update vote</b> records a revision without erasing your earlier submission; the arrows let you skip or revisit questions.</p></div>
+      </li>
+    </ol>
+    <div class="dialog-actions">
+      <button class="primary" id="quick-start-close" type="submit">Start exploring</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="suggestion-dialog" aria-labelledby="suggestion-title">
+  <form class="dialog-form" id="suggestion-form">
+    <h2 id="suggestion-title">Suggestions</h2>
+    <label>Your suggestion
+      <textarea id="suggestion-text" maxlength="4000" required></textarea>
+    </label>
+    <p class="privacy-note">Includes your current view so we can reproduce the issue.</p>
+    <p class="dialog-status" id="suggestion-status" role="status" aria-live="polite"></p>
+    <div class="dialog-actions">
+      <button class="ghost" id="suggestion-cancel" type="button">Cancel</button>
+      <button class="primary" id="suggestion-submit" type="submit">Send</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="vote-comment-dialog" aria-labelledby="vote-comment-title">
+  <form class="dialog-form" id="vote-comment-form">
+    <h2 id="vote-comment-title">Add a note about this choice</h2>
+    <label>What influenced your decision?
+      <textarea id="vote-comment-text" maxlength="4000" placeholder="Optional observations, uncertainty, or anything that felt confusing"></textarea>
+    </label>
+    <p class="dialog-status" id="vote-comment-status" role="status" aria-live="polite"></p>
+    <div class="dialog-actions">
+      <button class="ghost" id="vote-comment-skip" type="button">Skip</button>
+      <button class="primary" id="vote-comment-submit" type="submit">Save note &amp; record vote</button>
+    </div>
+  </form>
+</dialog>
+<script type="module">
+import './quiz-entry-mode.js';
+import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
+import { createWeeklyTraceStream } from './weekly-trace-stream.js';
+import { createWeeklySessionResumeStore } from './weekly-session-resume.js?v=2026082701';
+import * as foldariumPrivateReview from './weekly-private-review.js';
+
+(function () {
+  const wrap = document.getElementById('wrap');
+  const archiveLoading = document.getElementById('archive-review-loading');
+  let loading = false;
+  let persistenceStarted = false;
+  const archiveRoundId = (() => {
+    const value = new URLSearchParams(location.search).get('retrospective_round');
+    return value && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) ? value : null;
+  })();
+
+  window.foldariumBackend = createDeferredBackend();
+  window.createWeeklyTraceStream = createWeeklyTraceStream;
+  window.foldariumWeeklySessionResume = createWeeklySessionResumeStore(sessionStorage);
+  window.foldariumPrivateReview = foldariumPrivateReview;
+  window.FOLDARIUM_PRIVATE_REVIEW = Object.freeze({ active: false });
+  window.FOLDARIUM_ARCHIVE_REVIEW = Object.freeze({
+    active: Boolean(archiveRoundId),
+    round_id: archiveRoundId,
+  });
+  window.foldariumRevealArchiveReview = () => {
+    if (!archiveRoundId) return;
+    archiveLoading.hidden = true;
+    wrap.hidden = false;
+    document.getElementById('suggestion-open').hidden = false;
+  };
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load ' + src));
+      document.body.appendChild(s);
+    });
+  }
+
+  async function applyPrivateReviewBundleWhenReady(bundle) {
+    if (typeof window.foldariumApplyPrivateReviewBundle !== 'function') {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          window.removeEventListener('foldarium-private-review-ready', ready);
+          reject(new Error('The crystal viewer did not finish loading. Please retry.'));
+        }, 30000);
+        const ready = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        window.addEventListener('foldarium-private-review-ready', ready, { once: true });
+      });
+    }
+    if (typeof window.foldariumApplyPrivateReviewBundle !== 'function') {
+      throw new Error('The crystal viewer is unavailable. Please reload.');
+    }
+    return window.foldariumApplyPrivateReviewBundle(bundle);
+  }
+
+  async function initPersistence() {
+    if (persistenceStarted) return;
+    persistenceStarted = true;
+    try {
+      await loadScript('supabase-config.js');
+      const config = window.FOLDARIUM_CONFIG_READY
+        ? await window.FOLDARIUM_CONFIG_READY
+        : (window.FOLDARIUM_SUPABASE || {});
+      window.foldariumBackend.attach(initQuizBackend(config));
+      if (!archiveRoundId) {
+        foldariumPrivateReview.mountPrivateReviewUi({
+          config,
+          onBundleLoaded: applyPrivateReviewBundleWhenReady,
+        });
+      }
+    } catch (e) {
+      window.foldariumBackend.fail(e);
+      console.warn('Remote quiz persistence disabled:', e.message);
+    }
+  }
+
+  async function unlock() {
+    if (loading) return;
+    loading = true;
+    wrap.hidden = Boolean(archiveRoundId);
+    archiveLoading.hidden = !archiveRoundId;
+    const start = document.getElementById('start');
+    start.style.display = '';
+    start.disabled = true;
+    start.textContent = 'Loading quiz…';
+    // Do not invite name entry until the backend, round, and Mol* are ready.
+    // Otherwise the input appears immediately while Start arrives seconds later.
+    document.getElementById('participant-setup').style.display = 'none';
+    document.getElementById('name-status').textContent = '';
+    if (window.foldariumWeeklySessionResume.hasToken()) {
+      start.style.display = 'none';
+    }
+    document.getElementById('suggestion-open').hidden = Boolean(archiveRoundId);
+    window.FOLDARIUM_ARCHIVE_DETAIL_READY = archiveRoundId
+      ? fetch(`/api/weekly-retrospectives?round_id=${encodeURIComponent(archiveRoundId)}`)
+        .then(async response => {
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(payload?.error || 'Archive round could not be loaded.');
+          return payload;
+        })
+      : Promise.resolve(null);
+    void initPersistence();
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.css';
+    document.head.appendChild(css);
+    try {
+      await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
+      await import('./structure-assets.js');
+      await import('./dev2-feedback.js');
+      const rebuildModule = await import('./viewer-rebuild-coordinator.js');
+      window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
+      window.createRevealAfterIdle = rebuildModule.createRevealAfterIdle;
+      window.waitForCameraSettled = rebuildModule.waitForCameraSettled;
+      window.pinCameraAfterSettled = rebuildModule.pinCameraAfterSettled;
+      try {
+        const module = await import('./viewer-trace.js');
+        window.createViewerTraceRecorder = module.createViewerTraceRecorder;
+      } catch (error) {
+        console.warn('Viewer recording disabled:', error.message);
+      }
+      await loadScript('app.js?v=202608251');
+    } catch (e) {
+      console.error('Failed to load quiz assets:', e);
+      wrap.hidden = false;
+      archiveLoading.hidden = true;
+      document.getElementById('suggestion-open').hidden = true;
+      start.style.display = '';
+      start.disabled = true;
+      start.textContent = 'Failed to load quiz assets';
+      loading = false;
+    }
+  }
+
+  void unlock();
+})();
+</script>
 </body>
 </html>
