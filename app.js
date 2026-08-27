@@ -3152,8 +3152,9 @@ function showIntro() {
     const nameHint = $('#participant-name-hint');
     if (nameHint) {
       nameHint.textContent = showRevealedModes
-        ? 'Used only to label your separate post-reveal votes.'
+        ? 'Enter a player name to activate Play for fun. Your name labels only your separate post-reveal votes.'
         : 'Shown on the results leaderboard after release.';
+      nameHint.classList.toggle('action-required', showRevealedModes);
     }
     $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = isRetrospectiveReview()
@@ -3170,6 +3171,7 @@ function showIntro() {
   }
   $('#revealed-weekly-modes').hidden = true;
   $('#participant-name-hint').textContent = 'Shown on the results leaderboard after release.';
+  $('#participant-name-hint').classList.remove('action-required');
   $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
   $('#start').style.display = pool.length ? '' : 'none';
   syncStartGate();
