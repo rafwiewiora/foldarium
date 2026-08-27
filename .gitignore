@@ -44,3 +44,4 @@ private-artifacts/
 pipeline-output/
 weekly-selector-runs/
 /local/
+/legacy-data/

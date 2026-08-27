@@ -25,9 +25,10 @@ cd foldarium
 npm run dev
 ```
 
-Open <http://127.0.0.1:4319/weekly>. Without Supabase configuration the viewer
-still runs, but persistence, shared results, and archive APIs remain disabled.
-Mol* and browser dependencies are loaded from public CDNs.
+Open <http://127.0.0.1:4319/weekly>. Without Supabase configuration the
+application shell still runs, but production weekly records, molecular assets,
+persistence, shared results, and archive APIs remain unavailable. Mol* and
+browser dependencies are loaded from public CDNs.
 
 Run the JavaScript tests with:
 
@@ -54,7 +55,8 @@ Only the publishable browser key belongs in browser configuration.
 `SUPABASE_SERVICE_ROLE_KEY`, replay passwords, HMAC keys, and benchmark ingest
 tokens are server-only secrets.
 
-To upload the checked-in structure fixtures to your own public bucket:
+To upload structure assets generated or downloaded into `data/` and
+`data_rnp/` to your own public bucket:
 
 ```bash
 SUPABASE_URL=https://your-project.supabase.co \
@@ -67,6 +69,22 @@ is passed.
 Use `npm run upload:benchmark` with `BENCHMARK_DEMO_DIR` set to a materialized
 benchmark demo directory to upload its separately generated molecular assets.
 Benchmark demo assets must be generated and uploaded before the demo works.
+
+## Preserved legacy data
+
+The former static/SQLite prototype and 122 MiB of previously public molecular
+data are preserved in the versioned
+[`foldarium-data`](https://github.com/rafwiewiora/foldarium-data) releases
+rather than shipped with every application checkout. Download and verify the
+legacy public v1 archive with:
+
+```bash
+npm run data:legacy -- --destination ./legacy-data
+```
+
+The downloader pins the release SHA-256, rejects unsafe archive paths, and
+extracts into `legacy-data/foldarium-legacy-public-v1/`. The archive is
+historical research/demo material; it is not the production weekly database.
 
 ## Local API server
 
@@ -81,6 +99,8 @@ and the matching `FOLDARIUM_<ENV>_*` variables documented in `.env.example`.
 Privileged retrospective administration is disabled by default. If enabled,
 it must sit behind an authenticated reverse proxy and use the explicit
 `authenticated-proxy` access attestation.
+The public default branch is the canonical production source; see
+[production parity](docs/production-parity.md) for post-deployment verification.
 
 ## Prediction pipeline
 
@@ -115,6 +135,7 @@ See [pipeline/README.md](pipeline/README.md).
 | `pipeline/` | Weekly orchestration and scientific evaluation |
 | `prep/` | CAMEO and Runs-n-Poses preparation tools |
 | `benchmark/` | Training-similarity viewer and preparation tools |
+| `scripts/fetch-legacy-data.mjs` | Verified optional legacy-data downloader |
 | `weekly-selector-offline/` | Offline Selector client |
 | `tests/` | Unit and browser-level tests |
 

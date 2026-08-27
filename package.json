@@ -16,6 +16,8 @@
     "dev:env": "node --env-file=.env --watch server.mjs",
     "test": "node --test && npm run audit:public",
     "audit:public": "node scripts/audit-public-tree.mjs",
+    "parity:production": "node scripts/check-production-parity.mjs",
+    "data:legacy": "node scripts/fetch-legacy-data.mjs",
     "upload:structures": "node scripts/upload-structures.mjs",
     "upload:benchmark": "node scripts/upload-structures.mjs --benchmark"
   }

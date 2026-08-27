@@ -3,9 +3,18 @@ import { readFileSync } from 'node:fs';
 
 const forbiddenPaths = new Set([
   '.vercelignore',
+  '.github/workflows/pages.yml',
+  '.nojekyll',
   'vercel.json',
   'pipeline/SMOKE_TEST_HANDOFF.md',
 ]);
+const forbiddenPathPrefixes = [
+  'app/',
+  'benchmark/demo/systems/',
+  'benchmark/demo/systems_rnp/',
+  'data_rnp_aligned/',
+  'pipeline/deploy/',
+];
 
 const forbiddenContent = [
   ['live Supabase project reference', ['wwentnog', 'bknrbmxhfgbg'].join('')],
@@ -25,8 +34,8 @@ const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
 const failures = [];
 
 for (const path of files) {
-  if (forbiddenPaths.has(path) || path.startsWith('pipeline/deploy/')) {
-    failures.push(`${path}: deployment-specific path`);
+  if (forbiddenPaths.has(path) || forbiddenPathPrefixes.some(prefix => path.startsWith(prefix))) {
+    failures.push(`${path}: non-production or deployment-specific path`);
     continue;
   }
 
