@@ -1135,8 +1135,7 @@ function syncOneReviewState() {
   const choice = oneReviewChoice();
   const retrospective = !!choice && retrospectiveAnswerActive();
   const visible = !!choice && cur.item.source === 'weekly'
-    && (!cur.revealed || retrospective)
-    && !(retrospective && isArchiveRetrospective());
+    && (!cur.revealed || retrospective);
   const rejected = visible && choiceRejected(choice);
   // Match Grid's whole-card rejection treatment in One-at-a-time. Applying
   // the shared class to the viewer shell mutes every molecular layer together
@@ -1788,7 +1787,7 @@ function gridHeader(entry) {
 }
 function viewerQuestionIdentity() {
   const released = cur?.item?.released_crystal;
-  if (isPrivatePrecloseReview() && released?.pdb_id && released?.structure_page_url) {
+  if (isRetrospectiveReview() && released?.pdb_id && released?.structure_page_url) {
     return {
       label: released.pdb_id.toUpperCase(),
       url: released.structure_page_url,
@@ -2302,7 +2301,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
     reject.type = 'button';
     select.disabled = viewerTransitionBusy;
     reject.disabled = viewerTransitionBusy;
-    if (answerActive && isPrivatePrecloseReview()) {
+    if (answerActive && isRetrospectiveReview()) {
       select.dataset.frame = 'xtal';
       select.textContent = 'Xtal';
       select.classList.toggle('on', entryProteinFrame === 'xtal');
@@ -2337,7 +2336,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       };
     }
     actions.append(select, reject);
-    if (xtalReference || (answerActive && isArchiveRetrospective())) actions.hidden = true;
+    if (xtalReference) actions.hidden = true;
     const host = document.createElement('div'); host.className = 'grid-host';
     card.append(host, head);
     card.appendChild(actions);
@@ -3844,7 +3843,7 @@ function renderPrivateQuestionResult(result) {
         return `<div class="weekly-question-result-answer">
           <span class="weekly-question-result-rank">${index + 1}</span>
           <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
-          <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+          <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
           <span>${playerLabel(answer.vote_count)}</span>
         </div>`;
       }).join('')}
@@ -3872,7 +3871,7 @@ function renderArchiveQuestionResult(result) {
     return `<div class="weekly-question-result-answer">
       <span class="weekly-question-result-rank">·</span>
       <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
-      <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+      <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
       <span>${answer.display_names?.length
         ? answer.display_names.map(escapeLeaderboardText).join(', ')
         : `${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}`}</span>
@@ -3883,7 +3882,7 @@ function renderArchiveQuestionResult(result) {
     return `<div class="weekly-question-result-answer">
       <span class="weekly-question-result-rank">${index + 1}</span>
       <b>${escapeLeaderboardText(answer.participant)}</b>
-      <span class="weekly-question-result-correct ${state}">${state ? 'correct' : ''}</span>
+      <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
       <span>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</span>
     </div>`;
   }).join('');

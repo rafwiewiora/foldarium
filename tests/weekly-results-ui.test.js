@@ -140,17 +140,17 @@ test('retrospective viewer title uses the released PDB identity and RCSB URL', a
       structure_page_url: 'https://www.rcsb.org/structure/12LB',
     },
   };
-  const retrospectiveIdentity = evaluateDeclaration(app, 'function viewerQuestionIdentity()', {
+  const archiveIdentity = evaluateDeclaration(app, 'function viewerQuestionIdentity()', {
     cur: { item },
-    isPrivatePrecloseReview: () => true,
+    isRetrospectiveReview: () => true,
   });
   const weeklyIdentity = evaluateDeclaration(app, 'function viewerQuestionIdentity()', {
     cur: { item },
-    isPrivatePrecloseReview: () => false,
+    isRetrospectiveReview: () => false,
   });
 
-  assert.equal(retrospectiveIdentity().label, '12LB');
-  assert.equal(retrospectiveIdentity().url, 'https://www.rcsb.org/structure/12LB');
+  assert.equal(archiveIdentity().label, '12LB');
+  assert.equal(archiveIdentity().url, 'https://www.rcsb.org/structure/12LB');
   assert.equal(weeklyIdentity().label, 'A1DI6');
   assert.equal(weeklyIdentity().url, null);
 });
@@ -582,6 +582,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /\.weekly-question-result-answer\{[^}]*grid-template-columns:20px minmax\(0,1fr\) 52px 72px[^}]*height:42px[^}]*box-sizing:border-box/);
   assert.match(html, /\.weekly-question-result-answer>span:last-child\{[^}]*white-space:nowrap[^}]*text-align:right/);
   assert.match(html, /\.weekly-question-result-correct\.cluster-accepted\{color:var\(--gold\)\}/);
+  assert.match(html, /\.weekly-question-result-correct\.wrong\{color:var\(--bad\)\}/);
   assert.doesNotMatch(html, /id="answer-summary-banner"/);
   assert.match(html, /#answer-details\[data-private-review="true"\] #answer-choices \.choice\{[^}]*min-height:50px[^}]*border-left:5px solid var\(--choice-color\)[^}]*background:#fff/);
   assert.match(html, /#answer-details\[data-private-review="true"\] #answer-choices \.choice\.correct\{[^}]*border:2px solid var\(--good\)[^}]*border-left-width:5px/);
@@ -847,11 +848,34 @@ test('private retrospective renders compact per-question popularity with names b
   assert.match(host.innerHTML, /Pose C-2/);
   assert.match(host.innerHTML, /None are correct/);
   assert.match(host.innerHTML, /weekly-question-result-correct cluster-accepted">correct/);
-  assert.match(host.innerHTML, /weekly-question-result-correct "><\/span>/);
+  assert.match(host.innerHTML, /weekly-question-result-correct wrong">wrong/);
   assert.match(host.innerHTML, /Show player names/);
   assert.match(host.innerHTML, />Players<\/summary>/);
   assert.match(host.innerHTML, /&lt;Grace&gt;/);
   assert.doesNotMatch(host.innerHTML, /Ensemble result|Complete runs|Signal for/);
+});
+
+test('archive question results label both correct and wrong automated answers', async () => {
+  const app = await read('app.js');
+  const renderArchiveQuestionResult = evaluateDeclaration(
+    app,
+    'function renderArchiveQuestionResult(result)',
+    {
+      privateQuestionAnswerState: answer => answer.correct ? 'correct' : '',
+      privateQuestionAnswerLabel: answer => answer.label,
+      escapeLeaderboardText: value => String(value),
+    },
+  );
+  const rendered = renderArchiveQuestionResult({
+    human_aggregate: { answered_count: 0, correct_count: 0, answers: [] },
+    automated_entries: [
+      { participant: 'Claude Opus', label: 'Pose I', correct: true },
+      { participant: 'GPT-5.6 Sol', label: 'Pose J', correct: false },
+    ],
+  });
+
+  assert.match(rendered, /Claude Opus[\s\S]*weekly-question-result-correct correct">correct/);
+  assert.match(rendered, /GPT-5\.6 Sol[\s\S]*weekly-question-result-correct wrong">wrong/);
 });
 
 test('weekly leaderboard escapes participant names before rendering HTML', async () => {
