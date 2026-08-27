@@ -409,6 +409,66 @@ test('persists a named weekly session, append-only traced vote, and contextual s
   ]);
 });
 
+test('routes post-reveal sessions and votes to the isolated annotated cohort', async () => {
+  const { client, rpcs, setRpcResult } = fakeSupabase();
+  const ids = [
+    '00000000-0000-4000-8000-000000000211',
+    '00000000-0000-4000-8000-000000000212',
+  ];
+  setRpcResult('get_my_weekly_post_reveal_votes', {
+    data: [{
+      item_id: 'item-1',
+      choice_id: 'choice-4',
+      picked_none: false,
+      selection_kind: 'exact',
+      selection_id: 'choice-4',
+      submission_phase: 'post_reveal',
+    }],
+    error: null,
+  });
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid(...ids),
+  });
+  const appState = {
+    schema_version: 1,
+    source: 'weekly',
+    item_id: 'item-1',
+    selection_kind: 'exact',
+    selected_choice_id: 'choice-4',
+  };
+  const sessionId = await backend.startNamedSession({
+    source: 'weekly',
+    difficulty: 'hard',
+    weeklyRoundId: 'weekly-2026-08-08',
+    displayName: 'Grace Hopper',
+    initialAppState: appState,
+    postReveal: true,
+  });
+  await backend.submitWeeklyVoteAttempt({
+    sessionId,
+    roundId: 'weekly-2026-08-08',
+    itemId: 'item-1',
+    questionIndex: 0,
+    choiceId: 'choice-4',
+    pickedNone: false,
+    appState,
+    postReveal: true,
+  });
+  const votes = await backend.getWeeklyVotes('weekly-2026-08-08', {
+    postReveal: true,
+  });
+
+  assert.equal(votes[0].submission_phase, 'post_reveal');
+  assert.deepEqual(rpcs.map(row => row.name), [
+    'start_named_weekly_post_reveal_session',
+    'submit_weekly_post_reveal_vote_attempt',
+    'get_my_weekly_post_reveal_votes',
+  ]);
+  assert.equal(rpcs[1].args.p_app_state.selection_kind, 'exact');
+});
+
 test('resumes an owner-bound weekly session with monotonic trace continuation metadata', async () => {
   const { client, rpcs, setRpcResult } = fakeSupabase();
   setRpcResult('resume_named_weekly_quiz_session', {

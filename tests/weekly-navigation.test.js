@@ -61,6 +61,7 @@ test('weekly vote completion releases question arrows after the next question re
       WEEKLY_ROUND: { public_status: 'open' },
       isPrivatePrecloseReview: () => false,
       isRetrospectiveReview: () => false,
+      isReadOnlyPreview: () => false,
       syncRetrospectiveQuestionFilter() {},
       syncWeeklyGuideContent() {},
       retrospectiveQuestionIndexes: () => sandbox.ITEMS.map((_, index) => index),

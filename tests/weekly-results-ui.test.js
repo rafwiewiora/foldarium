@@ -565,7 +565,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Leaderboard name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608245/);
+  assert.match(html, /app\.js\?v=202608247/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
@@ -734,6 +734,23 @@ test('revealed Weekly login omits a zeroed local session and reports no human pl
   render();
   assert.match(host.innerHTML, /No human players participated this week/);
   assert.doesNotMatch(host.innerHTML, /Your session|0\/0/);
+});
+
+test('revealed Weekly records answer-informed votes before showing results', async () => {
+  const [app, html] = await Promise.all([read('app.js'), read('index.html')]);
+  const revealSource = app.slice(
+    app.indexOf('async function reveal()'),
+    app.indexOf('function renderRevealedQuestionUi()'),
+  );
+  assert.match(revealSource, /quizSource === 'weekly' && !isRetrospectiveReview\(\) && !isReadOnlyPreview\(\)/);
+  assert.match(revealSource, /finalizeWeeklyVote\(\{ postReveal: postRevealVote \}\)/);
+  assert.match(revealSource, /if \(!saved \|\| !postRevealVote\) return/);
+  assert.match(app, /voteComment: cur\.voteCommentText,\s*postReveal,/);
+  assert.match(app, /postReveal: WEEKLY_ROUND\.public_status === 'revealed'/);
+  assert.match(app, /postReveal: quizSource === 'weekly' && WEEKLY_ROUND\?\.public_status === 'revealed'/);
+  assert.match(app, /Record post-reveal vote/);
+  assert.match(app, /Post-reveal vote recorded separately from blind-week results/);
+  assert.match(html, /\.post-reveal-vote-note\{/);
 });
 
 test('private retrospective renders compact per-question popularity with names behind info', async () => {

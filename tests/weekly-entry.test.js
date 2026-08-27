@@ -53,11 +53,18 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /Available Wednesday\./);
   assert.doesNotMatch(html, /Programmatic voting|id="programmatic-voting"|selector-download-kit/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
-  assert.match(app, /Wednesday results are available\./);
+  assert.match(app, /new votes are recorded as post-reveal and excluded from blind-week scores/);
   assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);
   assert.match(app, /Read-only Preview:[\s\S]*?this vote was not saved/);
   assert.match(app, /Read-only Preview: you can inspect this dialog, but Send is disabled/);
-  assert.match(app, /suggestion-open'\)\.disabled = !\(remoteSessionId \|\| isReadOnlyPreview\(\)\)/);
+  assert.match(app, /suggestion-open'\)\.disabled = WEEKLY_ROUND\?\.public_status === 'revealed'/);
+  assert.match(html, /id="revealed-weekly-modes" hidden/);
+  assert.match(html, /id="play-for-fun-start"[\s\S]*Play for fun/);
+  assert.match(html, /see the opponents and answer, but keep the crystal structure hidden/);
+  assert.match(html, /id="current-retrospective-link"[\s\S]*Molecular retrospective/);
+  assert.match(html, /Review the released Xtal structure/);
+  assert.match(app, /retrospectiveLink\.href = `\/weekly\?retrospective_round=\$\{encodeURIComponent\(WEEKLY_ROUND\.round_id\)\}`/);
+  assert.match(app, /showRevealedModes[\s\S]*start'\)\.style\.display/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {
