@@ -620,7 +620,9 @@ def write_artifacts(
             )
 
         report["public_api_sensitivity"] = {
-            "api_audit_sha256": sha256(api_sensitivity_path.read_bytes()).hexdigest(),
+            "public_queue_audit_sha256": sha256(
+                api_sensitivity_path.read_bytes()
+            ).hexdigest(),
             "api_complete_count": sum(
                 row.get("status") == "complete" for row in api["records"]
             ),
