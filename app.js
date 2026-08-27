@@ -83,6 +83,7 @@ const OPTS = {
 
 const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
 const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
+const PROGRAMMATIC_VOTING = window.FOLDARIUM_PROGRAMMATIC_VOTING === true;
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
@@ -3177,7 +3178,8 @@ function setProgrammaticVotingStatus(message = '') {
 function syncProgrammaticVotingPanel() {
   const panel = $('#programmatic-voting');
   if (!panel) return;
-  panel.hidden = !WEEKLY_ONLY || !$('#wrap')?.classList.contains('intro');
+  panel.hidden = !WEEKLY_ONLY || !PROGRAMMATIC_VOTING
+    || !$('#wrap')?.classList.contains('intro');
   const open = SELECTOR_ROUND_DESCRIPTOR?.public_status === 'open';
   for (const selector of ['#selector-create-token', '#selector-submit-file', '#selector-submission-file']) {
     const control = $(selector);
@@ -3206,7 +3208,7 @@ async function getBrowserSupabaseAccessToken() {
 }
 
 async function loadProgrammaticVotingDescriptor() {
-  if (!WEEKLY_ONLY) return;
+  if (!WEEKLY_ONLY || !PROGRAMMATIC_VOTING) return;
   setProgrammaticVotingStatus('');
   try {
     const response = await fetch('/api/weekly-selector/rounds/current', { cache: 'no-store' });

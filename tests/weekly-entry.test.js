@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { quizEntryMode } from '../quiz-entry-mode.js';
+import {
+  programmaticVotingEntry,
+  quizEntryMode,
+} from '../quiz-entry-mode.js';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -13,6 +16,12 @@ test('weekly routes select weekly-only mode without changing classic routes', ()
   assert.equal(quizEntryMode('/weekly'), 'weekly');
   assert.equal(quizEntryMode('/weekly/'), 'weekly');
   assert.equal(quizEntryMode('/weekly.html'), 'weekly');
+});
+
+test('programmatic voting requires its unlisted explicit query', () => {
+  assert.equal(programmaticVotingEntry(''), false);
+  assert.equal(programmaticVotingEntry('?programmatic=true'), false);
+  assert.equal(programmaticVotingEntry('?programmatic=1'), true);
 });
 
 test('Vercel serves weekly and retrospective entry points through their shells', async () => {
@@ -26,7 +35,7 @@ test('Vercel serves weekly and retrospective entry points through their shells',
   ]);
 });
 
-test('weekly-only chrome keeps progress, voting, named start, and a Wednesday results panel', async () => {
+test('weekly-only chrome keeps player voting separate from unlisted programmatic access', async () => {
   const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
 
   for (const id of ['setup', 'leaderboard-link', 'score', 'score-summary']) {
@@ -53,7 +62,15 @@ test('weekly-only chrome keeps progress, voting, named start, and a Wednesday re
   assert.match(html, /Available Wednesday\./);
   assert.match(html, /Programmatic voting · v2/);
   assert.match(html, /independent clustered \(Cluster or None\) and unclustered \(exact Pose or None\)/);
+  assert.match(
+    html,
+    /html\[data-quiz-mode="weekly"\]\[data-programmatic-voting="true"\] #programmatic-voting\{display:flex\}/,
+  );
+  assert.match(html, /\.programmatic-voting\[hidden\]\{display:none!important\}/);
+  assert.doesNotMatch(html, /href="[^"]*programmatic=1/);
   assert.match(html, /#wrap:not\(\.intro\) #programmatic-voting\{display:none!important\}/);
+  assert.match(app, /const PROGRAMMATIC_VOTING = window\.FOLDARIUM_PROGRAMMATIC_VOTING === true/);
+  assert.match(app, /if \(!WEEKLY_ONLY \|\| !PROGRAMMATIC_VOTING\) return/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /Wednesday results are available\./);
   assert.match(app, /isReadOnlyPreview\(\)[\s\S]*?participantDisplayName = displayName;[\s\S]*?beginQuiz\(\)/);

@@ -368,7 +368,11 @@
     font-size:12.5px;line-height:1.45;color:var(--ink)}
   .weekly-selector-row b{font-weight:650}
   .weekly-selector-heading{font-size:11px;color:var(--faint);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-  html[data-quiz-mode="weekly"] #programmatic-voting{display:flex}
+  html[data-quiz-mode="weekly"][data-programmatic-voting="true"] #programmatic-voting{display:flex}
+  .programmatic-voting[hidden]{display:none!important}
+  html[data-programmatic-voting="true"] #participant-setup,
+  html[data-programmatic-voting="true"] #start,
+  html[data-programmatic-voting="true"] #weekly-results{display:none!important}
   #wrap:not(.intro) #programmatic-voting{display:none!important}
   #suggestion-open{position:fixed;right:16px;bottom:16px;z-index:40;background:#edf8fc;
     color:#116d94;border-color:#b8dce9;font-weight:700;box-shadow:0 3px 12px #16202b18}
@@ -734,7 +738,7 @@
   </form>
 </dialog>
 <script type="module">
-import './quiz-entry-mode.js';
+import './quiz-entry-mode.js?v=2026082601';
 import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 import { createWeeklyTraceStream } from './weekly-trace-stream.js';
 import { createWeeklySessionResumeStore } from './weekly-session-resume.js';
@@ -870,7 +874,7 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608243');
+      await loadScript('app.js?v=202608244');
     } catch (e) {
       err.textContent = 'Failed to load quiz assets.';
       gate.hidden = false;

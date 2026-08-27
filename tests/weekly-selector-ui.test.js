@@ -80,6 +80,10 @@ test('weekly intro documents explicit dual-mode v2 and exposes provenance inputs
   }
   assert.match(html, /Complete dual-mode v2 JSON/);
   assert.match(html, /Dual-mode v2 JSON \/ API contract/);
+  assert.match(
+    html,
+    /html\[data-quiz-mode="weekly"\]\[data-programmatic-voting="true"\] #programmatic-voting\{display:flex\}/,
+  );
   assert.match(html, /#wrap:not\(\.intro\) #programmatic-voting\{display:none!important\}/);
 });
 
