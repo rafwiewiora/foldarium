@@ -4,12 +4,13 @@ per-stage attrition of newly-added systems, and the all-correct positive-control
 import json, pickle, csv, os
 from collections import Counter, defaultdict
 
-QUIZ = "/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/quiz"
-RNP = "/Users/rafalwiewiora/rnp_data"
-V1 = f"{QUIZ}/quiz_items_rnp.json"
-V2 = f"{QUIZ}/quiz_items_rnp_v2.json"
-PLAN2 = f"{RNP}/rnp_quiz_plan_v2.pkl"
-ANNOT = f"{QUIZ.rsplit('/',1)[0]}/sucos/rnp_annotations.csv"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+V1 = paths.quiz_dir / "quiz_items_rnp.json"
+V2 = paths.quiz_dir / "quiz_items_rnp_v2.json"
+PLAN2 = paths.rnp_dir / "rnp_quiz_plan_v2.pkl"
+ANNOT = paths.annotations
 
 CORRECT = 1.5   # strict game-able: has pose <1.5
 WRONG = 3.0     # strict: >3
@@ -71,7 +72,7 @@ if v2 is not None:
           f"(novel: {len(ac_nov)-ac_nov_clean})")
 
     # 80-target recovery
-    missing = [tuple(x) for x in json.load(open('/tmp/missing_novel.json'))]
+    missing = [tuple(x) for x in json.load(open(paths.work_dir / "missing_novel.json"))]
     mset = set(missing)
     # which v2 items correspond to a missing (target,instchain)?  item id = target__instchain sanitized.
     # Reconstruct via plan (has target/instchain).

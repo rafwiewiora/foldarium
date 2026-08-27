@@ -6,9 +6,11 @@ import json, warnings, sys
 from pathlib import Path
 import numpy as np, gemmi
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"."); sys.path.insert(0,"../viewer")
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P
-HERE=Path(".").resolve(); DATA=HERE/"data"; POCKET_R=5.0
+DATA=HERE/"data"; POCKET_R=5.0
 
 def pocket_chain(m, ligpos):
     best=None; bestn=-1
@@ -49,7 +51,7 @@ def write_prot(poly, tr, dest, near=None):
     out.append("END"); dest.write_text("\n".join(out)+"\n")
 
 def main():
-    d=json.load(open("quiz_items.json")); fixed=0; skipped=[]
+    d=json.load(open(HERE / "quiz_items.json")); fixed=0; skipped=[]
     for it in d["items"]:
         tgt=it["id"]; week=it["week"]; het=it["ligand"]
         amap=P.af3_ligand_map(week,tgt,het)

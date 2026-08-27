@@ -1,0 +1,6 @@
+{
+  "checkpoint": "openfold3-p2-155k",
+  "diffusion_samples": 5,
+  "model_seeds": 1,
+  "msa_mode": "server"
+}

@@ -2,9 +2,12 @@
 import csv, json, statistics
 from collections import defaultdict
 
-TABLE="/Users/rafalwiewiora/rnp_data/xmethod_plddt_table.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-OUT="/Users/rafalwiewiora/rnp_data/xmethod_plddt_results.json"
+from _paths import parse_paths
+
+paths = parse_paths("Analyze ligand pLDDT as a pose-selection signal.")
+TABLE = paths.rnp_dir / "xmethod_plddt_table.csv"
+ANNOT = paths.annotations
+OUT = paths.rnp_dir / "xmethod_plddt_results.json"
 METHODS=['af3','boltz','chai','protenix']
 
 # ---- load table ----

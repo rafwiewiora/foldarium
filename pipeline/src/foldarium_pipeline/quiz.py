@@ -1,0 +1,335 @@
+"""Blind/reveal manifest contracts for the Saturday-to-Wednesday quiz."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from copy import deepcopy
+from typing import Any, Iterable, Mapping
+
+from .contracts import canonical_json, stable_id
+
+QUIZ_SCHEMA_VERSION = 1
+REVEAL_ONLY_FIELDS = frozenset(
+    {
+        "correct",
+        "rmsd",
+        "answer",
+        "answer_metadata",
+        "score",
+        "reference",
+        "reference_uri",
+        "run_id",
+    }
+)
+BLIND_CHOICE_FIELDS = frozenset(
+    {
+        "id",
+        "pose_uri",
+        "protein_uri",
+        "pocket_uri",
+        "display_label",
+        "media_type",
+        "cluster_id",
+        "is_rep",
+        "method",
+        "method_version",
+        "confidence",
+        "smina_score",
+        "interaction_count",
+    }
+)
+
+
+class QuizManifestError(ValueError):
+    """Raised when quiz publication would leak answers or break identity."""
+
+
+def manifest_sha256(manifest: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(manifest).encode("utf-8")).hexdigest()
+
+
+def _object(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise QuizManifestError(f"{field} must be an object")
+    return deepcopy(dict(value))
+
+
+def _nonempty(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise QuizManifestError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def _assert_no_reveal_fields(value: Any, path: str = "manifest") -> None:
+    if isinstance(value, Mapping):
+        leaked = REVEAL_ONLY_FIELDS.intersection(value)
+        if leaked:
+            raise QuizManifestError(f"{path} contains reveal-only fields: {sorted(leaked)}")
+        for key, child in value.items():
+            _assert_no_reveal_fields(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _assert_no_reveal_fields(child, f"{path}[{index}]")
+
+
+def build_blind_manifest(
+    round_id: str,
+    items: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return ``(blind, private_index)`` from completed but unscored predictions.
+
+    Choice IDs are content-derived and stable when display metadata changes.  The
+    public manifest may expose method and confidence, while the private index
+    retains run/sample identities for Wednesday evaluation; it must be stored in
+    a private content-addressed object, never in the public manifest.
+    """
+
+    round_id = _nonempty(round_id, "round_id")
+    blind_items: list[dict[str, Any]] = []
+    private_items: list[dict[str, Any]] = []
+    seen_items: set[str] = set()
+    for item_index, raw_item in enumerate(items):
+        item = _object(raw_item, f"items[{item_index}]")
+        item_id = _nonempty(item.get("id"), f"items[{item_index}].id")
+        if item_id in seen_items:
+            raise QuizManifestError(f"duplicate item id: {item_id}")
+        seen_items.add(item_id)
+        raw_choices = item.get("choices")
+        if not isinstance(raw_choices, list) or not raw_choices:
+            raise QuizManifestError(f"items[{item_index}].choices must be non-empty")
+
+        public_choices: list[dict[str, Any]] = []
+        private_choices: list[dict[str, Any]] = []
+        for choice_index, raw_choice in enumerate(raw_choices):
+            choice = _object(raw_choice, f"items[{item_index}].choices[{choice_index}]")
+            identity = {
+                "round_id": round_id,
+                "item_id": item_id,
+                "run_id": _nonempty(choice.get("run_id"), "choice.run_id"),
+                "sample_id": _nonempty(choice.get("sample_id"), "choice.sample_id"),
+            }
+            choice_id = stable_id("choice", identity, length=16)
+            public_choice = {"id": choice_id}
+            for key in BLIND_CHOICE_FIELDS - {"id"}:
+                if key in choice:
+                    public_choice[key] = deepcopy(choice[key])
+            if "pose_uri" not in public_choice:
+                raise QuizManifestError("every blind choice requires pose_uri")
+            if "method" in public_choice:
+                public_choice["method"] = _nonempty(
+                    public_choice["method"], "choice.method"
+                )
+            if "method_version" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.method_version requires choice.method")
+                public_choice["method_version"] = _nonempty(
+                    public_choice["method_version"], "choice.method_version"
+                )
+            if "confidence" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.confidence requires choice.method")
+                confidence = _object(public_choice["confidence"], "choice.confidence")
+                metric = _nonempty(confidence.get("metric"), "choice.confidence.metric")
+                value = confidence.get("value")
+                scale_min = confidence.get("scale_min")
+                scale_max = confidence.get("scale_max")
+                aggregation = _nonempty(
+                    confidence.get("aggregation"), "choice.confidence.aggregation"
+                )
+                numbers = (value, scale_min, scale_max)
+                if any(
+                    isinstance(number, bool) or not isinstance(number, (int, float))
+                    for number in numbers
+                ):
+                    raise QuizManifestError(
+                        "choice.confidence value and scale must be numeric"
+                    )
+                if not all(math.isfinite(float(number)) for number in numbers):
+                    raise QuizManifestError("choice.confidence values must be finite")
+                if not float(scale_min) <= float(value) <= float(scale_max):
+                    raise QuizManifestError("choice.confidence value is outside its scale")
+                public_choice["confidence"] = {
+                    "metric": metric,
+                    "value": float(value),
+                    "scale_min": float(scale_min),
+                    "scale_max": float(scale_max),
+                    "aggregation": aggregation,
+                }
+            if "smina_score" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.smina_score requires choice.method")
+                score = _object(public_choice["smina_score"], "choice.smina_score")
+                value = score.get("value")
+                if (
+                    score.get("metric") != "smina_affinity"
+                    or isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or score.get("units") != "kcal/mol"
+                    or score.get("protocol") != "score_only"
+                ):
+                    raise QuizManifestError("choice.smina_score is invalid")
+                public_choice["smina_score"] = {
+                    "metric": "smina_affinity",
+                    "value": float(value),
+                    "units": "kcal/mol",
+                    "protocol": "score_only",
+                    "scoring_function": _nonempty(
+                        score.get("scoring_function"),
+                        "choice.smina_score.scoring_function",
+                    ),
+                }
+            if "interaction_count" in public_choice:
+                if "method" not in public_choice:
+                    raise QuizManifestError("choice.interaction_count requires choice.method")
+                count = _object(
+                    public_choice["interaction_count"], "choice.interaction_count"
+                )
+                value = count.get("value")
+                if (
+                    count.get("metric") != "prolif_hbond_residue_count"
+                    or isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise QuizManifestError("choice.interaction_count is invalid")
+                public_choice["interaction_count"] = {
+                    "metric": "prolif_hbond_residue_count",
+                    "value": value,
+                    "policy": _nonempty(
+                        count.get("policy"), "choice.interaction_count.policy"
+                    ),
+                }
+            if "cluster_id" in public_choice:
+                public_choice["cluster_id"] = _nonempty(
+                    public_choice["cluster_id"], "choice.cluster_id"
+                )
+                if not isinstance(public_choice.get("is_rep"), bool):
+                    raise QuizManifestError(
+                        "a clustered blind choice requires boolean is_rep"
+                    )
+            elif "is_rep" in public_choice:
+                raise QuizManifestError("choice.is_rep requires choice.cluster_id")
+            private_choice = deepcopy(choice)
+            private_choice["id"] = choice_id
+            public_choices.append(public_choice)
+            private_choices.append(private_choice)
+
+        # Deterministic pseudorandom order avoids a fixed method/sample ordering
+        # while keeping replays and vote identifiers stable.
+        order = sorted(
+            range(len(public_choices)),
+            key=lambda index: hashlib.sha256(
+                f"{round_id}:{item_id}:{public_choices[index]['id']}".encode("utf-8")
+            ).hexdigest(),
+        )
+        public_choices = [public_choices[index] for index in order]
+        blind_item = {
+            "id": item_id,
+            "ligand": item.get("ligand"),
+            "week": item.get("week"),
+            "choices": public_choices,
+        }
+        for key in ("protein_uri", "pocket_uri", "metadata"):
+            if key in item:
+                blind_item[key] = deepcopy(item[key])
+        blind_items.append(blind_item)
+        private_item = {
+            "id": item_id,
+            "target_id": item.get("target_id", item_id),
+            "ligand": item.get("ligand"),
+            "choices": private_choices,
+        }
+        if "ligand_eligibility" in item:
+            private_item["ligand_eligibility"] = deepcopy(
+                _object(
+                    item.get("ligand_eligibility"),
+                    f"items[{item_index}].ligand_eligibility",
+                )
+            )
+        if "clustering" in item:
+            private_item["clustering"] = _object(
+                item.get("clustering"), f"items[{item_index}].clustering"
+            )
+        private_items.append(private_item)
+
+    blind_items.sort(key=lambda item: item["id"])
+    private_items.sort(key=lambda item: item["id"])
+    if not blind_items:
+        raise QuizManifestError("a blind manifest must contain at least one item")
+    blind = {"schema_version": QUIZ_SCHEMA_VERSION, "round_id": round_id, "items": blind_items}
+    _assert_no_reveal_fields(blind)
+    private = {
+        "schema_version": QUIZ_SCHEMA_VERSION,
+        "round_id": round_id,
+        "items": private_items,
+        "blind_manifest_sha256": manifest_sha256(blind),
+    }
+    return blind, private
+
+
+def build_reveal_manifest(
+    blind_manifest: Mapping[str, Any],
+    scored_items: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Validate scored choices against the blind IDs and build Wednesday reveal."""
+
+    blind = _object(blind_manifest, "blind_manifest")
+    if blind.get("schema_version") != QUIZ_SCHEMA_VERSION or not isinstance(
+        blind.get("items"), list
+    ):
+        raise QuizManifestError("invalid blind manifest")
+    expected = {
+        str(item.get("id")): {str(choice.get("id")) for choice in item.get("choices", [])}
+        for item in blind["items"]
+        if isinstance(item, Mapping)
+    }
+    reveal_items: list[dict[str, Any]] = []
+    for raw in scored_items:
+        item = _object(raw, "scored item")
+        item_id = _nonempty(item.get("id"), "scored item.id")
+        choices = item.get("choices")
+        if item_id not in expected or not isinstance(choices, list):
+            raise QuizManifestError(f"unexpected scored item: {item_id}")
+        seen: set[str] = set()
+        normalized_choices: list[dict[str, Any]] = []
+        for raw_choice in choices:
+            choice = _object(raw_choice, "scored choice")
+            choice_id = _nonempty(choice.get("id"), "scored choice.id")
+            if choice_id not in expected[item_id] or choice_id in seen:
+                raise QuizManifestError(f"unexpected or duplicate scored choice: {choice_id}")
+            rmsd = choice.get("rmsd")
+            correct = choice.get("correct")
+            if isinstance(rmsd, bool) or not isinstance(rmsd, (int, float)) or rmsd < 0:
+                raise QuizManifestError("scored choice.rmsd must be a non-negative number")
+            if not isinstance(correct, bool):
+                raise QuizManifestError("scored choice.correct must be boolean")
+            normalized = deepcopy(choice)
+            normalized["id"] = choice_id
+            normalized["rmsd"] = float(rmsd)
+            seen.add(choice_id)
+            normalized_choices.append(normalized)
+        if seen != expected[item_id]:
+            raise QuizManifestError(f"scored choices are incomplete for {item_id}")
+        reveal_items.append({"id": item_id, "choices": normalized_choices})
+    if {item["id"] for item in reveal_items} != set(expected):
+        raise QuizManifestError("scored item IDs do not match the blind manifest")
+    reveal_items.sort(key=lambda item: item["id"])
+    return {
+        "schema_version": QUIZ_SCHEMA_VERSION,
+        "round_id": blind.get("round_id"),
+        "blind_manifest_sha256": manifest_sha256(blind),
+        "items": reveal_items,
+    }
+
+
+__all__ = [
+    "BLIND_CHOICE_FIELDS",
+    "QUIZ_SCHEMA_VERSION",
+    "QuizManifestError",
+    "REVEAL_ONLY_FIELDS",
+    "build_blind_manifest",
+    "build_reveal_manifest",
+    "manifest_sha256",
+]

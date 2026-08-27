@@ -18,11 +18,12 @@ import json, shutil
 from pathlib import Path
 import numpy as np
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(BENCHMARK_PREP))
 import compute_overlaps as co
 
-HERE = Path(__file__).resolve().parent
-VIEWER = HERE.parent / "viewer"
+VIEWER = BENCHMARK_PREP
 DATA = HERE / "data"
 CLUSTER_THRESH = 2.0    # poses within this ligand-RMSD are the "same" answer -> one cluster
 SINGLE_POCKET = 8.0     # max pairwise representative-centroid distance to count as ONE pocket

@@ -252,8 +252,17 @@ async function stepPose(delta) {
 const CACHE_BUST = Date.now();
 const bust = (url) => url + (url.includes('?') ? '&' : '?') + 'v=' + CACHE_BUST;
 
+function resolveMolecularUrl(url) {
+  const relativePath = url.replace(/^\.\//, '');
+  if (!/^systems(?:_rnp)?\//.test(relativePath)) return url;
+  const baseUrl = window.FOLDARIUM_SUPABASE?.structureBaseUrl;
+  return baseUrl
+    ? `${baseUrl.replace(/\/$/, '')}/benchmark/demo/${relativePath}`
+    : url;
+}
+
 async function loadStruct(url, format) {
-  const data = await plugin.builders.data.download({ url: bust(url), isBinary: false });
+  const data = await plugin.builders.data.download({ url: bust(resolveMolecularUrl(url)), isBinary: false });
   const traj = await plugin.builders.structure.parseTrajectory(data, format);
   const model = await plugin.builders.structure.createModel(traj);
   const struct = await plugin.builders.structure.createStructure(model);

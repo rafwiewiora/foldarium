@@ -6,9 +6,11 @@ import json, glob, sys
 from pathlib import Path
 import numpy as np, gemmi, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"."); sys.path.insert(0,"../viewer")
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, align_to_crystal as A
-DATA=Path("data"); POCKET_R=5.0
+DATA=HERE / "data"; POCKET_R=5.0
 def wpoly(poly,R,t,dest,near=None):
     out=[]; i=0
     for r in poly:
@@ -20,10 +22,11 @@ def wpoly(poly,R,t,dest,near=None):
             i+=1
             out.append(f"ATOM  {i:>5d} {a.name[:4]:<4s} {r.name[:3]:>3s} A{r.seqid.num:>4d}    {p[0]:8.3f}{p[1]:8.3f}{p[2]:8.3f}  1.00  0.00          {a.element.name:>2s}")
     out.append("END"); dest.write_text("\n".join(out)+"\n")
-d=json.load(open("quiz_items.json")); done=0
+quiz_items = HERE / "quiz_items.json"
+d=json.load(open(quiz_items)); done=0
 for it in d["items"]:
     tgt=it["id"]; week=it["week"]; het=it["ligand"]; amap=P.af3_ligand_map(week,tgt,het); dd=DATA/tgt
-    cst=gemmi.read_structure(glob.glob(f"_xtal_cache/*{tgt}*")[0]); cst.setup_entities(); cm=cst[0]
+    cst=gemmi.read_structure(glob.glob(str(HERE / "_xtal_cache" / f"*{tgt}*"))[0]); cst.setup_entities(); cm=cst[0]
     cligs=[r for ch in cm for r in ch if r.name.upper()==het.upper()]
     cpoly=A.pocket_chain(cm,np.array([[a.pos.x,a.pos.y,a.pos.z] for a in cligs[0] if a.element.name!="H"]))
     union=[]; refmdl=min(c["af3_sample"] for c in it["choices"])
@@ -51,5 +54,5 @@ for it in d["items"]:
     if union and "afprotein_ref" in it:
         wpoly(_refpoly,_refRt[0],_refRt[1],dd/"afpocket-union.pdb",near=np.vstack(union))
         it["afpocket_union"]=f"data/{tgt}/afpocket-union.pdb"; done+=1
-json.dump(d,open("quiz_items.json","w"),indent=2)
+json.dump(d,open(quiz_items,"w"),indent=2)
 print(f"added crystal-aligned AF3 proteins for {done} items")

@@ -26,10 +26,13 @@ Backup of pre-clean assembled items -> QUIZ/quiz_items_rnp_v2.RAW.json.
 import json, os
 from collections import Counter
 
-QUIZ = "/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/quiz"
-DATA = f"{QUIZ}/data_rnp_v2"
-JSON = f"{QUIZ}/quiz_items_rnp_v2.json"
-RAW = f"{QUIZ}/quiz_items_rnp_v2.RAW.json"
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+QUIZ = paths.quiz_dir
+DATA = QUIZ / "data_rnp_v2"
+JSON = QUIZ / "quiz_items_rnp_v2.json"
+RAW = QUIZ / "quiz_items_rnp_v2.RAW.json"
 MIX_TOL = 2
 
 def distinct_res(path):
@@ -52,10 +55,10 @@ json.dump(items, open(RAW, 'w'), indent=1)   # backup raw assembled
 stats = Counter()
 kept = []
 for it in items:
-    iid = it['id']; dd = f"{DATA}/{iid}"
-    prot = distinct_res(f"{dd}/protein.pdb")
-    pock = distinct_res(f"{dd}/pocket.pdb")
-    xn = atom_count(f"{dd}/xtal_lig.pdb")
+    iid = it['id']; dd = DATA / iid
+    prot = distinct_res(dd / "protein.pdb")
+    pock = distinct_res(dd / "pocket.pdb")
+    xn = atom_count(dd / "xtal_lig.pdb")
 
     # (1) unaligned -> drop item
     if prot is not None and pock is not None and prot == pock:
@@ -68,7 +71,7 @@ for it in items:
     if xn is not None:
         surv = []
         for c in it['choices']:
-            pcn = atom_count(f"{QUIZ}/{c['pose_file']}")
+            pcn = atom_count(QUIZ / c['pose_file'])
             if pcn is None or abs(pcn - xn) <= MIX_TOL:
                 surv.append(c)
             else:
@@ -96,7 +99,7 @@ for it in items:
     it['has_correct'] = bool(ncorr > 0)
     it['n_correct'] = ncorr
 
-    pose_counts = [atom_count(f"{QUIZ}/{c['pose_file']}") for c in it['choices']]
+    pose_counts = [atom_count(QUIZ / c['pose_file']) for c in it['choices']]
     pose_counts = [p for p in pose_counts if p is not None]
     it['n_heavy'] = xn if xn is not None else (max(pose_counts) if pose_counts else 0)
 

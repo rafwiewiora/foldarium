@@ -21,8 +21,9 @@ import json, glob, re, sys
 from pathlib import Path
 import numpy as np, gemmi, warnings
 warnings.filterwarnings("ignore")
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / "viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, align_to_crystal as A, build_quiz_items as bq, prep_poses as pp
 from archive_build import _lig, _poly, DATA, XTAL          # reuse the exact file writers
 

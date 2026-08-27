@@ -25,8 +25,9 @@ from collections import defaultdict, Counter
 import numpy as np, gemmi
 warnings.filterwarnings("ignore")
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / "viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P
 import prep_poses as pp
 import build_quiz_items as bq           # cluster(), CLUSTER_THRESH=2.0

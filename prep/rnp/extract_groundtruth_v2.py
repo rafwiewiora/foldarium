@@ -5,10 +5,13 @@
 Write /tmp/groundtruth.pkl: target -> {'ca':..., 'lig': {instchain: [(el,name,xyz)...]}}
 """
 import tarfile, pickle, sys, re, os
-RNP="/Users/rafalwiewiora/rnp_data"
-GT=f"{RNP}/ground_truth.tar.gz"
-PLAN=f"{RNP}/rnp_quiz_plan_v2.pkl"
-OUT="/tmp/groundtruth_v2.pkl"
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
+GT = paths.rnp_dir / "ground_truth.tar.gz"
+PLAN = paths.rnp_dir / "rnp_quiz_plan_v2.pkl"
+OUT = str(paths.work_dir / "groundtruth_v2.pkl")
 
 plan=pickle.load(open(PLAN,'rb'))
 want_sys={p['target'] for p in plan}

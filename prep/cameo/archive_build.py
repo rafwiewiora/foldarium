@@ -12,8 +12,9 @@ from pathlib import Path
 from statistics import median
 import numpy as np, gemmi, warnings
 warnings.filterwarnings("ignore")
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / "viewer"))
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, align_to_crystal as A, build_quiz_items as bq, prep_poses as pp
 DATA = HERE / "data"; XTAL = HERE / "_xtal_cache"; XTAL.mkdir(exist_ok=True)
 ITEMS_F = HERE / "quiz_items.json"; PROC_F = HERE / "archive_processed.json"

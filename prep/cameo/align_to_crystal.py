@@ -8,9 +8,11 @@ import json, warnings, sys, glob, difflib
 from pathlib import Path
 import numpy as np, gemmi
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"."); sys.path.insert(0,"../viewer")
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P
-HERE=Path("."); DATA=HERE/"data"; POCKET_R=5.0
+DATA=HERE/"data"; POCKET_R=5.0
 
 def ca_list(poly):
     out=[]
@@ -53,10 +55,11 @@ def write_lig(atoms, dest):   # atoms = list of (element,name,xyz)
     out.append("END"); dest.write_text("\n".join(out)+"\n")
 
 def main():
-    d=json.load(open("quiz_items.json")); ok=0; drop=[]
+    quiz_items = HERE / "quiz_items.json"
+    d=json.load(open(quiz_items)); ok=0; drop=[]
     for it in list(d["items"]):
         tgt=it["id"]; week=it["week"]; het=it["ligand"]; amap=P.af3_ligand_map(week,tgt,het); dd=DATA/tgt
-        f=glob.glob(f"_xtal_cache/*{tgt}*")
+        f=glob.glob(str(HERE / "_xtal_cache" / f"*{tgt}*"))
         if not f: drop.append((tgt,"no crystal")); d["items"].remove(it); continue
         cst=gemmi.read_structure(f[0]); cst.setup_entities(); cm=cst[0]
         cligs=[r for ch in cm for r in ch if r.name.upper()==het.upper()]
@@ -99,6 +102,6 @@ def main():
         for c in it["choices"]:
             c.pop("pocket_file",None); c.pop("afprotein_file",None); c.pop("_bad",None)
         ok+=1
-    json.dump(d,open("quiz_items.json","w"),indent=2)
+    json.dump(d,open(quiz_items,"w"),indent=2)
     print(f"crystal-frame aligned {ok} items; dropped {len(drop)}: {drop}")
 if __name__=="__main__": main()

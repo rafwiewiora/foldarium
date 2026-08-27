@@ -20,14 +20,18 @@ Writes a plan pickle: list of system dicts. Resumable (skips if plan exists & RE
 """
 import json, pickle, csv, sys, time, os, re
 from collections import defaultdict
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import numpy as np
 
-RNP="/Users/rafalwiewiora/rnp_data"
-CACHE=os.environ.get("CACHE","/tmp/coords_cache_v2.pkl")
-IDX="/Users/rafalwiewiora/rnp_data/cif_index_v2.json"
-TABLE=f"{RNP}/xmethod_plddt_table_v2.csv"
-ANNOT="/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv"
-OUT=f"{RNP}/rnp_quiz_plan_v2.pkl"
+RNP = paths.rnp_dir
+CACHE = os.environ.get("CACHE", str(paths.work_dir / "coords_cache_v2.pkl"))
+IDX = RNP / "cif_index_v2.json"
+TABLE = RNP / "xmethod_plddt_table_v2.csv"
+ANNOT = paths.annotations
+OUT = RNP / "rnp_quiz_plan_v2.pkl"
 CLUSTER_THRESH=2.0
 POCKET_CA_R=12.0
 SINGLE_POCKET_SPREAD=8.0

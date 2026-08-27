@@ -3,10 +3,12 @@ import glob, re, sys
 from collections import Counter
 import numpy as np, gemmi, warnings
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "."); sys.path.insert(0, "../viewer")
+from _paths import BENCHMARK_PREP, HERE
+
+sys.path.insert(0, str(HERE)); sys.path.insert(0, str(BENCHMARK_PREP))
 import process_cameo as P, align_to_crystal as A, build_quiz_items as bq
 from pathlib import Path
-XTAL = Path("_xtal_cache")
+XTAL = HERE / "_xtal_cache"
 c = Counter()
 bases = sorted(glob.glob(str(P.CAMEO / "*" / "*" / "servers" / "server993")))
 for i, sd in enumerate(bases):

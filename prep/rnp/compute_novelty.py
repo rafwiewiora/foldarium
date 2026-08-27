@@ -2,10 +2,14 @@
 """Authoritative RnP novelty computation using RCSB initial_release_date for the
 post-cutoff exclusion (matches authors' new_pdb_ids.txt). Validates vs annotations.csv."""
 import json, sys
+
+from _paths import parse_paths
+
+paths = parse_paths(__doc__)
 import pandas as pd, numpy as np
 
 CUTOFF = pd.to_datetime('2021-09-30')
-cache = json.load(open('/Users/rafalwiewiora/rnp_data/rcsb_release_dates.json'))
+cache = json.load(open(paths.rnp_dir / "rcsb_release_dates.json"))
 
 # post-cutoff PDB set from RCSB initial_release_date. Unknown -> treat as pre-cutoff (not excluded).
 post_cutoff = set()
@@ -18,7 +22,7 @@ for pdb, d in cache.items():
         post_cutoff.add(pdb.upper())
 print(f"post_cutoff PDBs: {len(post_cutoff)}  missing(no date): {len(missing)}", flush=True)
 
-df = pd.read_parquet('/tmp/rnp_allsim.parquet',
+df = pd.read_parquet(paths.work_dir / "rnp_allsim.parquet",
     columns=['query_system','target_system','query_ligand_instance_chain','sucos_shape_pocket_qcov','target_release_date'])
 df['qpdb'] = df['query_system'].str[:4].str.upper()
 df['tpdb'] = df['target_system'].str[:4].str.upper()
@@ -41,10 +45,10 @@ full = allkeys.merge(agg, on=['query_system','query_ligand_instance_chain'], how
 full['train_qcov_filled'] = full['train_qcov'].fillna(0.0)
 full['novel'] = full['train_qcov_filled'] < 25.0
 print(f"total keys: {len(full)}  no-surviving-target: {full['train_qcov'].isna().sum()}", flush=True)
-full.to_parquet('/Users/rafalwiewiora/rnp_data/novelty_computed.parquet', index=False)
+full.to_parquet(paths.rnp_dir / "novelty_computed.parquet", index=False)
 
 # ---- VALIDATION ----
-ann = pd.read_csv('/Users/rafalwiewiora/repos/paperia/cofolding_benchmark/sucos/rnp_annotations.csv',
+ann = pd.read_csv(paths.annotations,
     usecols=['query_system','query_ligand_instance_chain','sucos_shape_pocket_qcov'])
 ann_f = ann[ann['sucos_shape_pocket_qcov'].notna()].copy()
 m = ann_f.merge(agg, on=['query_system','query_ligand_instance_chain'], how='left')

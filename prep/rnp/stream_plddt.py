@@ -2,10 +2,13 @@
 import tarfile, json, csv, sys, time
 from collections import defaultdict
 
-TAR="/Users/rafalwiewiora/rnp_data/prediction_files.tar.gz"
-index=json.load(open('/tmp/cif_index.json'))   # path -> [ {method,target,instchain,seed,sample,pred_chain,ranking_score,rmsd}, ... ]
+from _paths import parse_paths
+
+paths = parse_paths("Stream ligand pLDDT values from the RnP prediction archive.")
+TAR = paths.rnp_dir / "prediction_files.tar.gz"
+index=json.load(open(paths.work_dir / "cif_index.json"))   # path -> [ {method,target,instchain,seed,sample,pred_chain,ranking_score,rmsd}, ... ]
 want=set(index.keys())
-OUT="/Users/rafalwiewiora/rnp_data/xmethod_plddt_table.csv"
+OUT=paths.rnp_dir / "xmethod_plddt_table.csv"
 
 def parse_cif_ligand_plddt(data, pred_chains):
     """Return dict pred_chain -> mean B_iso over heavy (non-H) atoms with auth_asym_id==chain."""
