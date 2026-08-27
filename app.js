@@ -3123,6 +3123,19 @@ function showIntro() {
   if (quizSource === 'weekly') {
     const status = WEEKLY_ROUND?.public_status;
     const closes = WEEKLY_ROUND?.closes_at ? new Date(WEEKLY_ROUND.closes_at).toLocaleString() : 'Wednesday';
+    const showRevealedModes = status === 'revealed' && !isRetrospectiveReview();
+    const modes = $('#revealed-weekly-modes');
+    if (modes) modes.hidden = !showRevealedModes;
+    const retrospectiveLink = $('#current-retrospective-link');
+    if (retrospectiveLink && WEEKLY_ROUND?.round_id) {
+      retrospectiveLink.href = `/weekly?retrospective_round=${encodeURIComponent(WEEKLY_ROUND.round_id)}`;
+    }
+    const nameHint = $('#participant-name-hint');
+    if (nameHint) {
+      nameHint.textContent = showRevealedModes
+        ? 'Used only to label your separate post-reveal votes.'
+        : 'Shown on the results leaderboard after release.';
+    }
     $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = isRetrospectiveReview()
       ? `${pool.length} retrospective questions.`
@@ -3132,10 +3145,12 @@ function showIntro() {
           ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
           : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`));
     $('#start').style.display = pool.length
-      && (isRetrospectiveReview() || status !== 'closed') ? '' : 'none';
+      && (isRetrospectiveReview() || (status !== 'closed' && !showRevealedModes)) ? '' : 'none';
     syncStartGate();
     return;
   }
+  $('#revealed-weekly-modes').hidden = true;
+  $('#participant-name-hint').textContent = 'Shown on the results leaderboard after release.';
   $('#setuphint').textContent = pool.length ? `${pool.length} questions available` : 'No questions available';
   $('#start').style.display = pool.length ? '' : 'none';
   syncStartGate();
@@ -4097,6 +4112,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   rememberView();   // snapshot the starting view as the persisted baseline for this session
   $('#wrap').classList.remove('intro');
   $('#setup').style.display = 'none'; $('#participant-setup').style.display = 'none';
+  $('#revealed-weekly-modes').hidden = true;
   $('#start').style.display = 'none'; $('#mode').style.display = '';
   $('#question-head').style.display = ''; $('#ligand').style.display = '';
   $('#instruction').style.display = isRetrospectiveReview() ? 'none' : '';
@@ -4166,10 +4182,17 @@ function normalizedParticipantName() {
 
 function syncStartGate() {
   const button = $('#start');
-  if (DEV || isRetrospectiveReview()) { button.disabled = false; return; }
+  const playForFun = $('#play-for-fun-start');
+  if (DEV || isRetrospectiveReview()) {
+    button.disabled = false;
+    if (playForFun) playForFun.disabled = false;
+    return;
+  }
   const input = $('#participant-name');
   const displayName = normalizedParticipantName();
-  button.disabled = !displayName || displayName.length > 80 || !input.checkValidity();
+  const disabled = !displayName || displayName.length > 80 || !input.checkValidity();
+  button.disabled = disabled;
+  if (playForFun) playForFun.disabled = disabled;
 }
 
 async function startQuiz() {
@@ -5447,6 +5470,7 @@ async function init() {
     recordAppEvent(weeklyCommentPromptEnabled ? 'vote_comment_enabled' : 'vote_comment_disabled');
   };
   $('#start').onclick = startQuiz;
+  $('#play-for-fun-start').onclick = startQuiz;
   $('#participant-name').addEventListener('input', syncStartGate);
   $('#participant-name').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
