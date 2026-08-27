@@ -50,6 +50,8 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /id="revealed-weekly-modes" hidden/);
   assert.match(html, /This week’s Weekly is revealed/);
   assert.match(html, /Next blind Weekly opens Saturday/);
+  assert.match(app, /Enter a player name to activate Play for fun/);
+  assert.match(app, /nameHint\.classList\.toggle\('action-required', showRevealedModes\)/);
   assert.match(html, /id="play-for-fun-start"[\s\S]*Play for fun/);
   assert.match(html, /No Xtal · opponents shown after each answer/);
   assert.match(html, /id="current-retrospective-link"[\s\S]*Review with Xtal/);

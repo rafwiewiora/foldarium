@@ -359,6 +359,7 @@
   .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
     color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
   .participant-setup input:focus{outline:none;border-color:var(--accent)}
+  .participant-setup .hint.action-required{color:var(--ink);font-weight:650}
   .weekly-selector-leaderboard{margin-top:10px;display:flex;flex-direction:column;gap:8px}
   .weekly-selector-leaderboard[hidden]{display:none!important}
   .weekly-selector-row{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;
@@ -468,7 +469,8 @@
 
     <section class="participant-setup" id="participant-setup">
       <label>Player name
-        <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required/>
+        <input id="participant-name" name="participant-name" autocomplete="name" maxlength="80" required
+          aria-describedby="participant-name-hint name-status"/>
       </label>
       <p class="hint" id="participant-name-hint">Shown on the results leaderboard after release.</p>
       <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
