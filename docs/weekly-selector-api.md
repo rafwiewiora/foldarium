@@ -170,9 +170,9 @@ cryptographically random token. The raw token is returned exactly once:
 
 ```json
 {
-  "token": "one-time-plaintext-secret",
+  "token": "<returned-once>",
   "token_type": "Bearer",
-  "token_id": "0f94f059-b192-4c35-b9c0-f6520800cf07",
+  "token_id": "<uuid>",
   "environment": "preview",
   "round_id": "weekly-2026-09-05",
   "expires_at": "2026-09-09T00:00:00Z"
