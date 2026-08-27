@@ -85,7 +85,14 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   const [index, app] = await Promise.all([source('index.html'), source('app.js')]);
   assert.match(index, /weekly-retrospectives\?round_id=/);
   assert.match(index, /FOLDARIUM_ARCHIVE_DETAIL_READY/);
+  assert.match(index, /id="archive-review-loading" hidden/);
+  assert.match(index, /wrap\.hidden = Boolean\(archiveRoundId\)/);
+  assert.match(index, /window\.foldariumRevealArchiveReview =/);
   assert.match(app, /if \(isArchiveRetrospective\(\)\) \{\s*activateArchiveDetail/);
+  assert.match(
+    app,
+    /loadQuestion\(questionIndex\);\s*if \(isArchiveRetrospective\(\)\) window\.foldariumRevealArchiveReview\?\.\(\)/,
+  );
   assert.match(app, /if \(DEV \|\| isRetrospectiveReview\(\)\)/);
   assert.match(app, /foldariumPrivateReview\.enrichPrivateWeeklyPool/);
   assert.match(app, /detail\.answer_overlays/);

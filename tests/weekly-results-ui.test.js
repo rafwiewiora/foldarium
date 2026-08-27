@@ -565,7 +565,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Leaderboard name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608242/);
+  assert.match(html, /app\.js\?v=202608243/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(html, /\.grid-head\{[^}]*width:calc\(100% - 16px\)[^}]*overflow:hidden[^}]*white-space:nowrap/);
   assert.match(html, /\.grid-meta\{[^}]*flex:0 1 auto[^}]*text-align:left[^}]*text-overflow:ellipsis/);

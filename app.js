@@ -4062,6 +4062,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   startWeeklyThinkingTrace();
   const questionIndex = Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
   loadQuestion(questionIndex);
+  if (isArchiveRetrospective()) window.foldariumRevealArchiveReview?.();
 }
 
 async function resumeWeeklyQuizIfAvailable() {
