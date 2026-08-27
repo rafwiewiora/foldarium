@@ -312,7 +312,6 @@
     ],
     "agreement_count": 56,
     "agreement_rate": 0.9333,
-    "api_audit_sha256": "3396a4cf1cc25eea26f092a85f4af8fc8689f7037684131276554612d44d6c43",
     "api_complete_count": 62,
     "comparable_count": 60,
     "confusion_matrix": {
@@ -320,7 +319,8 @@
       "actual_familiar__predicted_novel": 2,
       "actual_novel__predicted_familiar": 2,
       "actual_novel__predicted_novel": 34
-    }
+    },
+    "public_queue_audit_sha256": "3396a4cf1cc25eea26f092a85f4af8fc8689f7037684131276554612d44d6c43"
   },
   "records": [
     {
