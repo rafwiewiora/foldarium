@@ -561,12 +561,15 @@ test('weekly named sessions opt into leaderboard identity in initial app state',
 });
 
 test('index exposes leaderboard name copy and scorecard shell', async () => {
-  const html = await read('index.html');
+  const [html, app] = await Promise.all([read('index.html'), read('app.js')]);
   assert.match(html, /Leaderboard name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608244/);
+  assert.match(html, /app\.js\?v=202608245/);
   assert.match(html, /id="weekly-results-heading"/);
+  assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
+  assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
+  assert.match(app, /Published results are temporarily unavailable/);
   assert.match(html, /\.grid-head\{[^}]*width:calc\(100% - 16px\)[^}]*overflow:hidden[^}]*white-space:nowrap/);
   assert.match(html, /\.grid-meta\{[^}]*flex:0 1 auto[^}]*text-align:left[^}]*text-overflow:ellipsis/);
   assert.match(html, /\.pose-info\{[^}]*flex:none[^}]*margin-left:auto/);
@@ -622,6 +625,115 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
   assert.match(host.innerHTML, /Codex GPT-5\.6/);
   assert.match(host.innerHTML, /Reviewer \(local, not ranked\)/);
   assert.doesNotMatch(host.innerHTML, /#1 · <b>Claude Opus<\/b>/);
+});
+
+test('revealed Weekly derives human and automated scores from retrospective summaries', async () => {
+  const app = await read('app.js');
+  const publication = {
+    round_id: 'weekly-test',
+    item_count: 2,
+    summary: {
+      human_entries: [{
+        participant: 'Ada',
+        correct: 1,
+        answered: 1,
+        total: 2,
+        accuracy: 100,
+        coverage: 50,
+        complete: false,
+      }],
+      automated_entries: [
+        { participant: 'Claude Opus', correct: 1, total: 2, accuracy: 50 },
+        { participant: 'Smina', correct: 0, total: 2, accuracy: 0 },
+      ],
+    },
+  };
+  const leaderboardFromSummary = evaluateDeclaration(
+    app,
+    'function weeklyLeaderboardFromRetrospectiveSummary(publication)',
+    { WEEKLY_ROUND: { round_id: 'weekly-test' } },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(leaderboardFromSummary(publication))),
+    {
+      format_version: 'foldarium.weekly-leaderboard/v1',
+      round_id: 'weekly-test',
+      item_count: 2,
+      participant_count: 1,
+      complete_runs: [],
+      partial_runs: [{
+        display_name: 'Ada',
+        correct: 1,
+        answered: 1,
+        total: 2,
+        accuracy: 100,
+        coverage: 50,
+      }],
+    },
+  );
+
+  const host = { hidden: true, innerHTML: '', replaceChildren() { this.innerHTML = ''; } };
+  const escapeSelectorText = evaluateDeclaration(
+    app,
+    'function escapeSelectorText(value)',
+    {},
+  );
+  const renderAutomated = evaluateDeclaration(
+    app,
+    'function renderWeeklySelectorLeaderboard()',
+    {
+      WEEKLY_ONLY: true,
+      WEEKLY_ROUND: { public_status: 'revealed' },
+      WEEKLY_RETROSPECTIVE_SUMMARY: publication.summary,
+      escapeSelectorText,
+      $: selector => selector === '#weekly-selector-leaderboard' ? host : null,
+    },
+  );
+  renderAutomated();
+  assert.equal(host.hidden, false);
+  assert.match(host.innerHTML, /Automated methods/);
+  assert.match(host.innerHTML, /Claude Opus<\/b> · 1\/2 · 50%/);
+  assert.match(host.innerHTML, /Smina<\/b> · 0\/2 · 0%/);
+});
+
+test('revealed Weekly login omits a zeroed local session and reports no human players', async () => {
+  const app = await read('app.js');
+  const host = { hidden: true, innerHTML: '', replaceChildren() {} };
+  const wrap = { classList: { contains: value => value === 'intro' } };
+  const escapeLeaderboardText = evaluateDeclaration(
+    app,
+    'function escapeLeaderboardText(value)',
+    {},
+  );
+  const formatWeeklyScoreLine = evaluateDeclaration(
+    app,
+    'function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null })',
+    { escapeLeaderboardText },
+  );
+  const render = evaluateDeclaration(app, 'function renderWeeklyLeaderboard()', {
+    WEEKLY_ONLY: true,
+    WEEKLY_ROUND: { public_status: 'revealed' },
+    WEEKLY_LEADERBOARD: {
+      format_version: 'foldarium.weekly-leaderboard/v1',
+      round_id: 'weekly-test',
+      item_count: 39,
+      participant_count: 0,
+      complete_runs: [],
+      partial_runs: [],
+    },
+    WEEKLY_LEADERBOARD_ERROR: '',
+    ITEMS: Array(39).fill({}),
+    participantDisplayName: '',
+    localWeeklyScore: { correct: 0, answered: 0 },
+    isPrivatePrecloseReview: () => false,
+    isArchiveRetrospective: () => false,
+    formatWeeklyScoreLine,
+    $: selector => selector === '#weekly-leaderboard' ? host
+      : selector === '#wrap' ? wrap : null,
+  });
+  render();
+  assert.match(host.innerHTML, /No human players participated this week/);
+  assert.doesNotMatch(host.innerHTML, /Your session|0\/0/);
 });
 
 test('private retrospective renders compact per-question popularity with names behind info', async () => {
