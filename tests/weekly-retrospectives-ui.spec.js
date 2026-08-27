@@ -262,7 +262,14 @@ test('archive list has four outcome lanes, no Mol-star, and no desktop overflow'
   await expect(page.locator('#round-list .round-date')).toContainText(
     'Blind week · Aug 20, 2026',
   );
+  await expect(page.locator('.outcome-caption')).toHaveText(
+    'Human outcomes · share of questions',
+  );
   await expect(page.locator('.round-row .rail-lane')).toHaveCount(4);
+  const filledWidth = await page.locator(
+    '.rail-lane[data-outcome="pose-solved"] .rail-fill',
+  ).evaluate(node => node.getBoundingClientRect().width);
+  expect(filledWidth).toBeGreaterThan(0);
   await expect(page.locator('.round-row')).toContainText('Claude Opus');
   await expect(page.locator('.round-row')).not.toContainText('hidden for privacy');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -302,7 +309,9 @@ test('detail filters four outcomes, safely renders admin names, and fits mobile'
   await expect(page.locator('#round-detail')).toBeVisible();
   await expect(page.locator('.filter-row button')).toHaveCount(5);
   await expect(page.locator('.question-list')).toContainText('PocketFox');
+  await expect(page.locator('.question-list')).toContainText('Human players');
   await expect(page.locator('.question-list')).toContainText('0/2 correct');
+  await expect(page.locator('.question-list')).toContainText('Automated methods');
   await page.locator('.filter-row button[data-filter="pose-solved"]').click();
   await expect(page.locator('.question-row')).toHaveCount(1);
   await expect(page.locator('.question-row')).toContainText('LIG');

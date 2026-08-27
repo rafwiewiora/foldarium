@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   OUTCOME_FILTERS,
   archiveRoute,
+  humanAnswerSummary,
   questionOutcome,
 } from '../weekly-retrospectives.js';
 import { quizEntryMode } from '../quiz-entry-mode.js';
@@ -54,6 +55,11 @@ test('four outcome semantics classify pose and None questions by human solve sta
   );
 });
 
+test('question results distinguish absent human answers from automated methods', () => {
+  assert.equal(humanAnswerSummary({ answered_count: 0, correct_count: 0 }), 'No answers');
+  assert.equal(humanAnswerSummary({ answered_count: 3, correct_count: 2 }), '2/3 correct');
+});
+
 test('standalone archive stays Mol-star-free and renders API names with safe DOM text', async () => {
   const [html, ui, css] = await Promise.all([
     source('weekly-retrospectives.html'),
@@ -64,7 +70,11 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.doesNotMatch(ui, /\.innerHTML\s*=/);
   assert.match(ui, /\.textContent\s*=/);
   assert.match(html, /data-kind="human" title="Show player pseudonyms"/);
+  assert.match(ui, /'Human players'/);
+  assert.match(ui, /'Automated methods'/);
+  assert.match(ui, /Human outcomes · share of questions/);
   assert.match(ui, /answer\.display_names\.join\(', '\)/);
+  assert.match(css, /\.rail-fill\{display:block;/);
   assert.match(css, /@media\(max-width:620px\)/);
   assert.match(css, /min-width:320px/);
   assert.match(css, /prefers-reduced-motion:reduce/);
