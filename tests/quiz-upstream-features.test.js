@@ -645,7 +645,7 @@ test('One-at-a-time rejection mutes and restores the whole molecular viewer', as
   assert.equal(actions.hidden, true);
 });
 
-test('retrospective One at a time replaces ballot actions with protein-frame controls', async () => {
+test('archive retrospective One at a time replaces ballot actions with protein-frame controls', async () => {
   const app = await readApp();
   const choice = { pose_file: 'pose.pdb' };
   const classes = new Set();
@@ -672,7 +672,7 @@ test('retrospective One at a time replaces ballot actions with protein-frame con
     choiceRejected: () => false,
     gridChoiceSelected: () => false,
     retrospectiveAnswerActive: () => true,
-    isArchiveRetrospective: () => false,
+    isArchiveRetrospective: () => true,
     retrospectiveProteinFrame: 'folded',
     isXtalReferenceChoice: () => false,
   });

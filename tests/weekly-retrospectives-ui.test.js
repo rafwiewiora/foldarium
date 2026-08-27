@@ -91,6 +91,9 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   assert.match(app, /if \(DEV \|\| isRetrospectiveReview\(\)\)/);
   assert.match(app, /foldariumPrivateReview\.enrichPrivateWeeklyPool/);
   assert.match(app, /detail\.answer_overlays/);
+  assert.match(app, /if \(answerActive && isRetrospectiveReview\(\)\)/);
+  assert.doesNotMatch(app, /answerActive && isArchiveRetrospective\(\)/);
+  assert.match(app, /if \(isRetrospectiveReview\(\) && released\?\.pdb_id && released\?\.structure_page_url\)/);
   assert.doesNotMatch(app, /scope unknown|Aggregate answers are hidden/);
   assert.match(app, /Player answers/);
   const archiveStart = app.indexOf(
