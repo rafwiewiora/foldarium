@@ -3,7 +3,7 @@ title = "Foldarium public repository"
 [extend]
 useDefault = true
 
-[[allowlists]]
+[allowlist]
 description = "Synthetic test credentials and immutable public contract digests"
 paths = [
   '''^tests/''',
