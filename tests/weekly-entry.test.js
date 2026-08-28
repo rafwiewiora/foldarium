@@ -77,7 +77,7 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /id="lock"/);
   assert.match(html, /id="weekly-results"/);
   assert.match(html, /Available Wednesday\./);
-  assert.match(html, /id="datasets-link"[\s\S]*?href="\/datasets"/);
+  assert.doesNotMatch(html, /id="datasets-link"/);
   assert.match(html, /id="gate-pw"/);
   assert.match(html, /const PASS = '[^']+'/);
   assert.doesNotMatch(html, /Programmatic voting|id="programmatic-voting"|selector-download-kit/);
