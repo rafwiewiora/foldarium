@@ -6,13 +6,16 @@ import { quizEntryMode } from '../quiz-entry-mode.js';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('weekly routes select weekly-only mode without changing classic routes', () => {
-  assert.equal(quizEntryMode('/'), 'classic');
-  assert.equal(quizEntryMode('/index.html'), 'classic');
+test('the root and legacy weekly routes select weekly-only mode', () => {
+  assert.equal(quizEntryMode('/'), 'weekly');
+  assert.equal(quizEntryMode('/index.html'), 'weekly');
   assert.equal(quizEntryMode('/weekly-ish'), 'classic');
   assert.equal(quizEntryMode('/weekly'), 'weekly');
   assert.equal(quizEntryMode('/weekly/'), 'weekly');
   assert.equal(quizEntryMode('/weekly.html'), 'weekly');
+  assert.equal(quizEntryMode('/datasets'), 'classic');
+  assert.equal(quizEntryMode('/datasets/'), 'classic');
+  assert.equal(quizEntryMode('/datasets.html'), 'classic');
 });
 
 test('weekly-only chrome stays focused on human play while the Selector API remains separate', async () => {
@@ -40,6 +43,7 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /id="lock"/);
   assert.match(html, /id="weekly-results"/);
   assert.match(html, /Available Wednesday\./);
+  assert.match(html, /id="datasets-link"[\s\S]*?href="\/datasets"/);
   assert.doesNotMatch(html, /Programmatic voting|id="programmatic-voting"|selector-download-kit/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /new votes are recorded as post-reveal and excluded from blind-week scores/);
@@ -62,6 +66,11 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /quizSource === 'weekly' \? 'Ligand pLDDT'/);
   assert.match(app, /plddt_pick_sample: plddtPick\?\.af3_sample \?\? -1/);
   assert.match(app, /opponentChoiceCorrect = choice => quizSource === 'weekly'[\s\S]*choice\?\.correct === true/);
+});
+
+test('the classic leaderboard returns to the datasets route', async () => {
+  const html = await read('leaderboard.html');
+  assert.match(html, /href="\/datasets">play →<\/a>/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {

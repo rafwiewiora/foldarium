@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  STATIC_PARITY_TARGETS,
   checkProductionParity,
   parseOrigin,
   validateProductionConfig,
@@ -44,6 +45,14 @@ test('validates the public production config shape without pinning operator valu
     () => validateProductionConfig({ ...productionConfig(), publishableKey: '' }),
     /publishableKey/,
   );
+});
+
+test('checks shared modules but excludes deployment-specific gated shells', () => {
+  const localPaths = STATIC_PARITY_TARGETS.map(([path]) => path);
+  assert.ok(localPaths.includes('app.js'));
+  assert.ok(localPaths.includes('quiz-entry-mode.js'));
+  assert.ok(!localPaths.includes('index.html'));
+  assert.ok(!localPaths.includes('weekly-retrospectives.html'));
 });
 
 test('compares canonical source bytes with deployed responses', async t => {
