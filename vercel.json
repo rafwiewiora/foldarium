@@ -1,9 +1,13 @@
 {
+  "redirects": [
+    { "source": "/weekly", "destination": "/", "permanent": true },
+    { "source": "/weekly.html", "destination": "/", "permanent": true }
+  ],
   "rewrites": [
+    { "source": "/datasets", "destination": "/index.html" },
+    { "source": "/datasets.html", "destination": "/index.html" },
     { "source": "/weekly/retrospectives/:roundId", "destination": "/weekly-retrospectives.html" },
     { "source": "/weekly/retrospectives", "destination": "/weekly-retrospectives.html" },
-    { "source": "/api/weekly-selector/:path*", "destination": "/api/weekly-selector?action=:path*" },
-    { "source": "/weekly", "destination": "/index.html" },
-    { "source": "/weekly.html", "destination": "/index.html" }
+    { "source": "/api/weekly-selector/:path*", "destination": "/api/weekly-selector?action=:path*" }
   ]
 }

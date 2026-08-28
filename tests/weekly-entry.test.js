@@ -6,24 +6,50 @@ import { quizEntryMode } from '../quiz-entry-mode.js';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('weekly routes select weekly-only mode without changing classic routes', () => {
-  assert.equal(quizEntryMode('/'), 'classic');
-  assert.equal(quizEntryMode('/index.html'), 'classic');
+test('the root and legacy weekly routes select weekly-only mode', () => {
+  assert.equal(quizEntryMode('/'), 'weekly');
+  assert.equal(quizEntryMode('/index.html'), 'weekly');
   assert.equal(quizEntryMode('/weekly-ish'), 'classic');
   assert.equal(quizEntryMode('/weekly'), 'weekly');
   assert.equal(quizEntryMode('/weekly/'), 'weekly');
   assert.equal(quizEntryMode('/weekly.html'), 'weekly');
+  assert.equal(quizEntryMode('/datasets'), 'classic');
+  assert.equal(quizEntryMode('/datasets/'), 'classic');
+  assert.equal(quizEntryMode('/datasets.html'), 'classic');
 });
 
-test('Vercel serves weekly and retrospective entry points through their shells', async () => {
+test('Vercel makes the root canonical while preserving archive and API routes', async () => {
   const config = JSON.parse(await read('vercel.json'));
+  assert.deepEqual(config.redirects, [
+    { source: '/weekly', destination: '/', permanent: true },
+    { source: '/weekly.html', destination: '/', permanent: true },
+  ]);
   assert.deepEqual(config.rewrites, [
+    { source: '/datasets', destination: '/index.html' },
+    { source: '/datasets.html', destination: '/index.html' },
     { source: '/weekly/retrospectives/:roundId', destination: '/weekly-retrospectives.html' },
     { source: '/weekly/retrospectives', destination: '/weekly-retrospectives.html' },
     { source: '/api/weekly-selector/:path*', destination: '/api/weekly-selector?action=:path*' },
-    { source: '/weekly', destination: '/index.html' },
-    { source: '/weekly.html', destination: '/index.html' },
   ]);
+});
+
+test('Vercel excludes local and operational-only source trees', async () => {
+  const ignored = new Set((await read('.vercelignore')).trim().split(/\r?\n/));
+  for (const path of [
+    '.cursor/',
+    '.github/',
+    'data/',
+    'data_rnp/',
+    'docs/',
+    'local/',
+    'local-retrospective-proxy.mjs',
+    'pipeline/',
+    'prep/',
+    'supabase/',
+    'tests/',
+  ]) {
+    assert.equal(ignored.has(path), true, `${path} must stay outside the Vercel artifact`);
+  }
 });
 
 test('weekly-only chrome stays focused on human play while the Selector API remains separate', async () => {
@@ -51,6 +77,9 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(html, /id="lock"/);
   assert.match(html, /id="weekly-results"/);
   assert.match(html, /Available Wednesday\./);
+  assert.match(html, /id="datasets-link"[\s\S]*?href="\/datasets"/);
+  assert.match(html, /id="gate-pw"/);
+  assert.match(html, /const PASS = '[^']+'/);
   assert.doesNotMatch(html, /Programmatic voting|id="programmatic-voting"|selector-download-kit/);
   assert.match(app, /function renderWeeklyResultsStatus\(\)/);
   assert.match(app, /new votes are recorded as post-reveal and excluded from blind-week scores/);
@@ -73,6 +102,11 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /quizSource === 'weekly' \? 'Ligand pLDDT'/);
   assert.match(app, /plddt_pick_sample: plddtPick\?\.af3_sample \?\? -1/);
   assert.match(app, /opponentChoiceCorrect = choice => quizSource === 'weekly'[\s\S]*choice\?\.correct === true/);
+});
+
+test('the classic leaderboard returns to the datasets route', async () => {
+  const html = await read('leaderboard.html');
+  assert.match(html, /href="\/datasets">play →<\/a>/);
 });
 
 test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid paths', async () => {

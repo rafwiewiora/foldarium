@@ -13,7 +13,7 @@ import { quizEntryMode } from '../quiz-entry-mode.js';
 const root = new URL('../', import.meta.url);
 const source = name => readFile(new URL(name, root), 'utf8');
 
-test('archive routes resolve list, detail, and all-time without changing weekly entry', async () => {
+test('archive routes resolve list, detail, and all-time beside canonical Weekly entry', async () => {
   assert.deepEqual(archiveRoute('/weekly/retrospectives'), {
     view: 'archive',
     roundId: null,
@@ -27,13 +27,15 @@ test('archive routes resolve list, detail, and all-time without changing weekly 
     roundId: 'weekly-2026-08-20',
   });
   assert.equal(archiveRoute('/weekly/retrospectives/%2e%2e').roundId, null);
+  assert.equal(quizEntryMode('/'), 'weekly');
   assert.equal(quizEntryMode('/weekly'), 'weekly');
   assert.equal(quizEntryMode('/weekly/retrospectives'), 'classic');
 
   const vercel = JSON.parse(await source('vercel.json'));
   assert.ok(vercel.rewrites.some(row => row.source === '/weekly/retrospectives'));
   assert.ok(vercel.rewrites.some(row => row.source === '/weekly/retrospectives/:roundId'));
-  assert.ok(vercel.rewrites.some(row => row.source === '/weekly'));
+  assert.ok(vercel.rewrites.some(row => row.source === '/datasets'));
+  assert.ok(vercel.redirects.some(row => row.source === '/weekly' && row.destination === '/'));
 });
 
 test('four outcome semantics classify pose and None questions by human solve state', () => {
@@ -74,6 +76,9 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.match(ui, /'Automated methods'/);
   assert.match(ui, /Human outcomes · share of questions/);
   assert.match(ui, /answer\.display_names\.join\(', '\)/);
+  assert.match(html, /id="archive-password"/);
+  assert.match(html, /class="weekly-link" href="\/">Current quiz/);
+  assert.match(ui, /const PASS = '[^']+'/);
   assert.match(css, /\.rail-fill\{display:block;/);
   assert.match(css, /@media\(max-width:620px\)/);
   assert.match(css, /min-width:320px/);
