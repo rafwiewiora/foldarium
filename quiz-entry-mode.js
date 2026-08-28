@@ -1,5 +1,7 @@
 export function quizEntryMode(pathname = '/') {
-  return /^\/weekly(?:\.html)?\/?$/.test(pathname) ? 'weekly' : 'classic';
+  return /^(?:\/|\/index\.html|\/weekly(?:\.html)?\/?)$/.test(pathname)
+    ? 'weekly'
+    : 'classic';
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {

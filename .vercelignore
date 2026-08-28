@@ -1,8 +1,13 @@
 data/
 data_rnp/
+.cursor/
+.github/
 docs/
+local/
+local-retrospective-proxy.mjs
 pipeline/
 prep/
 supabase/
+tests/
 tools/weekly-selector-wasm/target/
 tools/weekly-selector-wasm/pkg/
