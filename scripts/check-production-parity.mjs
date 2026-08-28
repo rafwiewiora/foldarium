@@ -3,12 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 export const STATIC_PARITY_TARGETS = Object.freeze([
-  ['index.html', '/weekly'],
   ['app.js', '/app.js'],
   ['leaderboard.html', '/leaderboard.html'],
-  ['weekly-retrospectives.html', '/weekly/retrospectives'],
-  ['weekly-retrospectives.js', '/weekly-retrospectives.js'],
-  ['weekly-retrospectives.css', '/weekly-retrospectives.css'],
+  ['quiz-entry-mode.js', '/quiz-entry-mode.js'],
+  ['structure-assets.js', '/structure-assets.js'],
+  ['weekly-private-review.js', '/weekly-private-review.js'],
+  ['weekly-session-resume.js', '/weekly-session-resume.js'],
 ]);
 
 function sha256(value) {
