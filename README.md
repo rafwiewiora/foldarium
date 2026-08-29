@@ -33,6 +33,9 @@ deployment protection enabled; it is not a substitute for that protection.
   [`prep/`](prep/README.md).
 - Potential product and research features are tracked in the durable
   [`feature backlog`](docs/feature-backlog.md).
+- The current production revision, shipped contracts, verification, and
+  remaining operational work are recorded in the
+  [`2026-08-28 production handoff`](docs/production-handoff-2026-08-28.md).
 
 ## Supabase quiz persistence
 
@@ -44,7 +47,9 @@ To enable remote quiz-result persistence:
 4. Apply `supabase/migrations/20260806040000_add_shared_leaderboard.sql`.
 5. Configure the browser-safe Vercel runtime variables described below; do not put credentials intended for privileged server-side access in browser configuration.
 6. Before production, run live RLS checks with two anonymous accounts: verify own writes succeed, cross-user session updates and answer inserts fail, and answer updates/deletes fail. This is a required pre-production check.
-7. Deploy through the existing Vercel Git integration.
+7. Deploy from the exact reviewed and committed Junction `main` revision using
+   the established protected Vercel process, and record both the commit and
+   deployment ID. Do not assume a push to `main` deployed automatically.
 
 If the runtime browser configuration is absent or invalid, the quiz stays local-only. The anonymous browser identity is lost when site data is cleared.
 

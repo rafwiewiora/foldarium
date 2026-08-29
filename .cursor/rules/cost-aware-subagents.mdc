@@ -1,0 +1,20 @@
+---
+description: Route bounded delegated work to cost-efficient Composer subagents
+alwaysApply: true
+---
+
+# Cost-aware subagent routing
+
+- Use `composer-2.5-fast` for bounded subagent work whenever it can reliably
+  inspect, test, verify, research, or summarize independently.
+- Keep the primary agent responsible for scope, scientific or architectural
+  decisions, destructive actions, commits, merges, deployments, and final
+  synthesis.
+- Do not delegate trivial one-step work or create redundant agents; delegation
+  should reduce expensive primary-model turns, not multiply calls.
+- Give each subagent a narrow prompt, exact repository/worktree, read/write
+  limits, expected evidence, and a concise return format.
+- Prefer one well-scoped Composer agent over repeated polling or open-ended
+  retry loops. Reuse or resume an agent only when its retained context helps.
+- Run independent checks in parallel when that lowers elapsed time without
+  duplicating work.
