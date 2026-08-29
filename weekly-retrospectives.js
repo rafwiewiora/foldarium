@@ -1,3 +1,9 @@
+import {
+  fetchWeeklyTrainingSimilarityReport,
+  sortWeeklySimilarityRows,
+  weeklySimilarityRecord,
+} from './weekly-training-similarity.js';
+
 export const OUTCOME_FILTERS = Object.freeze([
   ['pose-solved', 'Pose · human correct'],
   ['pose-unsolved', 'Pose · no human correct'],
@@ -121,6 +127,18 @@ async function api(parameters = {}) {
   return payload;
 }
 
+async function playForFunLeaderboard(roundId) {
+  const query = new URLSearchParams({ round_id: roundId });
+  const response = await fetch(`/api/weekly-play-for-fun-results?${query}`);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok
+      || payload?.format_version !== 'foldarium.weekly-play-for-fun-leaderboard/v1'
+      || payload.round_id !== roundId) {
+    throw new Error(payload?.error || 'Play-for-fun results are unavailable');
+  }
+  return payload;
+}
+
 const state = {
   route: typeof location === 'undefined'
     ? { view: 'archive', roundId: null }
@@ -129,7 +147,10 @@ const state = {
   nextCursor: null,
   detail: null,
   adminDetail: null,
+  playForFunLeaderboard: null,
   questionFilter: 'all',
+  questionSort: 'default',
+  similarityReport: null,
   ranking: 'total_correct',
   participantKind: '',
   adminAllTimeAvailable: false,
@@ -217,6 +238,7 @@ function detailQuestionRows(detail) {
   const retrospectiveQuestions = detail.retrospective?.questions || [];
   const revealById = new Map((detail.reveal_manifest?.items || []).map(item => [item.id, item]));
   const blindById = new Map((detail.blind_manifest?.items || []).map(item => [item.id, item]));
+  const blindWeek = detail.round?.blind_week;
   return retrospectiveQuestions.map((question, index) => {
     const revealItem = revealById.get(question.item_id);
     const blindItem = blindById.get(question.item_id);
@@ -226,6 +248,11 @@ function detailQuestionRows(detail) {
       blindItem,
       index,
       outcome: questionOutcome(question, revealItem),
+      similarity: weeklySimilarityRecord(
+        state.similarityReport,
+        blindWeek,
+        question.item_id,
+      ),
     };
   });
 }
@@ -251,6 +278,28 @@ function renderQuestionFilters(host, rows) {
   host.append(filters);
 }
 
+function renderQuestionSortControls(host, rows) {
+  if (!rows.some(row => row.similarity)) return;
+  const sort = element('div', 'segmented similarity-sort');
+  sort.setAttribute('aria-label', 'Sort questions by training similarity');
+  for (const [value, label] of [
+    ['default', 'Default'],
+    ['novel-first', 'Novel first'],
+    ['familiar-first', 'Familiar first'],
+  ]) {
+    const button = element('button', '', label);
+    button.type = 'button';
+    button.dataset.sort = value;
+    button.setAttribute('aria-pressed', String(state.questionSort === value));
+    button.addEventListener('click', () => {
+      state.questionSort = value;
+      renderDetail();
+    });
+    sort.append(button);
+  }
+  host.append(sort);
+}
+
 function ligandLabel(item, index) {
   const ligand = typeof item?.ligand === 'string'
     ? item.ligand : item?.ligand?.component_id || item?.ligand?.name;
@@ -263,6 +312,26 @@ function answerLine(label, value) {
   return line;
 }
 
+function buildSimilarityMeta(similarity) {
+  if (!similarity) return null;
+  const meta = element('div', 'similarity-meta');
+  meta.dataset.classification = similarity.classification;
+  const classification = similarity.classification[0].toUpperCase()
+    + similarity.classification.slice(1);
+  const score = Number.isFinite(similarity.train_shape_overlap)
+    ? similarity.train_shape_overlap.toFixed(4)
+    : similarity.classification === 'novel' ? 'No usable analog' : 'Unavailable';
+  const source = similarity.train_pdb && similarity.train_het
+    ? `${similarity.train_pdb.toUpperCase()} + ${similarity.train_het.toUpperCase()}`
+    : 'Unavailable';
+  meta.append(
+    answerLine('Classification', classification),
+    answerLine('Score', score),
+    answerLine('Source PDB + ligand', source),
+  );
+  return meta;
+}
+
 export function humanAnswerSummary(human) {
   const answered = Number(human?.answered_count) || 0;
   return answered ? `${Number(human?.correct_count) || 0}/${answered} correct` : 'No answers';
@@ -272,8 +341,19 @@ function renderQuestionRow(row) {
   const node = element('article', 'question-row');
   node.dataset.outcome = row.outcome;
   const title = element('div', 'question-title');
+  const identity = element('div', 'question-identity');
+  identity.append(element('strong', '', ligandLabel(row.blindItem, row.index)));
+  if (/^[0-9][A-Za-z0-9]{3}$/.test(row.question.item_id || '')) {
+    const pdbId = row.question.item_id.toUpperCase();
+    const link = element('a', 'question-pdb-link', `PDB ${pdbId} ↗`);
+    link.href = `https://www.rcsb.org/structure/${encodeURIComponent(pdbId)}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.setAttribute('aria-label', `Open PDB ${pdbId} in RCSB`);
+    identity.append(link);
+  }
   title.append(
-    element('strong', '', ligandLabel(row.blindItem, row.index)),
+    identity,
     element(
       'span',
       `outcome-tag${row.outcome === 'suppressed' ? ' suppressed' : ''}`,
@@ -302,7 +382,10 @@ function renderQuestionRow(row) {
       `${choiceLabel(automated.choice_id, automated.picked_none, row.blindItem)} · ${automated.correct ? 'correct' : 'wrong'}`,
     ));
   }
-  node.append(title, answers);
+  node.append(title);
+  const similarity = buildSimilarityMeta(row.similarity);
+  if (similarity) node.append(similarity);
+  node.append(answers);
   return node;
 }
 
@@ -337,7 +420,25 @@ function renderHumanLeaderboard(host, detail) {
       `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
     ));
   });
-  if (!rows.length) list.append(element('p', 'empty', 'No player results.'));
+  if (rows.length) {
+    list.prepend(element('div', 'answer-section-label', 'Blind-week players'));
+  } else {
+    list.append(element('p', 'empty', 'No blind-week player results.'));
+  }
+  const forFunRows = [
+    ...(state.playForFunLeaderboard?.complete_runs || []),
+    ...(state.playForFunLeaderboard?.partial_runs || []),
+  ];
+  list.append(element('div', 'answer-section-label', 'Play for fun'));
+  for (const row of forFunRows) {
+    list.append(answerLine(
+      `${row.display_name} · For fun`,
+      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+    ));
+  }
+  if (!forFunRows.length) {
+    list.append(element('p', 'empty compact', 'No play-for-fun results yet.'));
+  }
   section.append(list);
   host.append(section);
 }
@@ -391,11 +492,13 @@ function renderDetail() {
     })),
   );
   const actions = element('div', 'detail-actions');
-  const molecular = element('a', '', 'Open molecular review');
+  const playForFun = element('a', 'play-for-fun', 'Play for fun');
+  playForFun.href = `/weekly?retrospective_round=${encodeURIComponent(round.round_id)}&play_for_fun=1`;
+  const molecular = element('a', 'molecular-review', 'Open molecular review');
   molecular.href = `/weekly?retrospective_round=${encodeURIComponent(round.round_id)}`;
   const back = element('a', '', 'Back to archive');
   back.href = '/weekly/retrospectives';
-  actions.append(molecular, back);
+  actions.append(playForFun, molecular, back);
   head.append(actions);
 
   const overview = element('div', 'overview');
@@ -411,9 +514,15 @@ function renderDetail() {
   const questions = element('section', 'detail-section');
   questions.append(element('h3', '', 'Question outcomes'));
   const rows = detailQuestionRows(detail);
-  renderQuestionFilters(questions, rows);
+  const controls = element('div', 'question-controls');
+  renderQuestionFilters(controls, rows);
+  renderQuestionSortControls(controls, rows);
+  questions.append(controls);
   const list = element('div', 'question-list');
-  rows.filter(row => state.questionFilter === 'all' || row.outcome === state.questionFilter)
+  const visibleRows = rows.filter(
+    row => state.questionFilter === 'all' || row.outcome === state.questionFilter,
+  );
+  sortWeeklySimilarityRows(visibleRows, state.questionSort)
     .forEach(row => list.append(renderQuestionRow(row)));
   questions.append(list);
   host.append(questions);
@@ -425,16 +534,28 @@ async function loadArchive() {
   list.setAttribute('aria-busy', 'true');
   list.append(element('p', 'empty', 'Loading published weeks…'));
   try {
-    const requests = [api({ limit: 20 })];
+    const requests = [
+      api({ limit: 20 }),
+      fetchWeeklyTrainingSimilarityReport().catch(() => null),
+    ];
     if (state.route.roundId) {
       requests.push(api({ round_id: state.route.roundId }));
       requests.push(api({ admin: true, round_id: state.route.roundId }).catch(() => null));
+      requests.push(playForFunLeaderboard(state.route.roundId).catch(() => null));
     }
-    const [archive, detail = null, adminDetail = null] = await Promise.all(requests);
+    const [
+      archive,
+      similarityReport,
+      detail = null,
+      adminDetail = null,
+      forFunLeaderboard = null,
+    ] = await Promise.all(requests);
     state.publications = archive.publications || [];
     state.nextCursor = archive.next_cursor || null;
+    state.similarityReport = similarityReport;
     state.detail = detail;
     state.adminDetail = adminDetail;
+    state.playForFunLeaderboard = forFunLeaderboard;
     renderRoundLists();
     renderDetail();
   } catch (error) {

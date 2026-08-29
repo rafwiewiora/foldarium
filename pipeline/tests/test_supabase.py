@@ -815,8 +815,11 @@ class SupabasePublisherTests(unittest.TestCase):
         publisher = SupabaseCoordinator(
             "https://project.supabase.co", "service-role-key", "results", opener=opener
         )
-        with self.assertRaisesRegex(SupabasePublicationError, "failed with HTTP 400"):
+        with self.assertRaisesRegex(
+            SupabasePublicationError, "failed with HTTP 400"
+        ) as raised:
             publisher.store_bytes(content, "chemical/x-pdb")
+        self.assertEqual(raised.exception.http_status, 400)
         self.assertEqual(len(opener.calls), 1)
 
     def test_failed_result_finishes_without_artifact_io(self) -> None:
@@ -1010,6 +1013,83 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     [request.get_method() for request, _ in opener.calls],
                     ["GET", "PATCH", "GET"],
                 )
+
+    def test_authorizes_one_same_resource_retry_for_any_failed_method(self) -> None:
+        task = next(
+            task
+            for task in self.weekly_plan()["tasks"]
+            if task["method"] == "openfold3"
+        )
+        run_id = task["task_id"]
+        row = {
+            "run_id": run_id,
+            "target_id": task["target"]["target_id"],
+            "method": "openfold3",
+            "status": "failed",
+            "attempt_count": 1,
+            "max_attempts": 1,
+            "error_code": "output_validation_failed",
+            "task_payload": task,
+        }
+
+        class RetryOpener(RecordingOpener):
+            def __init__(self) -> None:
+                super().__init__()
+                self.authorized = False
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() == "GET":  # type: ignore[attr-defined]
+                    current = {
+                        **row,
+                        "max_attempts": 2 if self.authorized else 1,
+                    }
+                    return FakeResponse(json.dumps([current]).encode())
+                if request.get_method() == "PATCH":  # type: ignore[attr-defined]
+                    query = parse_qs(urlsplit(request.full_url).query)  # type: ignore[attr-defined]
+                    expected = {
+                        "run_id": [f"in.({run_id})"],
+                        "status": ["eq.failed"],
+                        "attempt_count": ["eq.1"],
+                        "max_attempts": ["eq.1"],
+                    }
+                    for key, value in expected.items():
+                        if query.get(key) != value:
+                            raise AssertionError(query)
+                    self.authorized = True
+                    return FakeResponse(
+                        json.dumps([{**row, "max_attempts": 2}]).encode()
+                    )
+                raise AssertionError(request.full_url)  # type: ignore[attr-defined]
+
+        opener = RetryOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=opener,
+        )
+        request = {
+            "run_id": run_id,
+            "target_id": task["target"]["target_id"],
+            "method": "openfold3",
+            "source_error_code": "output_validation_failed",
+            "retry_kind": "repeat_once",
+            "retry_gpu_class": "l4",
+            "retry_timeout_seconds": 1800,
+            "reviewed_legacy": False,
+        }
+        report = coordinator.authorize_prediction_retries([request])
+
+        self.assertEqual(report["status"], "authorized")
+        self.assertEqual(report["retry_requests"], [request])
+        self.assertEqual(report["authorized_run_ids"], [run_id])
+        self.assertEqual(report["approved_submission_run_ids"], [run_id])
+        self.assertEqual(report["task_payloads"], {run_id: task})
+        self.assertEqual(
+            [request.get_method() for request, _ in opener.calls],
+            ["GET", "PATCH", "GET"],
+        )
 
     def test_transient_boltz_msa_retry_authorization_is_idempotent(self) -> None:
         task = next(

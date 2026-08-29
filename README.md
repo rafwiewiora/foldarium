@@ -15,6 +15,10 @@ The repository contains:
 No hosted-service credentials, model weights, private artifacts, or
 provider-specific deployment configuration are included.
 
+Current feature status and mirror boundaries are recorded in the
+[`feature backlog`](docs/feature-backlog.md) and latest
+[`public sync handoff`](docs/public-sync-handoff-2026-08-29.md).
+
 ## Quick start: local-only viewer
 
 Requirements: Node.js 20 or newer and Python 3.11 or newer.
@@ -124,6 +128,8 @@ OpenFold3 or Boltz-2 execution requires those independent projects, their
 weights, and an execution environment supplied by the operator. The core task,
 worker, artifact, and provenance contracts do not depend on a cloud provider.
 See [pipeline/README.md](pipeline/README.md).
+The reproducible 100-target novelty comparison is documented in
+[`docs/weekly-training-similarity-audit.md`](docs/weekly-training-similarity-audit.md).
 
 ## Repository map
 
@@ -135,6 +141,7 @@ See [pipeline/README.md](pipeline/README.md).
 | `pipeline/` | Weekly orchestration and scientific evaluation |
 | `prep/` | CAMEO and Runs-n-Poses preparation tools |
 | `benchmark/` | Training-similarity viewer and preparation tools |
+| `docs/` | Scientific reports, feature backlog, and sync handoffs |
 | `scripts/fetch-legacy-data.mjs` | Verified optional legacy-data downloader |
 | `weekly-selector-offline/` | Offline Selector client |
 | `tests/` | Unit and browser-level tests |

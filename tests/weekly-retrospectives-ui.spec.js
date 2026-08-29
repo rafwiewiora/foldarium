@@ -242,6 +242,26 @@ async function mockApi(page) {
     }
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(listPayload) });
   });
+  await page.route('**/api/weekly-play-for-fun-results**', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      format_version: 'foldarium.weekly-play-for-fun-leaderboard/v1',
+      round_id: roundId,
+      item_count: 1,
+      participant_count: 1,
+      complete_runs: [{
+        display_name: 'Playful Player',
+        correct: 1,
+        answered: 1,
+        total: 1,
+        accuracy: 100,
+        coverage: 100,
+        participation_mode: 'for_fun',
+        rank: 1,
+      }],
+      partial_runs: [],
+    }),
+  }));
 }
 
 async function unlock(page, url) {
@@ -316,10 +336,17 @@ test('detail filters four outcomes, safely renders admin names, and fits mobile'
   await expect(page.locator('.admin-panel')).toContainText(maliciousName);
   await expect(page.locator('.admin-panel img')).toHaveCount(0);
   expect(await page.evaluate(() => window.pwned)).toBeUndefined();
-  await expect(page.locator('.detail-actions a').first()).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'Play for fun' })).toHaveAttribute(
+    'href',
+    `/weekly?retrospective_round=${roundId}&play_for_fun=1`,
+  );
+  await expect(page.getByRole('link', { name: 'Open molecular review' })).toHaveAttribute(
     'href',
     `/weekly?retrospective_round=${roundId}`,
   );
+  await expect(page.locator('.detail-section').filter({
+    has: page.getByRole('heading', { name: 'Weekly player leaderboard' }),
+  })).toContainText('Playful Player · For fun');
   await page.locator('#choose-round').click();
   await expect(page.locator('#round-chooser')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

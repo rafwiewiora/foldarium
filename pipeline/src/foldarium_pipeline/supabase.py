@@ -41,6 +41,15 @@ TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES = frozenset(
     {"msa_preprocessing_failed", "output_validation_failed"}
 )
 MAX_TRANSIENT_BOLTZ_MSA_RETRY_RUNS = 10
+MAX_PREDICTION_RETRY_RUNS = 80
+PREDICTION_RETRY_KINDS = frozenset(
+    {
+        "gpu_out_of_memory",
+        "msa_generation_timeout",
+        "msa_preprocessing_failed",
+        "repeat_once",
+    }
+)
 WEEKLY_QUIZ_ENVIRONMENTS = frozenset({"production", "preview", "development"})
 PRIVATE_WEEKLY_EVALUATION_FIELDS = (
     "evaluation_id",
@@ -106,6 +115,10 @@ class SupabaseConfigurationError(ValueError):
 
 class SupabasePublicationError(RuntimeError):
     """Raised when verification or a sanitized Supabase request fails."""
+
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
 
 
 def _safe_identifier(value: Any, field: str) -> str:
@@ -553,7 +566,10 @@ class SupabasePublisher:
                 exc.close()
                 return None
             exc.close()
-            raise SupabasePublicationError(f"{operation} failed with HTTP {status}") from None
+            raise SupabasePublicationError(
+                f"{operation} failed with HTTP {status}",
+                http_status=status,
+            ) from None
         except (URLError, TimeoutError, OSError):
             raise SupabasePublicationError(f"{operation} request failed") from None
 
@@ -1521,6 +1537,291 @@ class SupabaseCoordinator(SupabasePublisher):
             "allowed_error_codes": sorted(TRANSIENT_BOLTZ_MSA_RETRY_ERROR_CODES),
             "task_payloads": {
                 run_id: verified_tasks[run_id] for run_id in approved_submission_ids
+            },
+        }
+
+    def authorize_prediction_retries(
+        self,
+        retry_requests: list[dict[str, Any]],
+        *,
+        resubmit_already_authorized: bool = False,
+    ) -> dict[str, Any]:
+        """Authorize at most one exact, resource-bounded retry per failed run."""
+
+        from .contracts import validate_prediction_task
+
+        if not isinstance(resubmit_already_authorized, bool):
+            raise SupabasePublicationError(
+                "resubmit_already_authorized must be a boolean"
+            )
+        if not isinstance(retry_requests, list) or not retry_requests:
+            raise SupabasePublicationError(
+                "retry_requests must be a non-empty list"
+            )
+        if len(retry_requests) > MAX_PREDICTION_RETRY_RUNS:
+            raise SupabasePublicationError(
+                "retry_requests exceeds the one-campaign retry bound"
+            )
+
+        normalized_requests: list[dict[str, Any]] = []
+        for index, raw in enumerate(retry_requests):
+            if not isinstance(raw, Mapping):
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}] must be an object"
+                )
+            request = {
+                "run_id": _safe_identifier(
+                    raw.get("run_id"), f"retry_requests[{index}].run_id"
+                ),
+                "target_id": _safe_identifier(
+                    raw.get("target_id"), f"retry_requests[{index}].target_id"
+                ),
+                "method": _safe_identifier(
+                    raw.get("method"), f"retry_requests[{index}].method"
+                ),
+                "source_error_code": _safe_identifier(
+                    raw.get("source_error_code"),
+                    f"retry_requests[{index}].source_error_code",
+                ),
+                "retry_kind": _safe_identifier(
+                    raw.get("retry_kind"), f"retry_requests[{index}].retry_kind"
+                ),
+                "retry_gpu_class": _safe_identifier(
+                    raw.get("retry_gpu_class"),
+                    f"retry_requests[{index}].retry_gpu_class",
+                ),
+                "retry_timeout_seconds": raw.get("retry_timeout_seconds"),
+                "reviewed_legacy": raw.get("reviewed_legacy"),
+            }
+            if request["method"] not in {"boltz2", "openfold3"}:
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}].method is unsupported"
+                )
+            if request["retry_kind"] not in PREDICTION_RETRY_KINDS:
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}].retry_kind is unsupported"
+                )
+            if request["retry_gpu_class"] not in {"l4", "a100-40gb"}:
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}].retry_gpu_class is unsupported"
+                )
+            retry_timeout = request["retry_timeout_seconds"]
+            if (
+                isinstance(retry_timeout, bool)
+                or not isinstance(retry_timeout, int)
+                or not 1 <= retry_timeout <= 4_500
+            ):
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}].retry_timeout_seconds is invalid"
+                )
+            if not isinstance(request["reviewed_legacy"], bool):
+                raise SupabasePublicationError(
+                    f"retry_requests[{index}].reviewed_legacy must be a boolean"
+                )
+            normalized_requests.append(request)
+
+        request_by_id = {
+            request["run_id"]: request for request in normalized_requests
+        }
+        if len(request_by_id) != len(normalized_requests):
+            raise SupabasePublicationError("retry_requests run_ids must be unique")
+        normalized_ids = sorted(request_by_id)
+        fields = (
+            "run_id,target_id,method,status,attempt_count,max_attempts,"
+            "error_code,task_payload"
+        )
+
+        def fetch_rows(operation: str) -> list[dict[str, Any]]:
+            query = urlencode(
+                {
+                    "select": fields,
+                    "run_id": "in.(" + ",".join(normalized_ids) + ")",
+                    "order": "run_id.asc",
+                }
+            )
+            rows = self._get_json_rows(
+                f"/rest/v1/prediction_runs?{query}", operation
+            )
+            by_id = {
+                _safe_identifier(row.get("run_id"), "retry row run_id"): row
+                for row in rows
+            }
+            if len(by_id) != len(rows) or set(by_id) != set(normalized_ids):
+                raise SupabasePublicationError(
+                    "retry preflight did not return exactly the requested run_ids"
+                )
+            return [by_id[run_id] for run_id in normalized_ids]
+
+        def validate_rows(
+            rows: list[dict[str, Any]], *, allowed_max_attempts: set[int]
+        ) -> dict[str, dict[str, Any]]:
+            tasks: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                run_id = row["run_id"]
+                request = request_by_id[run_id]
+                if row.get("status") != "failed" or row.get("attempt_count") != 1:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} must be failed at attempt_count 1"
+                    )
+                if row.get("max_attempts") not in allowed_max_attempts:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} has an unauthorized max_attempts value"
+                    )
+                if (
+                    row.get("target_id") != request["target_id"]
+                    or row.get("method") != request["method"]
+                    or row.get("error_code") != request["source_error_code"]
+                ):
+                    raise SupabasePublicationError(
+                        f"retry request identity does not match stored run {run_id}"
+                    )
+                try:
+                    task = validate_prediction_task(row.get("task_payload"))
+                except (TypeError, ValueError) as exc:
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} has an invalid task payload"
+                    ) from exc
+                if (
+                    task.get("task_id") != run_id
+                    or task.get("method") != row.get("method")
+                    or task.get("target", {}).get("target_id")
+                    != row.get("target_id")
+                ):
+                    raise SupabasePublicationError(
+                        f"retry run {run_id} task payload does not match the stored run"
+                    )
+                resources = task.get("resources")
+                original_gpu = (
+                    resources.get("gpu_class")
+                    if isinstance(resources, Mapping)
+                    else None
+                )
+                original_timeout = (
+                    resources.get("timeout_seconds")
+                    if isinstance(resources, Mapping)
+                    else None
+                )
+                expected_resources = {
+                    "gpu_out_of_memory": ("a100-40gb", 1_800),
+                    "msa_generation_timeout": ("l4", 4_500),
+                    "msa_preprocessing_failed": ("l4", 1_800),
+                    "repeat_once": (original_gpu, original_timeout),
+                }[request["retry_kind"]]
+                if (
+                    original_gpu != "l4"
+                    or original_timeout != 1_800
+                    or request["retry_gpu_class"] != expected_resources[0]
+                    or request["retry_timeout_seconds"] != expected_resources[1]
+                ):
+                    raise SupabasePublicationError(
+                        f"retry request resources do not match policy for {run_id}"
+                    )
+                tasks[run_id] = task
+            return tasks
+
+        before = fetch_rows("prediction retry preflight")
+        tasks = validate_rows(before, allowed_max_attempts={1, 2})
+        newly_authorized = [
+            row["run_id"] for row in before if row["max_attempts"] == 1
+        ]
+        already_authorized = [
+            row["run_id"] for row in before if row["max_attempts"] == 2
+        ]
+        recovery_submissions = (
+            already_authorized if resubmit_already_authorized else []
+        )
+
+        if newly_authorized:
+            query = urlencode(
+                {
+                    "run_id": "in.(" + ",".join(newly_authorized) + ")",
+                    "status": "eq.failed",
+                    "attempt_count": "eq.1",
+                    "max_attempts": "eq.1",
+                }
+            )
+            body = self._request(
+                f"/rest/v1/prediction_runs?{query}",
+                self._encode_json({"max_attempts": 2}),
+                operation="prediction retry authorization",
+                method="PATCH",
+                content_type="application/json",
+                extra_headers={
+                    "Accept": "application/json",
+                    "Prefer": "return=representation",
+                },
+            )
+            try:
+                updated = json.loads((body or b"[]").decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise SupabasePublicationError(
+                    "prediction retry authorization returned invalid JSON"
+                ) from exc
+            if not isinstance(updated, list) or not all(
+                isinstance(row, Mapping) for row in updated
+            ):
+                raise SupabasePublicationError(
+                    "prediction retry authorization returned an invalid row set"
+                )
+            updated_ids = {
+                _safe_identifier(row.get("run_id"), "authorized retry run_id")
+                for row in updated
+            }
+            if updated_ids != set(newly_authorized) or len(updated) != len(
+                newly_authorized
+            ):
+                raise SupabasePublicationError(
+                    "conditional retry authorization did not update every requested run"
+                )
+
+        verified = fetch_rows("prediction retry verification")
+        verified_tasks = validate_rows(verified, allowed_max_attempts={2})
+        if verified_tasks != tasks:
+            raise SupabasePublicationError(
+                "retry task payload changed during authorization"
+            )
+        approved_submission_ids = newly_authorized + recovery_submissions
+        return {
+            "status": (
+                "authorized"
+                if newly_authorized
+                else (
+                    "resubmission-authorized"
+                    if recovery_submissions
+                    else "already-authorized"
+                )
+            ),
+            "retry_requests": normalized_requests,
+            "requested_run_ids": normalized_ids,
+            "authorized_run_ids": newly_authorized,
+            "already_authorized_run_ids": already_authorized,
+            "resubmission_authorized_run_ids": recovery_submissions,
+            "approved_submission_run_ids": approved_submission_ids,
+            "resubmit_already_authorized": resubmit_already_authorized,
+            "authorization_rows": [
+                {
+                    "run_id": row["run_id"],
+                    "target_id": row["target_id"],
+                    "method": row["method"],
+                    "error_code": row["error_code"],
+                    "attempt_count": row["attempt_count"],
+                    "previous_max_attempts": row["max_attempts"],
+                    "max_attempts": 2,
+                    "action": (
+                        "authorized"
+                        if row["run_id"] in newly_authorized
+                        else (
+                            "approved-for-resubmission"
+                            if resubmit_already_authorized
+                            else "already-authorized"
+                        )
+                    ),
+                }
+                for row in before
+            ],
+            "task_payloads": {
+                run_id: verified_tasks[run_id]
+                for run_id in approved_submission_ids
             },
         }
 

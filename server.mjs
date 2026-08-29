@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import configHandler from './api/config.js';
 import privateEvaluationHandler from './api/private-evaluation.js';
 import replayHandler from './api/replay.js';
+import weeklyPlayForFunResultsHandler from './api/weekly-play-for-fun-results.js';
 import weeklyResultsHandler from './api/weekly-results.js';
 import weeklyRetrospectivesHandler from './api/weekly-retrospectives.js';
 import weeklySelectorResultsHandler from './api/weekly-selector-results.js';
@@ -20,6 +21,7 @@ export const DEFAULT_API_HANDLERS = Object.freeze({
   config: configHandler,
   'private-evaluation': privateEvaluationHandler,
   replay: replayHandler,
+  'weekly-play-for-fun-results': weeklyPlayForFunResultsHandler,
   'weekly-results': weeklyResultsHandler,
   'weekly-retrospectives': weeklyRetrospectivesHandler,
   'weekly-selector-results': weeklySelectorResultsHandler,

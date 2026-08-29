@@ -78,7 +78,8 @@ a{color:inherit}
 .detail-actions{display:flex;flex-wrap:wrap;gap:8px}
 .detail-actions a{min-height:44px;display:inline-flex;align-items:center;padding:9px 13px;border:1px solid var(--line);
   border-radius:8px;color:var(--ink);font-size:12px;font-weight:700;text-decoration:none}
-.detail-actions a:first-child{border-color:var(--accent);color:var(--accent)}
+.detail-actions a.play-for-fun{border-color:var(--green);background:var(--green);color:#fff}
+.detail-actions a.molecular-review{border-color:var(--accent);background:var(--accent);color:#fff}
 .overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line)}
 .overview div{padding:16px 10px 16px 0}
 .overview div+div{padding-left:14px;border-left:1px solid var(--line)}
@@ -86,7 +87,10 @@ a{color:inherit}
 .overview strong{display:block;margin-top:6px;font-size:16px;font-variant-numeric:tabular-nums}
 .detail-section{padding-top:23px}
 .detail-section h3{margin:0 0 13px;font-size:12px;letter-spacing:.07em;text-transform:uppercase}
+.question-controls{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:8px;
+  margin-bottom:14px}
 .filter-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.question-controls .filter-row{margin-bottom:0}
 .filter-row button,.segmented button{min-height:44px;padding:8px 12px;border:1px solid var(--line);background:#fff;
   color:var(--muted);cursor:pointer;font-size:11px;font-weight:700}
 .filter-row button{border-radius:7px}
@@ -96,12 +100,23 @@ a{color:inherit}
 .question-row{padding:16px 0;border-bottom:1px solid var(--line)}
 .question-title{display:flex;align-items:baseline;justify-content:space-between;gap:14px}
 .question-title strong{font-size:14px}
+.question-identity{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 10px}
+.question-pdb-link{color:var(--accent);font:700 10px/1.2 var(--mono);text-decoration:none}
+.question-pdb-link:hover{text-decoration:underline}
 .outcome-tag{color:var(--outcome-color);font:700 10px/1.2 var(--mono);text-transform:uppercase}
 .question-row[data-outcome="pose-solved"]{--outcome-color:var(--green)}
 .question-row[data-outcome="pose-unsolved"]{--outcome-color:var(--red)}
 .question-row[data-outcome="none-solved"]{--outcome-color:var(--amber)}
 .question-row[data-outcome="none-unsolved"]{--outcome-color:#66717f}
 .question-row[data-outcome="suppressed"]{--outcome-color:var(--muted)}
+.similarity-meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 14px;margin-top:11px;
+  padding:9px 10px;border-left:3px solid var(--similarity-color);background:#edf1f4;
+  color:var(--muted);font:500 10px/1.4 var(--mono)}
+.similarity-meta[data-classification="novel"]{--similarity-color:var(--accent)}
+.similarity-meta[data-classification="familiar"]{--similarity-color:var(--amber)}
+.similarity-meta[data-classification="unknown"]{--similarity-color:var(--faint)}
+.similarity-meta .answer-line{display:grid;gap:2px}
+.similarity-meta .answer-line b{font-size:9px;text-transform:uppercase}
 .answer-block{display:grid;gap:5px;margin-top:11px;color:var(--muted);font:500 11px/1.45 var(--mono)}
 .answer-line{display:flex;justify-content:space-between;gap:14px}
 .answer-line b{color:var(--ink);font-weight:650}
@@ -128,6 +143,7 @@ a{color:inherit}
 .ranking-row .kind{color:var(--muted)}
 .provisional{display:inline-block;margin-left:7px;color:var(--amber);font:700 9px/1 var(--mono);text-transform:uppercase}
 .empty,.error{padding:28px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:13px}
+.empty.compact{padding:7px 0;border:0;font:500 11px/1.4 var(--mono)}
 .error{color:var(--red)}
 .round-chooser{width:min(620px,calc(100vw - 24px));max-height:min(720px,calc(100dvh - 24px));padding:0;
   border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--ink)}
@@ -165,6 +181,7 @@ a{color:inherit}
   .ranking-controls{display:grid}
   .segmented{width:100%}
   .segmented button{flex:1;padding-inline:7px}
+  .similarity-meta{grid-template-columns:1fr}
   .ranking-table{overflow-x:auto}
   .ranking-row{min-width:640px}
   .round-chooser{width:100%;max-width:none;max-height:82dvh;margin:auto 0 0;border-radius:14px 14px 0 0;

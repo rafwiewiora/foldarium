@@ -14,6 +14,7 @@ database, download model weights, or start a scheduler.
 - blind weekly quiz assembly and Selector-kit generation;
 - receptor-aligned, graph-symmetry-aware ligand RMSD evaluation;
 - Wednesday reference evaluation and retrospective publication;
+- fail-closed post-reveal and blind training-similarity audits;
 - optional Smina/ProLIF metrics and audited LLM scoring clients;
 - Supabase/Postgres control-plane migrations.
 
@@ -67,6 +68,75 @@ foldarium-pipeline weekly-plan \
 
 `weekly-plan` performs public downloads and writes a deterministic plan. It does
 not write to Supabase or launch predictions.
+
+## Audit published Weekly training similarity
+
+Install the evaluation extra, keep the resumable cache outside Git, and run the
+exact post-reveal label separately from the blind proxy:
+
+```bash
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-exact.json \
+  --mode exact
+
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir /tmp/foldarium-training-cache \
+  --output /tmp/foldarium-training-blind.json \
+  --mode blind
+```
+
+The command records search, download, parse, and incomplete-candidate failures
+as `unknown`. `--workers`, `--limit`, `--only`, and `--force` support bounded
+pilots and resumable reruns. The blind scorer's input type contains only the
+archived predicted receptor, predicted pocket, and candidate poses.
+
+Each exact target and blind pose also receives an additive RnP-style
+SuCOS-pocket score. It applies Crippen/shape ligand alignment, SuCOS, and
+Foldseek-aligned 6 Å pocket query coverage to the same retained top-25
+candidates. Its published 25/100 novelty threshold is independent of the
+canonical carried-ligand overlap cutoff. This is a controlled RnP-style
+approximation, not the published RnP metric: the paper uses PLINDER holo
+systems, up to 5,000 Foldseek candidates, MMseqs coverage, PLIP-augmented
+pockets, multi-chain matching, and its recorded RDKit 2024.9.6 environment.
+
+### Publish exact training-system overlays
+
+Rerun the exact audit once to materialize its content-addressed overlay cache,
+then keep that exact audit JSON immutable for publication and report generation:
+
+```bash
+PYTHONPATH=pipeline/src python pipeline/scripts/audit_weekly_training_similarity.py \
+  --cache-dir "$CACHE_DIR" \
+  --output "$EXACT_AUDIT" \
+  --mode exact
+
+SUPABASE_URL="$SUPABASE_URL" \
+SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+FOLDARIUM_STORAGE_BUCKET="$BROWSER_PUBLIC_BUCKET" \
+PYTHONPATH=pipeline/src python pipeline/scripts/publish_weekly_training_overlays.py \
+  --exact "$EXACT_AUDIT" \
+  --cache-dir "$CACHE_DIR" \
+  --manifest "$OVERLAY_MANIFEST"
+
+PYTHONPATH=pipeline/src python pipeline/scripts/report_weekly_training_similarity.py \
+  --exact "$EXACT_AUDIT" \
+  --blind "$BLIND_AUDIT" \
+  --overlay-manifest "$OVERLAY_MANIFEST" \
+  --json "$REPORT_JSON" \
+  --csv "$REPORT_CSV" \
+  --markdown "$REPORT_MARKDOWN"
+```
+
+The publisher verifies that `FOLDARIUM_STORAGE_BUCKET` is browser-public and
+writes the manifest after each upload, so publication resumes by rerunning the
+same command. A resumed publication must use the same immutable exact audit;
+the manifest and report reject a different audit digest.
+
+For a version-pinned local or batch Foldseek backend,
+`pipeline/scripts/weekly_foldseek_batch.py prepare` emits 100 first-chain query
+PDBs plus a digest manifest. Run Foldseek with the documented eight-column
+format, then use its `import` command to seed the same fail-closed hit cache.
 
 ## Run one task locally
 
