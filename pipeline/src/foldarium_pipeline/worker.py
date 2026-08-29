@@ -207,7 +207,13 @@ def execute_task_json(
         }
     try:
         samples = adapter.collect(task, plan.output_dir)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, FileNotFoundError):
+            validation_failure = "missing_model_files"
+        elif isinstance(exc, OSError):
+            validation_failure = "artifact_io_error"
+        else:
+            validation_failure = "invalid_model_output"
         return {
             **base_result,
             "status": "failed",
@@ -217,6 +223,9 @@ def execute_task_json(
                 completed.stderr,
             ),
             "error": "prediction outputs did not satisfy the method adapter contract",
+            "failure_stage": "output_collection",
+            "validation_failure": validation_failure,
+            "validation_exception_type": type(exc).__name__,
         }
     result: dict[str, Any] = {
         **base_result,
