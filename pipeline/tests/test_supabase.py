@@ -747,8 +747,11 @@ class SupabasePublisherTests(unittest.TestCase):
         publisher = SupabaseCoordinator(
             "https://project.supabase.co", "service-role-key", "results", opener=opener
         )
-        with self.assertRaisesRegex(SupabasePublicationError, "failed with HTTP 400"):
+        with self.assertRaisesRegex(
+            SupabasePublicationError, "failed with HTTP 400"
+        ) as raised:
             publisher.store_bytes(content, "chemical/x-pdb")
+        self.assertEqual(raised.exception.http_status, 400)
         self.assertEqual(len(opener.calls), 1)
 
     def test_failed_result_finishes_without_artifact_io(self) -> None:

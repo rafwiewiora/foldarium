@@ -107,6 +107,10 @@ class SupabaseConfigurationError(ValueError):
 class SupabasePublicationError(RuntimeError):
     """Raised when verification or a sanitized Supabase request fails."""
 
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
 
 def _safe_identifier(value: Any, field: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
@@ -553,7 +557,10 @@ class SupabasePublisher:
                 exc.close()
                 return None
             exc.close()
-            raise SupabasePublicationError(f"{operation} failed with HTTP {status}") from None
+            raise SupabasePublicationError(
+                f"{operation} failed with HTTP {status}",
+                http_status=status,
+            ) from None
         except (URLError, TimeoutError, OSError):
             raise SupabasePublicationError(f"{operation} request failed") from None
 

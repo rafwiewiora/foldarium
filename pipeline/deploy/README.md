@@ -313,6 +313,11 @@ The reviewed profile preserves the live 40-target Saturday intake cap and the
 production promotion remain separately scheduled and idempotent. Production
 opening and selector-kit registration are gated off by default
 (`FOLDARIUM_WEEKLY_PRODUCTION_OPEN=0`, `FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT=0`).
+If an early wwPDB snapshot conflicts with immutable stored intake content, the
+hook returns `waiting-for-registration` without exposing tasks or spawning GPU
+work, then rebuilds from public inputs on the next 15-minute tick. HTTP failures
+other than the fail-closed 409 conflict remain fatal. A conflict that persists
+across ticks requires operator review rather than automatic overwrite.
 
 Before enabling retrospective publication, review and apply
 `supabase/migrations/20260826190000_require_retrospective_vote_scope.sql`.
