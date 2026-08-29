@@ -194,7 +194,9 @@ NEXTWEEKLY_ENVIRONMENT = os.environ.get(
 NEXTWEEKLY_INCLUDE_POSE_METRICS = (
     os.environ.get("FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS") == "1"
 )
-NEXTWEEKLY_ROUND_VERSION = "v2"
+NEXTWEEKLY_ROUND_VERSION = os.environ.get(
+    "FOLDARIUM_NEXTWEEKLY_ROUND_VERSION", "v2"
+)
 NEXTWEEKLY_RETRY_BATCH_SIZE = 80
 NEXTWEEKLY_ORIGINAL_GPU_COMMAND_BUDGET_SECONDS = 40 * 60 * 60
 NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS = 30 * 60
@@ -304,6 +306,7 @@ WEEKLY_RUNTIME_ENV = {
         "FOLDARIUM_PREDICTION_MAX_CONTAINERS",
         "FOLDARIUM_ENABLE_NEXTWEEKLY_CRON",
         "FOLDARIUM_NEXTWEEKLY_CRON",
+        "FOLDARIUM_NEXTWEEKLY_ROUND_VERSION",
         "FOLDARIUM_NEXTWEEKLY_ENVIRONMENT",
         "FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS",
         "FOLDARIUM_ENABLE_WEDNESDAY_REVEAL",
@@ -698,6 +701,16 @@ def _nextweekly_window(
         raise TypeError("release_date must be an ISO date, date, or null")
     if selected.weekday() != 5:
         raise ValueError("nextweekly release_date must be a Saturday")
+    round_version = NEXTWEEKLY_ROUND_VERSION.strip()
+    if (
+        not round_version
+        or len(round_version) > 32
+        or any(
+            character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
+            for character in round_version
+        )
+    ):
+        raise ValueError("FOLDARIUM_NEXTWEEKLY_ROUND_VERSION is invalid")
     opens = datetime.combine(selected, time(hour=3), tzinfo=timezone.utc)
     closes = datetime.combine(
         selected + timedelta(days=4), time.min, tzinfo=timezone.utc
@@ -711,7 +724,7 @@ def _nextweekly_window(
         "campaign_id": f"wwpdb-{selected.isoformat()}",
         "round_id": (
             f"preview-weekly-{selected.isoformat()}-nextweekly-"
-            f"{NEXTWEEKLY_ROUND_VERSION}"
+            f"{round_version}"
         ),
         "opens_at": utc(opens),
         "closes_at": utc(closes),
@@ -2240,6 +2253,8 @@ if modal is not None:
     )
     def weekly_production_promotion_tick(
         release_date: str | None = None,
+        open_round_override: bool | None = None,
+        register_selector_kit_override: bool | None = None,
     ) -> dict[str, Any]:
         """Promote one immutable Preview round into production without fabricating votes.
 
@@ -2250,11 +2265,23 @@ if modal is not None:
 
         from foldarium_pipeline.supabase import SupabaseCoordinator
 
+        for field, value in (
+            ("open_round_override", open_round_override),
+            ("register_selector_kit_override", register_selector_kit_override),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{field} must be a boolean or null")
         window = _weekly_production_window(release_date)
         private, public = _weekly_quiz_public_private_coordinators()
-        open_round = os.environ.get(WEEKLY_PRODUCTION_OPEN_ENV) == "1"
+        open_round = (
+            os.environ.get(WEEKLY_PRODUCTION_OPEN_ENV) == "1"
+            if open_round_override is None
+            else open_round_override
+        )
         register_selector_kit = (
             os.environ.get(WEEKLY_REGISTER_SELECTOR_KIT_ENV) == "1"
+            if register_selector_kit_override is None
+            else register_selector_kit_override
         )
         production_exists = private.weekly_quiz_round_exists(window["round_id"])
         preview_exists = private.weekly_quiz_round_exists(window["preview_round_id"])
