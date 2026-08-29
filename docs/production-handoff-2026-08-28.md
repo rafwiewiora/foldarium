@@ -7,7 +7,8 @@ remaining research so a new session can resume without relying on chat history.
 ## Production state
 
 - Canonical repository: `JunctionBioscience/foldarium`.
-- Current Junction `main`: `f8a99e712ec1704a620348e9f17eddfdcca0c0ab`.
+- Deployment-state verification commit:
+  `f8a99e712ec1704a620348e9f17eddfdcca0c0ab`.
 - Public mirror: `rafwiewiora/foldarium`.
 - Current public `main`: `7e7b5beb11f38f4c7f3f5ebf8530ef86a8349adc`.
 - Sanitized public source sync:
