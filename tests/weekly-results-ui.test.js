@@ -558,6 +558,8 @@ test('weekly named sessions opt into leaderboard identity in initial app state',
   const app = await read('app.js');
   assert.match(app, /leaderboard_opt_in: true/);
   assert.match(app, /leaderboard_name_version: 1/);
+  assert.match(app, /play_mode: postReveal \? 'for_fun' : 'blind_competitive'/);
+  assert.match(app, /play_mode_version: 1/);
   assert.match(app, /initialAppState: quizSource === 'weekly'/);
 });
 
@@ -566,7 +568,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Player name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608286/);
+  assert.match(html, /app\.js\?v=202608287/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
@@ -608,6 +610,19 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
     WEEKLY_ONLY: true,
     WEEKLY_ROUND: { public_status: 'revealed' },
     WEEKLY_LEADERBOARD: sampleLeaderboard(),
+    WEEKLY_FOR_FUN_LEADERBOARD: {
+      complete_runs: [{
+        display_name: 'Grace',
+        correct: 2,
+        answered: 2,
+        total: 2,
+        accuracy: 100,
+        coverage: 100,
+        participation_mode: 'for_fun',
+        rank: 1,
+      }],
+      partial_runs: [],
+    },
     WEEKLY_LEADERBOARD_ERROR: '',
     ITEMS: [{}, {}],
     participantDisplayName: 'Reviewer',
@@ -626,6 +641,8 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
   assert.match(host.innerHTML, /Claude Opus/);
   assert.match(host.innerHTML, /Codex GPT-5\.6/);
   assert.match(host.innerHTML, /Reviewer/);
+  assert.match(host.innerHTML, /Grace · For fun/);
+  assert.match(host.innerHTML, /Separate from the blind-week ranking/);
   assert.doesNotMatch(host.innerHTML, /% cov|local, not ranked/);
   assert.doesNotMatch(host.innerHTML, /#1 · <b>Claude Opus<\/b>/);
 });
@@ -725,6 +742,7 @@ test('revealed Weekly login omits a zeroed local session and reports no human pl
       complete_runs: [],
       partial_runs: [],
     },
+    WEEKLY_FOR_FUN_LEADERBOARD: null,
     WEEKLY_LEADERBOARD_ERROR: '',
     ITEMS: Array(39).fill({}),
     participantDisplayName: '',
@@ -751,9 +769,15 @@ test('revealed Weekly records answer-informed votes before showing results', asy
   assert.match(revealSource, /if \(!saved \|\| !postRevealVote\) return/);
   assert.match(app, /voteComment: cur\.voteCommentText,\s*postReveal,/);
   assert.match(app, /postReveal: WEEKLY_ROUND\.public_status === 'revealed'/);
-  assert.match(app, /postReveal: quizSource === 'weekly' && WEEKLY_ROUND\?\.public_status === 'revealed'/);
-  assert.match(app, /Record post-reveal vote/);
+  assert.match(app, /const postReveal = quizSource === 'weekly'[\s\S]*WEEKLY_ROUND\?\.public_status === 'revealed'/);
+  assert.match(app, /postReveal,/);
+  assert.match(app, /Submit for-fun answer/);
   assert.match(app, /Post-reveal vote recorded separately from blind-week results/);
+  assert.match(app, /loadWeeklyPlayForFunLeaderboard\(\)\.then\(renderWeeklyLeaderboard\)/);
+  assert.match(
+    app,
+    /revisableForFunSession = quizSource === 'weekly'[\s\S]*public_status === 'revealed'[\s\S]*if \(!revisableForFunSession\) researchBackend\(\)\?\.completeSession/,
+  );
   assert.match(html, /\.post-reveal-vote-note\{/);
 });
 
