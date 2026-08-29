@@ -127,6 +127,18 @@ async function api(parameters = {}) {
   return payload;
 }
 
+async function playForFunLeaderboard(roundId) {
+  const query = new URLSearchParams({ round_id: roundId });
+  const response = await fetch(`/api/weekly-play-for-fun-results?${query}`);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok
+      || payload?.format_version !== 'foldarium.weekly-play-for-fun-leaderboard/v1'
+      || payload.round_id !== roundId) {
+    throw new Error(payload?.error || 'Play-for-fun results are unavailable');
+  }
+  return payload;
+}
+
 const state = {
   route: typeof location === 'undefined'
     ? { view: 'archive', roundId: null }
@@ -135,6 +147,7 @@ const state = {
   nextCursor: null,
   detail: null,
   adminDetail: null,
+  playForFunLeaderboard: null,
   questionFilter: 'all',
   questionSort: 'default',
   similarityReport: null,
@@ -407,7 +420,25 @@ function renderHumanLeaderboard(host, detail) {
       `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
     ));
   });
-  if (!rows.length) list.append(element('p', 'empty', 'No player results.'));
+  if (rows.length) {
+    list.prepend(element('div', 'answer-section-label', 'Blind-week players'));
+  } else {
+    list.append(element('p', 'empty', 'No blind-week player results.'));
+  }
+  const forFunRows = [
+    ...(state.playForFunLeaderboard?.complete_runs || []),
+    ...(state.playForFunLeaderboard?.partial_runs || []),
+  ];
+  list.append(element('div', 'answer-section-label', 'Play for fun'));
+  for (const row of forFunRows) {
+    list.append(answerLine(
+      `${row.display_name} · For fun`,
+      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+    ));
+  }
+  if (!forFunRows.length) {
+    list.append(element('p', 'empty compact', 'No play-for-fun results yet.'));
+  }
   section.append(list);
   host.append(section);
 }
@@ -461,11 +492,13 @@ function renderDetail() {
     })),
   );
   const actions = element('div', 'detail-actions');
-  const molecular = element('a', '', 'Open molecular review');
+  const playForFun = element('a', 'play-for-fun', 'Play for fun');
+  playForFun.href = `/weekly?retrospective_round=${encodeURIComponent(round.round_id)}&play_for_fun=1`;
+  const molecular = element('a', 'molecular-review', 'Open molecular review');
   molecular.href = `/weekly?retrospective_round=${encodeURIComponent(round.round_id)}`;
   const back = element('a', '', 'Back to archive');
   back.href = '/weekly/retrospectives';
-  actions.append(molecular, back);
+  actions.append(playForFun, molecular, back);
   head.append(actions);
 
   const overview = element('div', 'overview');
@@ -508,13 +541,21 @@ async function loadArchive() {
     if (state.route.roundId) {
       requests.push(api({ round_id: state.route.roundId }));
       requests.push(api({ admin: true, round_id: state.route.roundId }).catch(() => null));
+      requests.push(playForFunLeaderboard(state.route.roundId).catch(() => null));
     }
-    const [archive, similarityReport, detail = null, adminDetail = null] = await Promise.all(requests);
+    const [
+      archive,
+      similarityReport,
+      detail = null,
+      adminDetail = null,
+      forFunLeaderboard = null,
+    ] = await Promise.all(requests);
     state.publications = archive.publications || [];
     state.nextCursor = archive.next_cursor || null;
     state.similarityReport = similarityReport;
     state.detail = detail;
     state.adminDetail = adminDetail;
+    state.playForFunLeaderboard = forFunLeaderboard;
     renderRoundLists();
     renderDetail();
   } catch (error) {

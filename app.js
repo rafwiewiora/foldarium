@@ -89,6 +89,7 @@ const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
 const isPrivatePrecloseReview = () => window.FOLDARIUM_PRIVATE_REVIEW?.active === true;
 const isArchiveRetrospective = () => window.FOLDARIUM_ARCHIVE_REVIEW?.active === true;
+const isArchivePlayForFun = () => window.FOLDARIUM_ARCHIVE_PLAY?.active === true;
 const isRetrospectiveReview = () => isPrivatePrecloseReview() || isArchiveRetrospective();
 const itemHasReleasedCrystal = item => !!item?.released_crystal?.cif_url;
 const itemHasXtalOverlay = item => typeof item?.xtal_lig_file === 'string' && !!item.xtal_lig_file;
@@ -211,6 +212,7 @@ let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'h
 let WEEKLY_ROUND = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
+let WEEKLY_FOR_FUN_LEADERBOARD = null;
 let WEEKLY_QUESTION_RESULTS = null;
 let WEEKLY_ARCHIVE_DETAIL = null;
 let WEEKLY_RETROSPECTIVE_SUMMARY = null;
@@ -3384,16 +3386,22 @@ function showIntro() {
     }
     const nameHint = $('#participant-name-hint');
     if (nameHint) {
-      nameHint.textContent = showRevealedModes
-        ? 'Enter a player name to activate Play for fun. Your name labels only your separate post-reveal votes.'
-        : 'Shown on the results leaderboard after release.';
+      nameHint.textContent = isArchivePlayForFun()
+        ? 'Enter a player name to join this round’s separate Play for fun leaderboard.'
+        : (showRevealedModes
+          ? 'Enter a player name to activate Play for fun. Your name labels only your separate post-reveal votes.'
+          : 'Shown on the results leaderboard after release.');
       nameHint.classList.toggle('action-required', showRevealedModes);
     }
-    $('#ligand').innerHTML = `${pool.length} prospective weekly ensembles`;
+    $('#ligand').innerHTML = isArchivePlayForFun()
+      ? `${pool.length} historical weekly ensembles`
+      : `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = isRetrospectiveReview()
       ? `${pool.length} retrospective questions.`
       : (status === 'revealed'
-        ? `${pool.length} prospective weekly ensembles · results are available; new votes are recorded as post-reveal and excluded from blind-week scores.`
+        ? `${pool.length} ${
+          isArchivePlayForFun() ? 'published Weekly questions' : 'prospective weekly ensembles'
+        } · results are available; new votes are recorded as post-reveal and excluded from blind-week scores.`
         : (status === 'open'
           ? `${pool.length} prospective weekly ensembles · voting is open until ${closes}; results arrive Wednesday.`
           : `${pool.length} prospective weekly ensembles · voting is closed while Wednesday results are prepared.`));
@@ -4178,7 +4186,7 @@ function renderWeeklyLeaderboard() {
         accuracy: localAccuracy ?? 0,
         coverage: localCoverage ?? 0,
       })}</div>
-      <p class="weekly-scorecard-note">Play-for-fun score · not ranked.</p>
+      <p class="weekly-scorecard-note">For fun · recorded separately from blind-week rankings.</p>
     </div>`);
   }
   const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
@@ -4217,6 +4225,24 @@ function renderWeeklyLeaderboard() {
         })}</div>`).join('')}
       </div>`);
     }
+  }
+  const forFunComplete = WEEKLY_FOR_FUN_LEADERBOARD?.complete_runs || [];
+  const forFunPartial = WEEKLY_FOR_FUN_LEADERBOARD?.partial_runs || [];
+  if (forFunComplete.length || forFunPartial.length) {
+    const rows = [...forFunComplete, ...forFunPartial];
+    sections.push(`<div class="weekly-scorecard-section">
+      <div class="weekly-scorecard-heading">Play for fun</div>
+      ${rows.map(row => `<div class="weekly-scorecard-row for-fun">${formatWeeklyScoreLine({
+        displayName: `${row.display_name} · For fun`,
+        correct: row.correct,
+        answered: row.answered,
+        total: row.total,
+        accuracy: row.accuracy,
+        coverage: row.coverage,
+        rank: row.rank,
+      })}</div>`).join('')}
+      <p class="weekly-scorecard-note">Separate from the blind-week ranking.</p>
+    </div>`);
   }
   host.innerHTML = `<div class="weekly-scorecard">${sections.join('')}</div>`;
 }
@@ -4258,10 +4284,35 @@ function weeklyLeaderboardFromRetrospectiveSummary(publication) {
   };
 }
 
+async function loadWeeklyPlayForFunLeaderboard() {
+  WEEKLY_FOR_FUN_LEADERBOARD = null;
+  if (!WEEKLY_ROUND?.round_id || WEEKLY_ROUND.public_status !== 'revealed') return;
+  try {
+    const query = new URLSearchParams({ round_id: WEEKLY_ROUND.round_id });
+    const response = await fetch(`/api/weekly-play-for-fun-results?${query}`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok
+        || payload?.format_version !== 'foldarium.weekly-play-for-fun-leaderboard/v1'
+        || payload.round_id !== WEEKLY_ROUND.round_id
+        || payload.item_count !== WEEKLY_ROUND.item_count
+        || !Array.isArray(payload.complete_runs)
+        || !Array.isArray(payload.partial_runs)
+        || [...payload.complete_runs, ...payload.partial_runs].some(
+          row => row?.participation_mode !== 'for_fun',
+        )) {
+      throw new Error('Play-for-fun leaderboard is invalid.');
+    }
+    WEEKLY_FOR_FUN_LEADERBOARD = payload;
+  } catch (error) {
+    console.warn('Play-for-fun leaderboard unavailable:', error.message);
+  }
+}
+
 async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
   WEEKLY_LEADERBOARD_ERROR = '';
   if (bundleLeaderboard != null) {
     WEEKLY_RETROSPECTIVE_SUMMARY = null;
+    WEEKLY_FOR_FUN_LEADERBOARD = null;
     try {
       window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
         bundleLeaderboard,
@@ -4277,6 +4328,7 @@ async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
   }
   if (!WEEKLY_ROUND?.round_id || WEEKLY_ROUND.public_status !== 'revealed') {
     WEEKLY_LEADERBOARD = null;
+    WEEKLY_FOR_FUN_LEADERBOARD = null;
     WEEKLY_RETROSPECTIVE_SUMMARY = null;
     renderWeeklyResultsStatus();
     return;
@@ -4305,6 +4357,7 @@ async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
     WEEKLY_LEADERBOARD_ERROR = 'Published results are temporarily unavailable.';
     console.warn('Weekly leaderboard unavailable:', error.message);
   }
+  await loadWeeklyPlayForFunLeaderboard();
   renderWeeklyResultsStatus();
 }
 
@@ -4377,7 +4430,7 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#lock').textContent = quizSource === 'weekly'
     ? (isRetrospectiveReview() ? 'Show result'
       : (WEEKLY_ROUND?.public_status === 'revealed'
-        ? 'Record post-reveal vote'
+        ? 'Submit for-fun answer'
         : 'Record vote'))
     : 'Lock in answer';
   // Read-only Previews should still expose the dialog for visual/interaction
@@ -4475,6 +4528,8 @@ async function startQuiz() {
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Quiz persistence is unavailable.');
+    const postReveal = quizSource === 'weekly'
+      && WEEKLY_ROUND?.public_status === 'revealed';
     remoteSessionId = await backend.startNamedSession({
       source: quizSource,
       difficulty,
@@ -4485,9 +4540,11 @@ async function startQuiz() {
           ...currentReplayableAppState(),
           leaderboard_opt_in: true,
           leaderboard_name_version: 1,
+          play_mode: postReveal ? 'for_fun' : 'blind_competitive',
+          play_mode_version: 1,
         }
         : currentReplayableAppState(),
-      postReveal: quizSource === 'weekly' && WEEKLY_ROUND?.public_status === 'revealed',
+      postReveal,
     });
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
@@ -4772,7 +4829,10 @@ async function finalizeReveal() {
   renderRevealedQuestionUi();
   updateScore();
   if (!isRetrospectiveReview() && !postRevealVote) logAnswer(picked, af3, viewerTrace);
-  if (postRevealVote) rememberWeeklyItemState();
+  if (postRevealVote) {
+    rememberWeeklyItemState();
+    void loadWeeklyPlayForFunLeaderboard().then(renderWeeklyLeaderboard);
+  }
 }
 
 function renderRevealedQuestionUi() {
@@ -5233,7 +5293,9 @@ function next() {
 }
 function finish() {
   hideGrid();
-  researchBackend()?.completeSession(remoteSessionId);
+  const revisableForFunSession = quizSource === 'weekly'
+    && WEEKLY_ROUND?.public_status === 'revealed';
+  if (!revisableForFunSession) researchBackend()?.completeSession(remoteSessionId);
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
   $('#ligand').textContent = 'Quiz complete';
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
@@ -5533,6 +5595,78 @@ async function init() {
     const back = $('#archive-review-back');
     if (back) back.href = `/weekly/retrospectives/${encodeURIComponent(expectedRoundId)}`;
   };
+  const activateArchivePlayForFun = detail => {
+    const expectedRoundId = window.FOLDARIUM_ARCHIVE_PLAY?.round_id;
+    if (!detail || detail.format_version !== 'foldarium.weekly-retrospective-detail/v1'
+      || detail.round?.round_id !== expectedRoundId
+      || detail.blind_manifest?.round_id !== expectedRoundId
+      || detail.reveal_manifest?.round_id !== expectedRoundId
+      || !Array.isArray(detail.retrospective?.questions)) {
+      throw new Error('Archive play-for-fun detail is invalid.');
+    }
+    const synthetic = {
+      round_id: detail.round.round_id,
+      campaign_id: detail.round.campaign_id,
+      environment: 'production',
+      public_status: 'revealed',
+      opens_at: detail.round.opens_at,
+      closes_at: detail.round.closes_at,
+      revealed_at: detail.round.revealed_at,
+      blind_manifest: detail.blind_manifest,
+      reveal_manifest: detail.reveal_manifest,
+      item_count: detail.round.item_count,
+    };
+    const totals = new Map();
+    for (const question of detail.retrospective.questions) {
+      for (const answer of question.human_aggregate?.answers || []) {
+        totals.set(
+          `${question.item_id}|${answer.picked_none ? 'none' : answer.choice_id}`,
+          Number(answer.vote_count || 0),
+        );
+      }
+    }
+    WEEKLY_ROUND = synthetic;
+    WEEKLY_ARCHIVE_DETAIL = null;
+    WEEKLY_RETROSPECTIVE_SUMMARY = detail.retrospective;
+    WEEKLY_TOTALS = totals;
+    WEEKLY_VOTES = new Map();
+    WEEKLY_ITEM_STATES = new Map();
+    WEEKLY_QUESTION_RESULTS = null;
+    WEEKLY_LEADERBOARD = weeklyLeaderboardFromRetrospectiveSummary({
+      round_id: detail.round.round_id,
+      item_count: detail.round.item_count,
+      summary: detail.retrospective,
+    });
+    WEEKLY_FOR_FUN_LEADERBOARD = null;
+    WEEKLY_LEADERBOARD_ERROR = '';
+    remoteSessionId = null;
+    weeklyTraceSessionSeed = null;
+    localWeeklyScore = { correct: 0, answered: 0 };
+    localWeeklyScoredItems = new Set();
+    displayMode = 'grid';
+    clustered = true;
+    gridMethodIndex = 0;
+    cur = null;
+    POOLS.weekly = normalizeWeekly(synthetic, totals).map((item, publicationIndex) => ({
+      ...item,
+      publicationIndex,
+    }));
+    const banner = $('#archive-review-banner');
+    const back = $('#archive-review-back');
+    if (banner && back) {
+      banner.hidden = false;
+      banner.dataset.active = 'true';
+      back.href = `/weekly/retrospectives/${encodeURIComponent(expectedRoundId)}`;
+      back.textContent = 'Play for fun · back to results';
+    }
+    $('#revealed-weekly-title').textContent = 'Past Weekly is revealed';
+    $('#revealed-weekly-subtitle').textContent =
+      `Blind week ${detail.round.blind_week} · for-fun scores are kept separate.`;
+    $('#participant-name-hint').textContent =
+      'Shown on this round’s Play for fun leaderboard.';
+    $('#current-retrospective-link').href =
+      `/weekly?retrospective_round=${encodeURIComponent(expectedRoundId)}`;
+  };
   // CAMEO: game-able + all-wrong + all-correct(positive control).  RnP: single file already carries all three buckets.
   const [cg, ca, cx, rn] = await Promise.all([fetchItems('quiz_items.json'), fetchItems('quiz_items_allwrong.json'),
     fetchItems('quiz_items_allcorrect.json'), fetchItems('quiz_items_rnp.json')]);
@@ -5546,7 +5680,20 @@ async function init() {
   POOLS.cameo = capAllCorrect([...cg, ...ca, ...cx].map(it => norm(it, 'cameo')).filter(keep));
   POOLS.rnp = capAllCorrect(rn.map(it => norm(it, 'rnp')).filter(keep));
   try {
-    if (isArchiveRetrospective()) {
+    if (isArchivePlayForFun()) {
+      activateArchivePlayForFun(await window.FOLDARIUM_ARCHIVE_DETAIL_READY);
+      const backend = researchBackend();
+      if (backend) {
+        const votes = await backend.getWeeklyVotes(WEEKLY_ROUND.round_id, {
+          postReveal: true,
+        }).catch(error => {
+          console.warn('Play-for-fun vote restoration unavailable:', error.message);
+          return [];
+        });
+        WEEKLY_VOTES = new Map(votes.map(vote => [vote.item_id, vote]));
+      }
+      void loadWeeklyPlayForFunLeaderboard().then(renderWeeklyResultsStatus);
+    } else if (isArchiveRetrospective()) {
       activateArchiveDetail(
         await window.FOLDARIUM_ARCHIVE_DETAIL_READY,
         await window.FOLDARIUM_WEEKLY_TRAINING_SIMILARITY_READY,
@@ -5597,7 +5744,9 @@ async function init() {
       ? 'Foldarium · Private pre-close review'
       : (isArchiveRetrospective()
         ? 'Foldarium · Archive molecular review'
-        : 'Foldarium · Weekly blind');
+        : (isArchivePlayForFun()
+          ? 'Foldarium · Play for fun'
+          : 'Foldarium · Weekly blind'));
     document.querySelectorAll('#quizsrc button').forEach(button => {
       const on = button.dataset.q === 'weekly';
       button.classList.toggle('on', on); button.setAttribute('aria-pressed', String(on));

@@ -40,7 +40,10 @@ test('molecular navigation composes outcome filtering with stable similarity sor
 test('archive bootstrap fetches similarity fail-open and joins only exact week/item records', async () => {
   const [index, app] = await Promise.all([source('index.html'), source('app.js')]);
 
-  assert.match(index, /archiveRoundId\s*\?\s*fetchWeeklyTrainingSimilarityReport\(\)\.catch/);
+  assert.match(
+    index,
+    /archiveRoundId && !archivePlayForFun\s*\?\s*fetchWeeklyTrainingSimilarityReport\(\)\.catch/,
+  );
   assert.match(index, /return null;/);
   assert.match(index, /window\.foldariumWeeklyTrainingSimilarity = Object\.freeze/);
   assert.match(app, /similarityFor\(similarityReport, detail\.round\.blind_week, item\.id\)/);

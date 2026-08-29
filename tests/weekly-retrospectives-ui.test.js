@@ -83,6 +83,10 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.match(ui, /https:\/\/www\.rcsb\.org\/structure\/\$\{encodeURIComponent\(pdbId\)\}/);
   assert.match(ui, /rel = 'noopener noreferrer'/);
   assert.match(ui, /fetchWeeklyTrainingSimilarityReport\(\)\.catch\(\(\) => null\)/);
+  assert.match(ui, /weekly-play-for-fun-results/);
+  assert.match(ui, /Blind-week players/);
+  assert.match(ui, /Play for fun/);
+  assert.match(ui, /`\/weekly\?retrospective_round=\$\{encodeURIComponent\(round\.round_id\)\}&play_for_fun=1`/);
   assert.match(similarity, /\/docs\/weekly-training-similarity-results\.json/);
   assert.match(similarity, /sortWeeklySimilarityRows/);
 });
@@ -92,9 +96,10 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   assert.match(index, /weekly-retrospectives\?round_id=/);
   assert.match(index, /FOLDARIUM_ARCHIVE_DETAIL_READY/);
   assert.match(index, /id="archive-review-loading" hidden/);
-  assert.match(index, /wrap\.hidden = Boolean\(archiveRoundId\)/);
+  assert.match(index, /wrap\.hidden = Boolean\(archiveRoundId && !archivePlayForFun\)/);
+  assert.match(index, /window\.FOLDARIUM_ARCHIVE_PLAY = Object\.freeze/);
   assert.match(index, /window\.foldariumRevealArchiveReview =/);
-  assert.match(app, /if \(isArchiveRetrospective\(\)\) \{\s*activateArchiveDetail/);
+  assert.match(app, /else if \(isArchiveRetrospective\(\)\) \{\s*activateArchiveDetail/);
   assert.match(
     app,
     /loadQuestion\(questionIndex\);\s*if \(isArchiveRetrospective\(\)\) window\.foldariumRevealArchiveReview\?\.\(\)/,
@@ -108,7 +113,7 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   assert.doesNotMatch(app, /scope unknown|Aggregate answers are hidden/);
   assert.match(app, /Player answers/);
   const archiveStart = app.indexOf(
-    'if (isArchiveRetrospective()) {\n      activateArchiveDetail',
+    'else if (isArchiveRetrospective()) {\n      activateArchiveDetail',
   );
   assert.ok(archiveStart >= 0);
   const archiveBranch = app.slice(
@@ -117,6 +122,34 @@ test('archive molecular review uses exact detail and bypasses weekly session and
   );
   assert.doesNotMatch(archiveBranch, /getWeeklyRound|getWeeklyVotes|submitWeeklyVote|startNamedSession/);
   assert.match(index, /Past results/);
+});
+
+test('archive Play for fun launches a named post-reveal session without molecular overlays', async () => {
+  const [index, app, archive] = await Promise.all([
+    source('index.html'),
+    source('app.js'),
+    source('weekly-retrospectives.js'),
+  ]);
+  assert.match(archive, /Play for fun/);
+  assert.match(archive, /play_for_fun=1/);
+  assert.match(index, /archiveParams\.get\('play_for_fun'\) === '1'/);
+  assert.match(index, /active: archivePlayForFun/);
+  assert.match(app, /const isArchivePlayForFun =/);
+  assert.match(app, /if \(isArchivePlayForFun\(\)\) \{\s*activateArchivePlayForFun/);
+  assert.match(app, /Play for fun · back to results/);
+  assert.match(app, /Shown on this round’s Play for fun leaderboard/);
+  assert.match(app, /join this round’s separate Play for fun leaderboard/);
+  assert.match(
+    app,
+    /current-retrospective-link'\)\.href =\s*`\/weekly\?retrospective_round=/,
+  );
+  assert.match(app, /postReveal: true/);
+  const activation = app.slice(
+    app.indexOf('const activateArchivePlayForFun = detail => {'),
+    app.indexOf('// CAMEO:', app.indexOf('const activateArchivePlayForFun = detail => {')),
+  );
+  assert.match(activation, /POOLS\.weekly = normalizeWeekly/);
+  assert.doesNotMatch(activation, /enrichPrivateWeeklyPool|answer_overlays|released_crystal/);
 });
 
 test('archive documents the authenticated-proxy admin attestation', async () => {

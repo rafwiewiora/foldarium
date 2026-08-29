@@ -498,8 +498,8 @@
       <header class="weekly-release-status">
         <span>Revealed</span>
         <div>
-          <strong>This week’s Weekly is revealed</strong>
-          <small>Next blind Weekly opens Saturday.</small>
+          <strong id="revealed-weekly-title">This week’s Weekly is revealed</strong>
+          <small id="revealed-weekly-subtitle">Next blind Weekly opens Saturday.</small>
         </div>
       </header>
       <p class="weekly-answer-mix" id="weekly-answer-mix"></p>
@@ -698,10 +698,12 @@ import {
   const archiveLoading = document.getElementById('archive-review-loading');
   let loading = false;
   let persistenceStarted = false;
+  const archiveParams = new URLSearchParams(location.search);
   const archiveRoundId = (() => {
-    const value = new URLSearchParams(location.search).get('retrospective_round');
+    const value = archiveParams.get('retrospective_round');
     return value && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value) ? value : null;
   })();
+  const archivePlayForFun = Boolean(archiveRoundId && archiveParams.get('play_for_fun') === '1');
 
   window.foldariumBackend = createDeferredBackend();
   window.createWeeklyTraceStream = createWeeklyTraceStream;
@@ -709,21 +711,25 @@ import {
   window.foldariumPrivateReview = foldariumPrivateReview;
   window.FOLDARIUM_PRIVATE_REVIEW = Object.freeze({ active: false });
   window.FOLDARIUM_ARCHIVE_REVIEW = Object.freeze({
-    active: Boolean(archiveRoundId),
+    active: Boolean(archiveRoundId && !archivePlayForFun),
+    round_id: archiveRoundId,
+  });
+  window.FOLDARIUM_ARCHIVE_PLAY = Object.freeze({
+    active: archivePlayForFun,
     round_id: archiveRoundId,
   });
   window.foldariumWeeklyTrainingSimilarity = Object.freeze({
     sortWeeklySimilarityRows,
     weeklySimilarityRecord,
   });
-  window.FOLDARIUM_WEEKLY_TRAINING_SIMILARITY_READY = archiveRoundId
+  window.FOLDARIUM_WEEKLY_TRAINING_SIMILARITY_READY = archiveRoundId && !archivePlayForFun
     ? fetchWeeklyTrainingSimilarityReport().catch(error => {
         console.warn('Weekly training similarity unavailable:', error.message);
         return null;
       })
     : Promise.resolve(null);
   window.foldariumRevealArchiveReview = () => {
-    if (!archiveRoundId) return;
+    if (!archiveRoundId || archivePlayForFun) return;
     archiveLoading.hidden = true;
     wrap.hidden = false;
     document.getElementById('suggestion-open').hidden = false;
@@ -783,8 +789,8 @@ import {
   async function unlock() {
     if (loading) return;
     loading = true;
-    wrap.hidden = Boolean(archiveRoundId);
-    archiveLoading.hidden = !archiveRoundId;
+    wrap.hidden = Boolean(archiveRoundId && !archivePlayForFun);
+    archiveLoading.hidden = !archiveRoundId || archivePlayForFun;
     const start = document.getElementById('start');
     start.style.display = '';
     start.disabled = true;
@@ -825,7 +831,7 @@ import {
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608286');
+      await loadScript('app.js?v=202608287');
     } catch (e) {
       console.error('Failed to load quiz assets:', e);
       wrap.hidden = false;
