@@ -372,15 +372,19 @@ class NextweeklyAutomationTests(unittest.TestCase):
         self.assertEqual(budget["remaining_seconds"], 368000.0)
         self.assertEqual(budget["remaining_retry_slots"], 6)
 
-    def test_retry_budget_fails_closed_on_missing_duration(self) -> None:
+    def test_retry_budget_conservatively_uses_task_timeout_when_duration_is_missing(self) -> None:
         module = self.deployment_module()
         rows = self._terminal_rows()
         rows[17]["result"] = None
         budget = module._nextweekly_retry_budget(rows, self._retry_candidates(1))
-        self.assertEqual(budget["status"], "invalid-run-accounting")
-        self.assertFalse(budget["authorization_ready"])
-        self.assertEqual(budget["remaining_retry_slots"], 0)
-        self.assertEqual(budget["invalid_run_ids"], [rows[17]["run_id"]])
+        self.assertEqual(budget["status"], "available")
+        self.assertTrue(budget["authorization_ready"])
+        self.assertEqual(budget["remaining_retry_slots"], 1)
+        self.assertEqual(budget["invalid_run_ids"], [])
+        self.assertEqual(
+            budget["conservatively_accounted_run_ids"],
+            [rows[17]["run_id"]],
+        )
 
     def test_retry_budget_treats_authorized_rows_as_two_full_commands(self) -> None:
         module = self.deployment_module()
@@ -681,10 +685,11 @@ class NextweeklyAutomationTests(unittest.TestCase):
             result["retry_run_ids"],
         )
 
-    def test_tick_skips_retry_and_assembles_when_accounting_is_invalid(self) -> None:
+    def test_tick_does_not_assemble_while_retry_accounting_is_invalid(self) -> None:
         module = self.deployment_module()
         rows = self._terminal_rows(retryable_count=1)
         rows[-1]["result"] = None
+        rows[-1]["task_payload"]["resources"] = None
 
         class Coordinator:
             @staticmethod
@@ -704,10 +709,10 @@ class NextweeklyAutomationTests(unittest.TestCase):
             def remote(*args):
                 raise AssertionError("invalid accounting must not authorize a retry")
 
-        class AssemblyRemote:
+        class ForbiddenAssembly:
             @staticmethod
             def remote(*args):
-                return {"status": "opened", "round_id": args[1]}
+                raise AssertionError("invalid retry accounting must not assemble")
 
         raw_function = module.nextweekly_tick.get_raw_f()
         with patch(
@@ -716,11 +721,11 @@ class NextweeklyAutomationTests(unittest.TestCase):
         ), patch.object(
             module, "retry_prediction_runs", ForbiddenRetry
         ), patch.object(
-            module, "assemble_weekly_quiz_round", AssemblyRemote
+            module, "assemble_weekly_quiz_round", ForbiddenAssembly
         ), patch.object(module, "_weekly_public_bucket", return_value="public-weekly"):
             result = raw_function("2026-08-15")
-        self.assertEqual(result["status"], "preview-opened")
-        self.assertEqual(result["automatic_retry_status"], "skipped")
+        self.assertEqual(result["status"], "waiting-for-retry-authorization")
+        self.assertEqual(result["automatic_retry_status"], "blocked")
         self.assertEqual(
             result["automatic_retry_budget"]["status"],
             "invalid-run-accounting",
