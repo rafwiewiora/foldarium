@@ -2,7 +2,8 @@ data/
 data_rnp/
 .cursor/
 .github/
-docs/
+docs/*
+!docs/weekly-training-similarity-results.json
 local/
 local-retrospective-proxy.mjs
 pipeline/

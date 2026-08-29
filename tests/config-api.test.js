@@ -53,6 +53,20 @@ test('returns the production browser config and derives its public structure URL
   });
 });
 
+test('accepts an explicit commit attestation for manual deployments', () => {
+  const attested = resolveBrowserConfig(productionEnv({
+    VERCEL_GIT_COMMIT_SHA: '',
+    FOLDARIUM_COMMIT_SHA: 'aa1db77b91a8e2492f586096cffd5e4eca75958e',
+  }));
+  assert.equal(attested.commitSha, 'aa1db77b91a8e2492f586096cffd5e4eca75958e');
+
+  const invalid = resolveBrowserConfig(productionEnv({
+    VERCEL_GIT_COMMIT_SHA: 'not-a-commit',
+    FOLDARIUM_COMMIT_SHA: 'also-not-a-commit',
+  }));
+  assert.equal(invalid.commitSha, '');
+});
+
 test('Preview never falls back to production or server-side Supabase credentials', () => {
   const config = resolveBrowserConfig(previewEnv({
     ...productionEnv(),
