@@ -114,7 +114,6 @@ function invoke(handler, { method = 'GET', query = {}, env = productionEnv() } =
 
 function productionEnv(overrides = {}) {
   return {
-    VERCEL_ENV: 'production',
     FOLDARIUM_PRODUCTION_SUPABASE_URL: 'https://production.supabase.co',
     FOLDARIUM_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_production',
     ...overrides,

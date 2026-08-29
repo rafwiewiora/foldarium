@@ -34,7 +34,7 @@ from .intake import (
     build_weekly_plan,
     parse_wwpdb_snapshot,
 )
-from .supabase import SupabaseCoordinator
+from .supabase import SupabaseCoordinator, SupabasePublicationError
 
 USER_AGENT = "Foldarium weekly benchmark/0.2 (public scientific data intake)"
 DEFAULT_FETCH_WORKERS = 12
@@ -324,12 +324,38 @@ def deployment_weekly_hook() -> Mapping[str, Any]:
     registration: Any = {"status": "not-requested"}
     if register:
         assert coordinator is not None
-        registration = coordinator.register_weekly_plan(
-            plan,
-            inputs["source_files"],
-            adapter_version=ADAPTER_VERSION,
-            max_attempts=1,
-        )
+        try:
+            registration = coordinator.register_weekly_plan(
+                plan,
+                inputs["source_files"],
+                adapter_version=ADAPTER_VERSION,
+                max_attempts=1,
+            )
+        except SupabasePublicationError as exc:
+            if exc.http_status != 409:
+                raise
+            if coordinator.weekly_campaign_exists(campaign_id):
+                return {
+                    "tasks": [],
+                    "status": "already-registered",
+                    "release_date": release_date.isoformat(),
+                    "campaign_id": campaign_id,
+                    "registration": {"status": "already-registered"},
+                }
+            return {
+                "tasks": [],
+                "status": "waiting-for-registration",
+                "release_date": release_date.isoformat(),
+                "campaign_id": campaign_id,
+                "reason": (
+                    "the current public intake conflicts with immutable stored "
+                    "content; retrying on the next scheduled intake tick"
+                ),
+                "registration": {
+                    "status": "conflict-retry",
+                    "http_status": 409,
+                },
+            }
     target_summaries = []
     for target in plan["targets"]:
         ligand = target.get("metadata", {}).get("selected_ligand", {})

@@ -9,6 +9,7 @@ export const STATIC_PARITY_TARGETS = Object.freeze([
   ['structure-assets.js', '/structure-assets.js'],
   ['weekly-private-review.js', '/weekly-private-review.js'],
   ['weekly-session-resume.js', '/weekly-session-resume.js'],
+  ['weekly-training-similarity.js', '/weekly-training-similarity.js'],
 ]);
 
 function sha256(value) {

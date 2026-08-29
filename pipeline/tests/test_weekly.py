@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from datetime import date
+from unittest.mock import Mock, patch
 
 from foldarium_pipeline.cameo import CAMEO_SITEMAP_URL, target_url
 from foldarium_pipeline.intake import WWPDB_NONPOLYMER_URL, WWPDB_SEQUENCE_URL, WeeklyPolicy
+from foldarium_pipeline.supabase import SupabasePublicationError
 from foldarium_pipeline.weekly import (
     WeeklyNotReady,
     build_public_weekly_plan,
     collect_public_inputs,
     collect_wwpdb_inputs,
+    deployment_weekly_hook,
 )
 
 
@@ -121,6 +125,113 @@ class PublicPlanTests(unittest.TestCase):
         self.assertEqual(plan["budget"]["gpu_tasks"], 2)
         self.assertEqual(replay["availability"]["wwpdb_entry_count"], 1)
         self.assertNotIn("cameo_target_pages", replay["source_files"])
+
+
+class DeploymentWeeklyHookTests(unittest.TestCase):
+    @staticmethod
+    def _registration_conflict_coordinator(*, campaign_exists_after: bool) -> Mock:
+        coordinator = Mock()
+        coordinator.weekly_campaign_exists.side_effect = [
+            False,
+            campaign_exists_after,
+        ]
+        coordinator.register_weekly_plan.side_effect = SupabasePublicationError(
+            "register_weekly_prediction_plan failed with HTTP 409",
+            http_status=409,
+        )
+        return coordinator
+
+    def test_registration_conflict_waits_for_next_tick_without_tasks(self) -> None:
+        coordinator = self._registration_conflict_coordinator(
+            campaign_exists_after=False
+        )
+        plan = {"tasks": [{"task_id": "run_fixture"}]}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FOLDARIUM_RELEASE_DATE": RELEASE.isoformat(),
+                    "FOLDARIUM_WEEKLY_REGISTER": "1",
+                },
+            ),
+            patch(
+                "foldarium_pipeline.weekly.SupabaseCoordinator.from_env",
+                return_value=coordinator,
+            ),
+            patch(
+                "foldarium_pipeline.weekly.build_public_weekly_plan",
+                return_value=(plan, replay),
+            ),
+        ):
+            result = deployment_weekly_hook()
+
+        self.assertEqual(result["status"], "waiting-for-registration")
+        self.assertEqual(result["tasks"], [])
+        self.assertEqual(
+            result["registration"],
+            {"status": "conflict-retry", "http_status": 409},
+        )
+
+    def test_registration_race_resolves_as_already_registered(self) -> None:
+        coordinator = self._registration_conflict_coordinator(
+            campaign_exists_after=True
+        )
+        plan = {"tasks": [{"task_id": "run_fixture"}]}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FOLDARIUM_RELEASE_DATE": RELEASE.isoformat(),
+                    "FOLDARIUM_WEEKLY_REGISTER": "1",
+                },
+            ),
+            patch(
+                "foldarium_pipeline.weekly.SupabaseCoordinator.from_env",
+                return_value=coordinator,
+            ),
+            patch(
+                "foldarium_pipeline.weekly.build_public_weekly_plan",
+                return_value=(plan, replay),
+            ),
+        ):
+            result = deployment_weekly_hook()
+
+        self.assertEqual(result["status"], "already-registered")
+        self.assertEqual(result["tasks"], [])
+
+    def test_non_conflict_registration_error_remains_fatal(self) -> None:
+        coordinator = Mock()
+        coordinator.weekly_campaign_exists.return_value = False
+        coordinator.register_weekly_plan.side_effect = SupabasePublicationError(
+            "register_weekly_prediction_plan failed with HTTP 503",
+            http_status=503,
+        )
+        plan = {"tasks": [{"task_id": "run_fixture"}]}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "FOLDARIUM_RELEASE_DATE": RELEASE.isoformat(),
+                    "FOLDARIUM_WEEKLY_REGISTER": "1",
+                },
+            ),
+            patch(
+                "foldarium_pipeline.weekly.SupabaseCoordinator.from_env",
+                return_value=coordinator,
+            ),
+            patch(
+                "foldarium_pipeline.weekly.build_public_weekly_plan",
+                return_value=(plan, replay),
+            ),
+            self.assertRaisesRegex(SupabasePublicationError, "HTTP 503"),
+        ):
+            deployment_weekly_hook()
 
 
 if __name__ == "__main__":

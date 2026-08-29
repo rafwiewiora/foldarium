@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   createFoldariumServer,
+  DEFAULT_API_HANDLERS,
   resolveServerConfig,
 } from '../server.mjs';
 
@@ -38,6 +39,10 @@ async function fixtureRoot(t) {
   t.after(() => rm(parent, { recursive: true, force: true }));
   return root;
 }
+
+test('registers the Play-for-fun results endpoint in the local server', () => {
+  assert.equal(typeof DEFAULT_API_HANDLERS['weekly-play-for-fun-results'], 'function');
+});
 
 test('serves static files and maps weekly entry routes', async t => {
   const rootDirectory = await fixtureRoot(t);
