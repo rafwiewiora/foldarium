@@ -1,0 +1,15 @@
+---
+description: Resume Foldarium production work from the durable handoff
+alwaysApply: true
+---
+
+# Production handoff
+
+- Before changing or deploying Weekly, training-similarity, retrospective, or
+  lifecycle code, read `docs/production-handoff-2026-08-28.md`.
+- Treat its Production state and Shipped contract as the last verified
+  baseline; verify live state before assuming it is still current.
+- Treat every item under Remaining work as unshipped until Git and deployment
+  evidence proves otherwise.
+- Update or supersede the handoff after each production deployment or major
+  operational milestone. Never record credentials or private runtime values.
