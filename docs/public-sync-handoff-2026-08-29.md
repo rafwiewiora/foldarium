@@ -13,7 +13,8 @@
   leaderboard entries.
 - Provider-neutral intake-conflict handling, one-retry authorization, and
   actionable output-validation subtypes.
-- Local-server routing for the Play-for-fun results endpoint.
+- Local-server routing for the Play-for-fun results endpoint and the legacy
+  `/datasets` entry path.
 
 ## Intentional exclusions
 

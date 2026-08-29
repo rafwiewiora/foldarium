@@ -233,7 +233,14 @@ function addResponseCompatibility(response) {
 }
 
 function mappedStaticPath(pathname) {
-  if (pathname === '/weekly' || pathname === '/weekly/' || pathname === '/weekly.html') {
+  if (
+    pathname === '/weekly'
+    || pathname === '/weekly/'
+    || pathname === '/weekly.html'
+    || pathname === '/datasets'
+    || pathname === '/datasets/'
+    || pathname === '/datasets.html'
+  ) {
     return '/index.html';
   }
   if (/^\/weekly\/retrospectives(?:\/[^/]+)?\/?$/.test(pathname)) {
