@@ -10,9 +10,11 @@ remaining research so a new session can resume without relying on chat history.
 - Deployment-state verification commit:
   `f8a99e712ec1704a620348e9f17eddfdcca0c0ab`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `7e7b5beb11f38f4c7f3f5ebf8530ef86a8349adc`.
+- Current public `main`: `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
+- Local `/datasets` route parity:
+  [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
 - Browser deployment commit: `0e614ec`.
 - Modal deployment commit: `7af7b75`.
 - Reviewed feature:
@@ -128,6 +130,8 @@ Primary references:
 - Public PR #9 merged the final scientific audit, retrospective UI, Play for
   fun, and provider-neutral lifecycle fixes. The earlier partial audit PR #6
   was closed as superseded.
+- Public PR #10 added the production-equivalent `/datasets` mapping to the
+  provider-neutral local server and updated the public sync handoff.
 - Public verification passed: all six required GitHub checks, 552 JavaScript
   tests, 471 Python tests, the public-tree boundary audit, and shared-module
   production parity.
@@ -146,6 +150,6 @@ protein familiarity and ligand-bound-system familiarity.
 2. Confirm the current production round remains
    `weekly-2026-08-29-beta-v2` with 33 items.
 3. Treat all seven terminal failed runs as final at attempt 2/2.
-4. Confirm public `main` still contains public PR #9 at
-   `7e7b5beb11f38f4c7f3f5ebf8530ef86a8349adc`.
+4. Confirm public `main` still contains public PRs #9 and #10 at
+   `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
 5. Promote apo-pocket similarity to a plan only if it becomes a priority.
