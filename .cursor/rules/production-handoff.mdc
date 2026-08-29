@@ -11,5 +11,13 @@ alwaysApply: true
   baseline; verify live state before assuming it is still current.
 - Treat every item under Remaining work as unshipped until Git and deployment
   evidence proves otherwise.
+- Keep the active task list accurate while working. Before handoff, mark every
+  item completed, pending, blocked, or cancelled; never leave a stale
+  in-progress item.
+- Update `docs/feature-backlog.md` in the same change whenever a feature is
+  added, promoted, shipped, declined, or superseded.
 - Update or supersede the handoff after each production deployment or major
   operational milestone. Never record credentials or private runtime values.
+- After shared source changes, verify whether `rafwiewiora/foldarium` needs a
+  sanitized sync. Record the public PR and merged commit in the handoff, or
+  record why the change is intentionally private.
