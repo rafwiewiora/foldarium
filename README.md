@@ -31,6 +31,8 @@ deployment protection enabled; it is not a substitute for that protection.
   [`benchmark/`](benchmark/README.md); see its README for how to serve the demo.
 - Upstream CAMEO and Runs-n-Poses preparation scripts are in
   [`prep/`](prep/README.md).
+- Potential product and research features are tracked in the durable
+  [`feature backlog`](docs/feature-backlog.md).
 
 ## Supabase quiz persistence
 

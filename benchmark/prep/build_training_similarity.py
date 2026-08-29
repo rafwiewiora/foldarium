@@ -19,13 +19,18 @@ import numpy as np, gemmi
 
 HERE = Path(__file__).resolve().parent
 SYS = HERE / "systems"
-CUTOFF = "2021-09-30"
 
 # Portable public Foldseek client (submit/poll/fetch + batched authoritative
 # RCSB release-date lookup). This used to point at an uncommitted absolute path.
 REPOSITORY_ROOT = HERE.parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "pipeline" / "src"))
 from foldarium_pipeline import foldseek as fs
+from foldarium_pipeline.training_similarity import (
+    MAX_LOCAL_RMSD_ANGSTROM,
+    POCKET_RADIUS_ANGSTROM,
+    TRAINING_CUTOFF,
+)
+CUTOFF = TRAINING_CUTOFF
 UA = {"User-Agent": "cofold-trainsim/1.0"}
 VDW = {"C": 1.7, "N": 1.55, "O": 1.52, "S": 1.8, "P": 1.8, "F": 1.47, "CL": 1.75, "BR": 1.85, "I": 1.98, "B": 1.92}
 vdw = lambda e: VDW.get(e.upper(), 1.7)
@@ -45,10 +50,10 @@ EXC = set(("HOH DOD NA CL MG ZN CA K MN FE FE2 FE3 CU CU1 NI CO CD HG CS BA SR B
  "MSE SEP TPO PTR CSO CSD CME CSX KCX LLP MLY M3L CGU PCA SAC ALY DAL CAS OCS NEP HIC MHO").split())
 druglike = lambda h: h.upper() not in EXC and 3 <= len(h) <= 5
 MAX_ALIGN_RMSD = 4.0      # legacy whole-chain gate (kept as a loose ceiling)
-MAX_LOCAL_RMSD = 3.0      # pocket-local (active-site) gate on the Foldseek-aligned core -- the meaningful
+MAX_LOCAL_RMSD = MAX_LOCAL_RMSD_ANGSTROM  # pocket-local (active-site) gate on the Foldseek-aligned core -- the meaningful
                           # one for remote homologs, where whole-chain rigid RMSD is large but the
                           # conserved active site superposes tightly.
-POCKET_RADIUS = 8.0       # query residues within this of the crystal ligand define the "pocket-local" set
+POCKET_RADIUS = POCKET_RADIUS_ANGSTROM  # query residues within this of the crystal ligand define the "pocket-local" set
 
 
 REFCACHE = HERE / "_refcache"   # downloaded RCSB reference structures, reused across systems

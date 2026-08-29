@@ -375,7 +375,7 @@ test('retrospective Grid protein toggle rebuilds only its existing card viewer',
       retrospectiveChoiceKey: () => 'item|pose-a',
       retrospectiveAnswerActive: () => true,
       displayMode: 'grid',
-      isXtalReferenceChoice: () => false,
+      isFixedReferenceChoice: () => false,
       viewerControlBlocked: () => false,
       gridViewers: [cell],
       sameChoice: (left, right) => left.id === right.id,
@@ -416,7 +416,7 @@ test('retrospective One at a time protein toggle preserves camera and redraws im
     retrospectiveProteinFrame: 'xtal',
     viewerControlBlocked: () => false,
     oneReviewChoice: () => ({ id: 'pose-a' }),
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     plugin: {
       canvas3d: {
         camera: { getSnapshot: () => camera },
@@ -476,6 +476,7 @@ test('weeklyPoseLayers keeps cluster ghosts during retrospective answer view', a
     weeklyResultsRevealActive: () => true,
     retrospectiveAnswerActive: () => true,
     isPrivatePrecloseReview: () => true,
+    isFixedReferenceChoice: () => false,
   });
   const layers = weeklyPoseLayers([rep]);
   assert.equal(layers.length, 2);
@@ -500,7 +501,7 @@ test('weeklyPoseLayers keeps cluster ghosts during retrospective answer view', a
     sameChoice: (left, right) => left === right,
     choiceRejected: () => false,
     retrospectiveAnswerActive: () => true,
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
   })([rep]);
   assert.equal(focusedLayers.length, 1);
   assert.equal(focusedLayers[0].choice, rep);
@@ -565,7 +566,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Player name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608251/);
+  assert.match(html, /app\.js\?v=202608286/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
@@ -577,7 +578,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.doesNotMatch(html, /#answer-choices \.answer-choice-count\{[^}]*background:/);
   assert.match(html, /#wrap\.question-loading #choices,[\s\S]*#wrap\.question-loading #answer-details\{display:none!important\}/);
   assert.match(html, /id="stage-topbar"[\s\S]*id="viewer-question"[\s\S]*id="badge"/);
-  assert.match(html, /\.badge\{[^}]*max-width:min\(520px,45%\)[^}]*overflow:hidden[^}]*text-overflow:ellipsis[^}]*white-space:nowrap/);
+  assert.match(html, /\.badge\{[^}]*max-width:min\(680px,60%\)[^}]*overflow:visible[^}]*white-space:normal[^}]*overflow-wrap:anywhere/);
   assert.match(html, /\.grid-review-actions\[hidden\]\{display:none\}/);
   assert.match(html, /\.weekly-question-result-answer\{[^}]*grid-template-columns:20px minmax\(0,1fr\) 52px 72px[^}]*height:42px[^}]*box-sizing:border-box/);
   assert.match(html, /\.weekly-question-result-answer>span:last-child\{[^}]*white-space:nowrap[^}]*text-align:right/);
@@ -1046,6 +1047,7 @@ test('retrospective One-at-a-time badge omits the protein-frame label', async ()
     viewingReleasedCrystal: () => false,
     retrospectiveNavChoices: () => [choice],
     isXtalReferenceChoice: () => false,
+    isTrainingReferenceChoice: () => false,
     displayedPoseLabel: current => current.label,
     answerPoseStatus: () => 'Exact correct ✓',
     weeklyLigandPlddt: () => 'ligand pLDDT 72.0',
@@ -1136,10 +1138,10 @@ test('Xtal reference uses the closest pose-specific crystal pocket', async () =>
   assert.doesNotMatch(html, /grid-answer-status/);
   assert.doesNotMatch(app, /grid-answer-status|answerStatus/);
   assert.doesNotMatch(app, /magenta|C026D3/);
-  assert.match(app, /if \(xtalReference\) \{\s*nm = 'Xtal reference';\s*\} else if \(clustered\)/);
+  assert.match(app, /else if \(xtalReference\) \{\s*nm = 'Xtal reference';\s*\} else if \(clustered\)/);
   assert.match(
     app,
-    /gridEntries\(\)\s*\.map\(entry => entry\.choice\)\s*\.filter\(choice => !isXtalReferenceChoice\(choice\)\)/,
+    /gridEntries\(\)\s*\.map\(entry => entry\.choice\)\s*\.filter\(choice => !isFixedReferenceChoice\(choice\)\)/,
   );
 });
 
