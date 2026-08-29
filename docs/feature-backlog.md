@@ -6,12 +6,13 @@ here until they are promoted into an implementation plan or explicitly declined.
 Statuses: **idea**, **candidate**, **planned**, **in progress**, **shipped**, or
 **declined**.
 
-## In progress
+## Shipped
 
 ### Retrospective Play for fun
 
-- **Status:** in progress
+- **Status:** shipped
 - **Added:** 2026-08-28
+- **Shipped:** 2026-08-29
 - **Goal:** let a player launch any published Weekly from its retrospective
   detail page and replay the original blind choices without crystal overlays.
 - **Leaderboard contract:** post-reveal answers remain physically separate from
