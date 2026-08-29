@@ -7,11 +7,14 @@ unmerged follow-ups so a new session can resume without relying on chat history.
 ## Production state
 
 - Canonical repository: `JunctionBioscience/foldarium`.
-- Deployed commit: `aa1db77b91a8e2492f586096cffd5e4eca75958e`.
-- Reviewed change: [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
-- Vercel deployment: `dpl_DhWgEYQtGkzebMFNwu4PSRRrptMw`.
+- Deployed commit: `65c0a6290f1237e7d19b99c9d45a2d11c18c467b`.
+- Reviewed feature:
+  [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
+- Runtime packaging and commit-attestation fix:
+  [Junction PR #38](https://github.com/JunctionBioscience/foldarium/pull/38).
+- Vercel deployment: `dpl_GFLHVrxcG6E7RXsmRtD4z88CM8Eu`.
 - Immutable deployment URL:
-  <https://foldarium-7gxy7fqm9-junctionbioscience.vercel.app>.
+  <https://foldarium-oltxjqkaj-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
 - Deployment was made manually from a clean detached worktree at the merged
   Junction `main` commit. Do not assume that pushes to `main` deploy
@@ -61,6 +64,9 @@ Primary references:
 - The concise active/Grid label includes source PDB, ligand component, and
   overlap score and wraps instead of truncating.
 - A reference appears only where a validated, content-addressed overlay exists.
+- `.vercelignore` excludes other documentation while explicitly shipping
+  `docs/weekly-training-similarity-results.json`; removing that exception
+  silently disables production similarity hydration.
 
 Primary references:
 
@@ -72,13 +78,19 @@ Primary references:
 
 ## Verification
 
-- PR checks passed: `contracts-and-adapters` and `scientific-evaluation`.
-- Merged candidate JavaScript suite: 522 passed, 1 optional WASM test skipped.
+- Required `contracts-and-adapters` and `scientific-evaluation` checks passed
+  for both the feature and runtime hotfix PRs.
+- Final JavaScript suite: 523 passed, 1 optional WASM test skipped.
 - Targeted evaluation-dependent Python suite: 39 passed, 0 failed, 0 skipped.
 - All 52 overlay objects declared available in the report returned
   successfully from the public Storage bucket.
-- Local browser verification confirmed the training reference renders and the
-  active label wraps with no horizontal overflow.
+- Production serves the v2 similarity report with 100 records, while
+  non-runtime documentation remains excluded.
+- Production `/api/config` reports environment `production` and exact commit
+  `65c0a6290f1237e7d19b99c9d45a2d11c18c467b`.
+- A production browser smoke test confirmed Xtal then Training navigation,
+  successful report and overlay requests, no Training in Show all, no bottom
+  annotation, and a wrapping active label with no horizontal overflow.
 - `git diff --check junction/main...HEAD` passed before merge.
 
 ## Remaining work
@@ -115,7 +127,7 @@ protein familiarity and ligand-bound-system familiarity.
 
 ## Resume checklist
 
-1. Confirm production still resolves to commit `aa1db77`.
+1. Confirm production still resolves to commit `65c0a62`.
 2. Check the Aug 29 lifecycle and approval-preview status.
 3. Finish and ship the preview intake-cap warning.
 4. Reconcile the public mirror with Junction PR #36.
