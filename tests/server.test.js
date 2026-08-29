@@ -53,6 +53,10 @@ test('serves static files and maps weekly entry routes', async t => {
   assert.equal(await weekly.text(), '<h1>weekly</h1>');
   assert.match(weekly.headers.get('content-type'), /^text\/html/);
 
+  const datasets = await fetch(`${origin}/datasets`);
+  assert.equal(datasets.status, 200);
+  assert.equal(await datasets.text(), '<h1>weekly</h1>');
+
   const retrospective = await fetch(`${origin}/weekly/retrospectives/weekly-2026-08-20`);
   assert.equal(retrospective.status, 200);
   assert.equal(await retrospective.text(), '<h1>archive</h1>');

@@ -93,8 +93,8 @@ historical research/demo material; it is not the production weekly database.
 ## Local API server
 
 `server.mjs` is a dependency-free Node HTTP server. It serves the static app,
-maps `/weekly` and `/weekly/retrospectives`, and adapts the handlers in `api/`
-without assuming a hosting provider.
+maps `/weekly`, `/datasets`, and `/weekly/retrospectives`, and adapts the
+handlers in `api/` without assuming a hosting provider.
 The standalone classic-results view remains available at
 <http://127.0.0.1:4319/leaderboard.html>.
 
