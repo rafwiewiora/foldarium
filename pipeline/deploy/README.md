@@ -319,6 +319,14 @@ work, then rebuilds from public inputs on the next 15-minute tick. HTTP failures
 other than the fail-closed 409 conflict remain fatal. A conflict that persists
 across ticks requires operator review rather than automatic overwrite.
 
+Each failed prediction is eligible for exactly one retry. Known OOM and MSA
+timeouts retain their reviewed resource escalation; every other failure repeats
+once with the original L4/30-minute resources. Authorization changes
+`max_attempts` from 1 to 2 before spawning and is idempotent, so a run can never
+receive a third attempt. Failed output collection now records a bounded
+`validation_failure` subtype (`missing_model_files`, `artifact_io_error`, or
+`invalid_model_output`) in the private prediction result.
+
 Before enabling retrospective publication, review and apply
 `supabase/migrations/20260826190000_require_retrospective_vote_scope.sql`.
 The publication schedule defaults to six hourly Wednesday attempts

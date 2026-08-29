@@ -195,27 +195,41 @@ NEXTWEEKLY_INCLUDE_POSE_METRICS = (
     os.environ.get("FOLDARIUM_NEXTWEEKLY_INCLUDE_POSE_METRICS") == "1"
 )
 NEXTWEEKLY_ROUND_VERSION = "v2"
-NEXTWEEKLY_RETRY_BATCH_SIZE = 10
-NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS = 40 * 60 * 60
+NEXTWEEKLY_RETRY_BATCH_SIZE = 80
+NEXTWEEKLY_ORIGINAL_GPU_COMMAND_BUDGET_SECONDS = 40 * 60 * 60
 NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS = 30 * 60
 NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS = 75 * 60
 NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS = (
     NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
 )
 NEXTWEEKLY_RETRY_OUTER_GRACE_SECONDS = 5 * 60
-# Modal's published per-second accelerator + reviewed host allocations.  The
-# dollar ceiling is the original 40-hour L4 command ceiling expressed in USD;
-# larger-card retries must satisfy both this and the command-second ceiling.
+# Modal's published per-second accelerator + reviewed host allocations. The
+# campaign ceiling covers the original 40-hour L4 budget plus one conservatively
+# reserved retry for every possible run in a 40-target, two-method campaign.
 NEXTWEEKLY_L4_RATE_USD_PER_SECOND = 0.00030992
 NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND = 0.00075884
-NEXTWEEKLY_GPU_COST_BUDGET_USD = 44.62848
 NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS = {
     "l4": NEXTWEEKLY_L4_RATE_USD_PER_SECOND,
     "a100-40gb": NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND,
 }
-# These three legacy rows were reviewed against bounded Modal logs on
-# 2026-08-15.  They are deliberately code-pinned so a generic legacy
-# output_validation_failed or timeout can never become scheduler-retryable.
+NEXTWEEKLY_MAX_RETRY_RESERVATION_COST_USD = max(
+    NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+    * NEXTWEEKLY_A100_40GB_RATE_USD_PER_SECOND,
+    NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS
+    * NEXTWEEKLY_L4_RATE_USD_PER_SECOND,
+)
+NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS = (
+    NEXTWEEKLY_ORIGINAL_GPU_COMMAND_BUDGET_SECONDS
+    + NEXTWEEKLY_RETRY_BATCH_SIZE * NEXTWEEKLY_MAX_RETRY_RESERVATION_SECONDS
+)
+NEXTWEEKLY_GPU_COST_BUDGET_USD = (
+    40 * 60 * 60 * NEXTWEEKLY_L4_RATE_USD_PER_SECOND
+    + NEXTWEEKLY_RETRY_BATCH_SIZE
+    * NEXTWEEKLY_MAX_RETRY_RESERVATION_COST_USD
+)
+# These legacy rows were reviewed against bounded Modal logs on 2026-08-15.
+# Preserve their known upgraded retry tier; unclassified attempt-1 failures now
+# receive the same-resource `repeat_once` policy instead.
 NEXTWEEKLY_REVIEWED_LEGACY_RETRIES = {
     "run_fe3f5b2f13d64c508aa61f39": {
         "target_id": "31ZN",
@@ -383,9 +397,7 @@ def _execute(task_json: str | Mapping[str, Any]) -> dict[str, Any]:
     # The lease must outlive the container so a killed worker cannot be reclaimed
     # while it is still writing, but it must still expire so a crash is
     # recoverable without manual intervention.
-    lease_seconds = (
-        min(requested_timeout, GPU_FUNCTION_TIMEOUT_SECONDS) + LEASE_GRACE_SECONDS
-    )
+    lease_seconds = requested_timeout + LEASE_GRACE_SECONDS
     if not publisher.claim_run(task["task_id"], worker_id, lease_seconds):
         raise RuntimeError(
             f"prediction run {task['task_id']} is already claimed by another worker"
@@ -631,6 +643,10 @@ def _lifecycle_deployment_report() -> dict[str, Any]:
             "environment": NEXTWEEKLY_ENVIRONMENT,
             "include_pose_metrics": NEXTWEEKLY_INCLUDE_POSE_METRICS,
             "round_version": NEXTWEEKLY_ROUND_VERSION,
+            "retry_policy": "every-attempt-one-failure-once",
+            "retry_batch_size": NEXTWEEKLY_RETRY_BATCH_SIZE,
+            "gpu_command_budget_seconds": NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS,
+            "gpu_cost_budget_usd": NEXTWEEKLY_GPU_COST_BUDGET_USD,
         },
         "weekly_production": {
             "enabled": WEEKLY_PRODUCTION_ENABLED,
@@ -703,7 +719,7 @@ def _nextweekly_window(
 
 
 def _nextweekly_run_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
-    """Summarize exact run state and identify only safe automatic retries."""
+    """Summarize run state and identify each attempt-1 failure for one retry."""
 
     counts = {
         status: 0
@@ -787,8 +803,8 @@ def _nextweekly_run_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
             ):
                 retry_kind = str(reviewed["retry_kind"])
                 reviewed_legacy = True
-        if retry_kind is None:
-            continue
+            else:
+                retry_kind = "repeat_once"
         if retry_kind == "gpu_out_of_memory":
             retry_gpu_class = "a100-40gb"
             retry_timeout_seconds = NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
@@ -1041,6 +1057,10 @@ def _retry_execution_task(
             NEXTWEEKLY_MSA_RETRY_TIMEOUT_SECONDS,
         ),
         "msa_preprocessing_failed": (
+            "l4",
+            NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS,
+        ),
+        "repeat_once": (
             "l4",
             NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS,
         ),
@@ -1549,7 +1569,7 @@ if modal is not None:
                 ),
                 max_containers=1,
             )
-        if retry_kind == "msa_preprocessing_failed":
+        if retry_kind in {"msa_preprocessing_failed", "repeat_once"}:
             return function.with_options(
                 timeout=(
                     NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS

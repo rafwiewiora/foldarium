@@ -65,6 +65,9 @@ class WorkerTests(unittest.TestCase):
                 with patch("foldarium_pipeline.worker.subprocess.run", return_value=completed):
                     result = execute_task_json(task, temporary, dry_run=False)
         self.assertEqual(result["error_code"], "msa_preprocessing_failed")
+        self.assertEqual(result["failure_stage"], "output_collection")
+        self.assertEqual(result["validation_failure"], "missing_model_files")
+        self.assertEqual(result["validation_exception_type"], "FileNotFoundError")
 
 
 if __name__ == "__main__":

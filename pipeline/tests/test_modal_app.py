@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import unittest
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -147,7 +148,7 @@ class NextweeklyAutomationTests(unittest.TestCase):
         self.assertEqual(window["opens_at"], "2026-08-15T03:00:00Z")
         self.assertEqual(window["closes_at"], "2026-08-19T00:00:00Z")
 
-    def test_run_report_never_auto_retries_generic_legacy_failures(self) -> None:
+    def test_run_report_retries_every_attempt_one_failure_once(self) -> None:
         module = self.deployment_module()
         report = module._nextweekly_run_report(
             [
@@ -170,33 +171,55 @@ class NextweeklyAutomationTests(unittest.TestCase):
                 },
                 {
                     "run_id": "run-generic",
+                    "target_id": "target-generic",
                     "method": "boltz2",
                     "status": "failed",
                     "attempt_count": 1,
                     "max_attempts": 1,
                     "error_code": "output_validation_failed",
+                    "task_payload": {
+                        "resources": {
+                            "gpu_class": "l4",
+                            "timeout_seconds": 1800,
+                        },
+                        "config": {"msa_mode": "server"},
+                    },
+                    "result": {"duration_seconds": 10.0},
                 },
                 {
                     "run_id": "run-oom",
+                    "target_id": "target-oom",
                     "method": "openfold3",
                     "status": "failed",
                     "attempt_count": 1,
                     "max_attempts": 1,
                     "error_code": "gpu_out_of_memory",
+                    "task_payload": {
+                        "resources": {
+                            "gpu_class": "l4",
+                            "timeout_seconds": 1800,
+                        },
+                        "config": {"msa_mode": "server"},
+                    },
+                    "result": {"duration_seconds": 10.0},
                 },
             ]
         )
-        self.assertEqual(report["retryable_run_ids"], ["run-msa"])
+        self.assertEqual(
+            report["retryable_run_ids"], ["run-generic", "run-msa", "run-oom"]
+        )
+        self.assertEqual(
+            next(
+                item
+                for item in report["retry_candidates"]
+                if item["run_id"] == "run-generic"
+            )["retry_kind"],
+            "repeat_once",
+        )
         self.assertEqual(report["status_counts"]["failed"], 3)
 
-    def test_run_report_exact_legacy_map_matches_authorizer_and_near_misses_fail(self) -> None:
+    def test_run_report_preserves_reviewed_legacy_tiers_and_repeats_near_misses(self) -> None:
         module = self.deployment_module()
-        from foldarium_pipeline.supabase import REVIEWED_LEGACY_PREDICTION_RETRIES
-
-        self.assertEqual(
-            module.NEXTWEEKLY_REVIEWED_LEGACY_RETRIES,
-            REVIEWED_LEGACY_PREDICTION_RETRIES,
-        )
         specs = [
             (
                 "run_ebb8012256ebff410610bbd3",
@@ -275,10 +298,14 @@ class NextweeklyAutomationTests(unittest.TestCase):
         ):
             mutated = deepcopy(rows)
             mutated[row_index][field] = wrong
-            rejected = module._nextweekly_run_report(mutated)
-            self.assertNotIn(
-                rows[row_index]["run_id"], rejected["retryable_run_ids"]
+            repeated = module._nextweekly_run_report(mutated)
+            candidate = next(
+                item
+                for item in repeated["retry_candidates"]
+                if item["run_id"] == rows[row_index]["run_id"]
             )
+            self.assertEqual(candidate["retry_kind"], "repeat_once")
+            self.assertFalse(candidate["reviewed_legacy"])
 
         wrong_timeout = deepcopy(rows)
         wrong_timeout[0]["task_payload"]["resources"]["timeout_seconds"] = 1700
@@ -342,8 +369,8 @@ class NextweeklyAutomationTests(unittest.TestCase):
         self.assertEqual(budget["original_consumed_seconds"], 136000.0)
         self.assertEqual(budget["authorized_retry_count"], 0)
         self.assertEqual(budget["retry_reserved_seconds"], 0)
-        self.assertEqual(budget["remaining_seconds"], 8000.0)
-        self.assertEqual(budget["remaining_retry_slots"], 4)
+        self.assertEqual(budget["remaining_seconds"], 368000.0)
+        self.assertEqual(budget["remaining_retry_slots"], 6)
 
     def test_retry_budget_fails_closed_on_missing_duration(self) -> None:
         module = self.deployment_module()
@@ -367,9 +394,9 @@ class NextweeklyAutomationTests(unittest.TestCase):
         self.assertEqual(budget["original_consumed_seconds"], 88000.0)
         self.assertEqual(budget["retry_reserved_seconds"], 45000)
         self.assertEqual(budget["consumed_or_reserved_seconds"], 133000.0)
-        self.assertEqual(budget["remaining_retry_slots"], 6)
+        self.assertEqual(budget["remaining_retry_slots"], 10)
 
-    def test_retry_budget_does_not_recover_reserved_slots_on_later_tick(self) -> None:
+    def test_retry_budget_preserves_reserved_cost_on_later_tick(self) -> None:
         module = self.deployment_module()
         rows = self._terminal_rows(duration_seconds=1700.0)
         for row in rows[:8:2]:  # The prior tick authorized its four available slots.
@@ -379,19 +406,19 @@ class NextweeklyAutomationTests(unittest.TestCase):
         budget = module._nextweekly_retry_budget(rows, self._retry_candidates(4))
         self.assertEqual(budget["authorized_retry_count"], 4)
         self.assertEqual(budget["consumed_or_reserved_seconds"], 154400.0)
-        self.assertEqual(budget["status"], "exhausted")
-        self.assertEqual(budget["remaining_retry_slots"], 0)
+        self.assertEqual(budget["status"], "available")
+        self.assertEqual(budget["remaining_retry_slots"], 4)
 
-    def test_retry_budget_is_exhausted_at_40_command_hours(self) -> None:
+    def test_retry_budget_adds_one_retry_capacity_to_40_original_hours(self) -> None:
         module = self.deployment_module()
         budget = module._nextweekly_retry_budget(
             self._terminal_rows(duration_seconds=1800.0),
             self._retry_candidates(1),
         )
-        self.assertEqual(budget["status"], "exhausted")
-        self.assertFalse(budget["authorization_ready"])
-        self.assertEqual(budget["remaining_seconds"], 0.0)
-        self.assertEqual(budget["remaining_retry_slots"], 0)
+        self.assertEqual(budget["status"], "available")
+        self.assertTrue(budget["authorization_ready"])
+        self.assertEqual(budget["remaining_seconds"], 360000.0)
+        self.assertEqual(budget["remaining_retry_slots"], 1)
 
     def test_retry_budget_enforces_weighted_gpu_cost_not_only_seconds(self) -> None:
         module = self.deployment_module()
@@ -599,7 +626,7 @@ class NextweeklyAutomationTests(unittest.TestCase):
         self.assertGreater(2700, 2100)
         self.assertGreater(5400, 4800)
 
-    def test_tick_caps_retry_batch_to_campaign_budget(self) -> None:
+    def test_tick_submits_every_eligible_retry_within_campaign_bound(self) -> None:
         module = self.deployment_module()
         rows = self._terminal_rows(retryable_count=6)
 
@@ -647,8 +674,8 @@ class NextweeklyAutomationTests(unittest.TestCase):
         ), patch.object(module, "assemble_weekly_quiz_round", ForbiddenAssembly):
             result = raw_function("2026-08-15")
         self.assertEqual(result["status"], "prediction-retries-submitted")
-        self.assertEqual(len(result["retry_run_ids"]), 4)
-        self.assertEqual(result["automatic_retry_budget"]["remaining_retry_slots"], 4)
+        self.assertEqual(len(result["retry_run_ids"]), 6)
+        self.assertEqual(result["automatic_retry_budget"]["remaining_retry_slots"], 6)
         self.assertEqual(
             [request["run_id"] for request in RetryRemote.calls[0][0]],
             result["retry_run_ids"],
@@ -699,7 +726,7 @@ class NextweeklyAutomationTests(unittest.TestCase):
             "invalid-run-accounting",
         )
 
-    def test_tick_skips_retry_and_assembles_when_budget_is_exhausted(self) -> None:
+    def test_tick_retries_after_all_40_original_gpu_hours_are_consumed(self) -> None:
         module = self.deployment_module()
         rows = self._terminal_rows(duration_seconds=1800.0, retryable_count=1)
 
@@ -716,32 +743,37 @@ class NextweeklyAutomationTests(unittest.TestCase):
             def campaign_prediction_run_statuses(campaign_id):
                 return rows
 
-        class ForbiddenRetry:
+        class RetryRemote:
             @staticmethod
-            def remote(*args):
-                raise AssertionError("an exhausted budget must not authorize a retry")
+            def remote(retry_requests, resubmit):
+                return {
+                    "submission_status": "submitted",
+                    "submissions": [
+                        {
+                            "run_id": retry_requests[0]["run_id"],
+                            "modal_call_id": "call-retry",
+                        }
+                    ],
+                }
 
-        class AssemblyRemote:
+        class ForbiddenAssembly:
             @staticmethod
             def remote(*args):
-                return {"status": "opened", "round_id": args[1]}
+                raise AssertionError("an eligible retry must not assemble")
 
         raw_function = module.nextweekly_tick.get_raw_f()
         with patch(
             "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
             return_value=Coordinator(),
         ), patch.object(
-            module, "retry_prediction_runs", ForbiddenRetry
+            module, "retry_prediction_runs", RetryRemote
         ), patch.object(
-            module, "assemble_weekly_quiz_round", AssemblyRemote
+            module, "assemble_weekly_quiz_round", ForbiddenAssembly
         ), patch.object(module, "_weekly_public_bucket", return_value="public-weekly"):
             result = raw_function("2026-08-15")
-        self.assertEqual(result["status"], "preview-opened")
-        self.assertEqual(result["automatic_retry_status"], "skipped")
-        self.assertEqual(result["automatic_retry_budget"]["status"], "exhausted")
-        self.assertEqual(
-            result["automatic_retry_budget"]["remaining_retry_slots"], 0
-        )
+        self.assertEqual(result["status"], "prediction-retries-submitted")
+        self.assertEqual(result["automatic_retry_budget"]["status"], "available")
+        self.assertEqual(result["retry_run_ids"], ["run-00-boltz2"])
 
     def test_tick_waits_for_every_active_prediction_before_assembly(self) -> None:
         module = self.deployment_module()
@@ -1716,7 +1748,7 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         self.assertEqual(module.WEEKLY_RETROSPECTIVE_CRON_UTC, "15 0-5 * * 3")
         self.assertEqual(
             module.WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
-            "45 0 * * 3",
+            "45 0-5 * * 3",
         )
         self.assertFalse(module.WEEKLY_RETROSPECTIVE_PUBLICATION_ENABLED)
         self.assertEqual(module.WEDNESDAY_REVEAL_MODAL_RETRIES, 2)
