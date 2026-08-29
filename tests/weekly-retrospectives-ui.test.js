@@ -56,10 +56,11 @@ test('question results distinguish absent human answers from automated methods',
 });
 
 test('standalone archive stays Mol-star-free and renders API names with safe DOM text', async () => {
-  const [html, ui, css] = await Promise.all([
+  const [html, ui, css, similarity] = await Promise.all([
     source('weekly-retrospectives.html'),
     source('weekly-retrospectives.js'),
     source('weekly-retrospectives.css'),
+    source('weekly-training-similarity.js'),
   ]);
   assert.doesNotMatch(`${html}\n${ui}`, /molstar|Mol\*/i);
   assert.doesNotMatch(ui, /\.innerHTML\s*=/);
@@ -74,6 +75,16 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.match(css, /min-width:320px/);
   assert.match(css, /prefers-reduced-motion:reduce/);
   assert.match(css, /min-height:44px/);
+  assert.match(ui, /\['default', 'Default'\]/);
+  assert.match(ui, /\['novel-first', 'Novel first'\]/);
+  assert.match(ui, /\['familiar-first', 'Familiar first'\]/);
+  assert.match(ui, /'Source PDB \+ ligand'/);
+  assert.match(ui, /`PDB \$\{pdbId\} ↗`/);
+  assert.match(ui, /https:\/\/www\.rcsb\.org\/structure\/\$\{encodeURIComponent\(pdbId\)\}/);
+  assert.match(ui, /rel = 'noopener noreferrer'/);
+  assert.match(ui, /fetchWeeklyTrainingSimilarityReport\(\)\.catch\(\(\) => null\)/);
+  assert.match(similarity, /\/docs\/weekly-training-similarity-results\.json/);
+  assert.match(similarity, /sortWeeklySimilarityRows/);
 });
 
 test('archive molecular review uses exact detail and bypasses weekly session and vote reads', async () => {

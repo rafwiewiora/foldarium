@@ -396,8 +396,8 @@
   #choices .choice .tag.answer-status{font-weight:750;letter-spacing:.035em}
   #choices .choice.correct .tag.answer-status{color:var(--good)}
   #choices .choice.wrong .tag.answer-status{color:var(--bad)}
-  .badge{position:static;flex:0 1 auto;min-width:0;max-width:min(520px,45%);overflow:hidden;
-    text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:620;color:#536172;
+  .badge{position:static;flex:0 1 auto;min-width:0;max-width:min(680px,60%);overflow:visible;
+    white-space:normal;overflow-wrap:anywhere;font-size:13px;line-height:1.35;font-weight:620;color:#536172;
     background:#fffffff0;padding:7px 12px;border-radius:8px;border:1px solid #dbe3e9;
     box-shadow:0 2px 9px #16202b14;backdrop-filter:blur(6px);pointer-events:auto}
   #view-options{position:absolute;z-index:30;left:50%;bottom:16px;transform:translateX(-50%);
@@ -528,6 +528,14 @@
     <label class="retrospective-question-filter" id="retrospective-question-filter" hidden>
       <span>Show</span>
       <select id="retrospective-question-filter-select" aria-label="Filter retrospective questions"></select>
+    </label>
+    <label class="retrospective-question-filter" id="retrospective-question-sort" hidden>
+      <span>Order</span>
+      <select id="retrospective-question-sort-select" aria-label="Sort retrospective questions">
+        <option value="default">Default</option>
+        <option value="novel-first">Novel first</option>
+        <option value="familiar-first">Familiar first</option>
+      </select>
     </label>
 
     <div class="choices" id="choices"></div>
@@ -679,6 +687,11 @@ import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 import { createWeeklyTraceStream } from './weekly-trace-stream.js';
 import { createWeeklySessionResumeStore } from './weekly-session-resume.js?v=2026082701';
 import * as foldariumPrivateReview from './weekly-private-review.js';
+import {
+  fetchWeeklyTrainingSimilarityReport,
+  sortWeeklySimilarityRows,
+  weeklySimilarityRecord,
+} from './weekly-training-similarity.js';
 
 (function () {
   const wrap = document.getElementById('wrap');
@@ -699,6 +712,16 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
     active: Boolean(archiveRoundId),
     round_id: archiveRoundId,
   });
+  window.foldariumWeeklyTrainingSimilarity = Object.freeze({
+    sortWeeklySimilarityRows,
+    weeklySimilarityRecord,
+  });
+  window.FOLDARIUM_WEEKLY_TRAINING_SIMILARITY_READY = archiveRoundId
+    ? fetchWeeklyTrainingSimilarityReport().catch(error => {
+        console.warn('Weekly training similarity unavailable:', error.message);
+        return null;
+      })
+    : Promise.resolve(null);
   window.foldariumRevealArchiveReview = () => {
     if (!archiveRoundId) return;
     archiveLoading.hidden = true;
@@ -802,7 +825,7 @@ import * as foldariumPrivateReview from './weekly-private-review.js';
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608251');
+      await loadScript('app.js?v=202608286');
     } catch (e) {
       console.error('Failed to load quiz assets:', e);
       wrap.hidden = false;

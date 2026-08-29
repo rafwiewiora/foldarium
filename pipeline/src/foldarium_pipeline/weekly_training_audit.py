@@ -16,11 +16,19 @@ from typing import Any
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+from .rnp_similarity import (
+    RNP_NOVELTY_THRESHOLD,
+    RNP_STYLE_METHOD,
+    RNP_STYLE_VERSION,
+    rnp_style_top25_similarity,
+)
 from .training_similarity import (
     MAX_STRUCTURE_BYTES,
     SCORER_VERSION,
     TRAINING_HIT_LIMIT,
+    TrainingSimilarityError,
     atom_cloud,
+    cache_training_overlay,
     collect_training_analogs,
     download_rcsb_structure,
     file_sha256,
@@ -30,6 +38,8 @@ from .training_similarity import (
     read_model,
     search_pre_cutoff,
     similarity_result,
+    similarity_result_with_winner,
+    training_overlay_cache_path,
 )
 
 DEFAULT_ORIGIN = "https://www.foldarium.org"
@@ -429,7 +439,28 @@ def score_exact_target(target: ExactTarget, cache_directory: str | Path) -> dict
         hits,
         reference_loader=_reference_loader(cache),
     )
-    result = similarity_result(query_ligand, analogs, failures, hits)
+    result, winner = similarity_result_with_winner(
+        query_ligand, analogs, failures, hits
+    )
+    rnp_style = rnp_style_top25_similarity(
+        query,
+        ligand_path,
+        target.ligand_component_id,
+        analogs,
+        ccd_cache_directory=cache,
+    )
+    training_overlay = None
+    training_overlay_status = "not-applicable"
+    training_overlay_unavailable_reason = None
+    if winner is not None:
+        try:
+            training_overlay = cache_training_overlay(winner, cache)
+            training_overlay_status = "available"
+        except TrainingSimilarityError as exc:
+            training_overlay_status = "unavailable"
+            training_overlay_unavailable_reason = (
+                f"{type(exc).__name__}: {exc}"[:300]
+            )
     hit_cache = foldseek_cache_path(
         query,
         exclude_pdb=target.item_id,
@@ -449,6 +480,12 @@ def score_exact_target(target: ExactTarget, cache_directory: str | Path) -> dict
             "has_correct_pose": target.has_correct_pose,
             "correct_choice_ids": list(target.correct_choice_ids),
             "automated_correct": dict(target.automated_correct),
+            "rnp_style_top25": rnp_style,
+            "training_system_overlay_cache": training_overlay,
+            "training_system_overlay_status": training_overlay_status,
+            "training_system_overlay_unavailable_reason": (
+                training_overlay_unavailable_reason
+            ),
             **foldseek_cache_provenance(hit_cache),
         }
     )
@@ -492,12 +529,20 @@ def score_blind_target(target: BlindTarget, cache_directory: str | Path) -> dict
         pocket_aware = similarity_result(
             pose, analogs, failures, hits, maximum_hit_rank=TRAINING_HIT_LIMIT
         )
+        rnp_style = rnp_style_top25_similarity(
+            query,
+            pose_path,
+            target.ligand_component_id,
+            analogs,
+            ccd_cache_directory=cache,
+        )
         choices.append(
             {
                 "choice_id": choice_id,
                 "pose_sha256": file_sha256(pose_path),
                 "nearest_training_system": nearest,
                 "pocket_aware": pocket_aware,
+                "rnp_style_top25": rnp_style,
             }
         )
 
@@ -550,6 +595,55 @@ def score_blind_target(target: BlindTarget, cache_directory: str | Path) -> dict
                 None if score is None else score < 0.25
             ),
         }
+    rnp_rows = [
+        row
+        for row in choices
+        if isinstance(
+            row["rnp_style_top25"].get("sucos_shape_pocket_qcov"),
+            (int, float),
+        )
+    ]
+    rnp_best = (
+        max(
+            rnp_rows,
+            key=lambda row: (
+                row["rnp_style_top25"]["sucos_shape_pocket_qcov"],
+                row["choice_id"],
+            ),
+        )
+        if rnp_rows
+        else None
+    )
+    rnp_score = (
+        float(rnp_best["rnp_style_top25"]["sucos_shape_pocket_qcov"])
+        if rnp_best
+        else None
+    )
+    output["rnp_style_top25"] = {
+        "method": RNP_STYLE_METHOD,
+        "version": RNP_STYLE_VERSION,
+        "threshold": RNP_NOVELTY_THRESHOLD,
+        "choice_id": rnp_best["choice_id"] if rnp_best else None,
+        "score": rnp_score,
+        "classification": (
+            rnp_best["rnp_style_top25"]["classification"]
+            if rnp_best
+            else "unknown"
+        ),
+        "novel": (
+            rnp_best["rnp_style_top25"]["novel"] if rnp_best else None
+        ),
+        "reason": (
+            rnp_best["rnp_style_top25"]["reason"]
+            if rnp_best
+            else "no-rnp-choice-score"
+        ),
+        "predict_none": (
+            None
+            if rnp_score is None
+            else rnp_score < RNP_NOVELTY_THRESHOLD
+        ),
+    }
     return output
 
 
@@ -578,6 +672,55 @@ def _load_audit(path: Path, mode: str) -> dict[str, Any]:
     ):
         raise WeeklyTrainingAuditError(f"audit output contract is invalid: {path}")
     return audit
+
+
+def _cached_training_overlay_is_valid(
+    cache_directory: str | Path, descriptor: Any
+) -> bool:
+    if (
+        not isinstance(descriptor, dict)
+        or not isinstance(descriptor.get("sha256"), str)
+        or _SHA256.fullmatch(descriptor["sha256"]) is None
+        or isinstance(descriptor.get("size_bytes"), bool)
+        or not isinstance(descriptor.get("size_bytes"), int)
+        or descriptor["size_bytes"] <= 0
+        or descriptor.get("media_type") != "chemical/x-pdb"
+    ):
+        return False
+    try:
+        path = training_overlay_cache_path(
+            cache_directory, descriptor["sha256"]
+        )
+        return (
+            path.is_file()
+            and path.stat().st_size == descriptor["size_bytes"]
+            and file_sha256(path) == descriptor["sha256"]
+        )
+    except (OSError, TrainingSimilarityError):
+        return False
+
+
+def _has_current_rnp_result(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("method") == RNP_STYLE_METHOD
+        and value.get("version") == RNP_STYLE_VERSION
+    )
+
+
+def _cached_rnp_is_current(record: Any, mode: str) -> bool:
+    if not isinstance(record, dict) or not _has_current_rnp_result(
+        record.get("rnp_style_top25")
+    ):
+        return False
+    if mode == "exact":
+        return True
+    choices = record.get("choices")
+    return isinstance(choices, list) and all(
+        isinstance(choice, dict)
+        and _has_current_rnp_result(choice.get("rnp_style_top25"))
+        for choice in choices
+    )
 
 
 def run_audit(
@@ -619,11 +762,54 @@ def run_audit(
     pending: list[BlindTarget | ExactTarget] = []
     for index, target in enumerate(selected, 1):
         previous = records.get(target.item_id)
+        cached_overlay = (
+            previous.get("training_system_overlay_cache")
+            if isinstance(previous, dict)
+            else None
+        )
+        overlay_status = (
+            previous.get("training_system_overlay_status")
+            if isinstance(previous, dict)
+            else None
+        )
+        overlay_reason = (
+            previous.get("training_system_overlay_unavailable_reason")
+            if isinstance(previous, dict)
+            else None
+        )
+        overlay_is_ready = (
+            not isinstance(target, ExactTarget)
+            or (
+                previous is not None
+                and previous.get("train_pdb") is None
+                and overlay_status == "not-applicable"
+                and cached_overlay is None
+                and overlay_reason is None
+            )
+            or (
+                previous is not None
+                and previous.get("train_pdb") is not None
+                and overlay_status == "available"
+                and _cached_training_overlay_is_valid(
+                    cache_directory, cached_overlay
+                )
+            )
+            or (
+                previous is not None
+                and previous.get("train_pdb") is not None
+                and overlay_status == "unavailable"
+                and cached_overlay is None
+                and isinstance(overlay_reason, str)
+                and bool(overlay_reason)
+            )
+        )
         if (
             previous
             and not force
             and previous.get("scorer_version") == SCORER_VERSION
             and previous.get("status") == "complete"
+            and overlay_is_ready
+            and _cached_rnp_is_current(previous, mode)
         ):
             print(f"[{index}/{len(selected)}] {target.item_id}: cached", flush=True)
             continue

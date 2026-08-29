@@ -12,10 +12,15 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from .rnp_similarity import RNP_NOVELTY_THRESHOLD, RNP_STYLE_VERSION
 from .training_similarity import NOVELTY_THRESHOLD, SCORER_VERSION
 from .weekly_training_audit import AUDIT_FORMAT
+from .weekly_training_overlays import (
+    OVERLAY_MANIFEST_FORMAT,
+    load_overlay_manifest,
+)
 
-REPORT_FORMAT = "foldarium.weekly-training-similarity-report/v1"
+REPORT_FORMAT = "foldarium.weekly-training-similarity-report/v2"
 BOOTSTRAP_SAMPLES = 2000
 BOOTSTRAP_SEED = 20260827
 
@@ -53,6 +58,48 @@ def roc_auc(labels_and_scores: Sequence[tuple[bool, float]]) -> float | None:
                 1.0 if positive > negative else 0.5 if positive == negative else 0.0
             )
     return concordance / (len(positives) * len(negatives))
+
+
+def pearson_correlation(
+    pairs: Sequence[tuple[float, float]],
+) -> float | None:
+    if len(pairs) < 2:
+        return None
+    left_mean = sum(left for left, _right in pairs) / len(pairs)
+    right_mean = sum(right for _left, right in pairs) / len(pairs)
+    numerator = sum(
+        (left - left_mean) * (right - right_mean)
+        for left, right in pairs
+    )
+    left_scale = sum((left - left_mean) ** 2 for left, _right in pairs)
+    right_scale = sum((right - right_mean) ** 2 for _left, right in pairs)
+    denominator = (left_scale * right_scale) ** 0.5
+    return numerator / denominator if denominator else None
+
+
+def _average_ranks(values: Sequence[float]) -> list[float]:
+    indexed = sorted(enumerate(values), key=lambda row: row[1])
+    ranks = [0.0] * len(values)
+    start = 0
+    while start < len(indexed):
+        stop = start + 1
+        while stop < len(indexed) and indexed[stop][1] == indexed[start][1]:
+            stop += 1
+        average = ((start + 1) + stop) / 2.0
+        for original_index, _value in indexed[start:stop]:
+            ranks[original_index] = average
+        start = stop
+    return ranks
+
+
+def spearman_correlation(
+    pairs: Sequence[tuple[float, float]],
+) -> float | None:
+    if len(pairs) < 2:
+        return None
+    left_ranks = _average_ranks([left for left, _right in pairs])
+    right_ranks = _average_ranks([right for _left, right in pairs])
+    return pearson_correlation(list(zip(left_ranks, right_ranks)))
 
 
 def _percentile(values: Sequence[float], probability: float) -> float:
@@ -113,25 +160,33 @@ def _classification_confusion(
 def _method_statistics(
     pairs: Sequence[tuple[dict[str, Any], dict[str, Any]]],
     method: str,
+    *,
+    exact_method: str | None = None,
 ) -> dict[str, Any]:
+    def exact_classification(exact: dict[str, Any]) -> Any:
+        if exact_method is None:
+            return exact.get("classification")
+        result = exact.get(exact_method)
+        return result.get("classification") if isinstance(result, dict) else None
+
     classified = [
         (exact, blind[method])
         for exact, blind in pairs
-        if exact.get("classification") in {"familiar", "novel"}
+        if exact_classification(exact) in {"familiar", "novel"}
         and blind.get(method, {}).get("classification") in {"familiar", "novel"}
     ]
     class_pairs = [
-        (exact["classification"], estimate["classification"])
+        (exact_classification(exact), estimate["classification"])
         for exact, estimate in classified
     ]
     scored = [
         (exact, blind[method])
         for exact, blind in pairs
-        if exact.get("classification") in {"familiar", "novel"}
+        if exact_classification(exact) in {"familiar", "novel"}
         and isinstance(blind.get(method, {}).get("score"), (int, float))
     ]
     auc_rows = [
-        (exact["classification"] == "familiar", float(estimate["score"]))
+        (exact_classification(exact) == "familiar", float(estimate["score"]))
         for exact, estimate in scored
     ]
     pose_rows = [
@@ -148,7 +203,7 @@ def _method_statistics(
     def classification_accuracy(sample: Sequence[Any]) -> float | None:
         return _rate(
             [
-                exact["classification"] == estimate["classification"]
+                exact_classification(exact) == estimate["classification"]
                 for exact, estimate in sample
             ]
         )
@@ -156,7 +211,10 @@ def _method_statistics(
     def auc_metric(sample: Sequence[Any]) -> float | None:
         return roc_auc(
             [
-                (exact["classification"] == "familiar", float(estimate["score"]))
+                (
+                    exact_classification(exact) == "familiar",
+                    float(estimate["score"]),
+                )
                 for exact, estimate in sample
             ]
         )
@@ -209,7 +267,197 @@ def _method_statistics(
     }
 
 
-def build_report(exact: dict[str, Any], blind: dict[str, Any]) -> dict[str, Any]:
+def _exact_metric(row: dict[str, Any], method: str) -> dict[str, Any]:
+    if method == "pocket_aware":
+        return {
+            "score": row.get("train_shape_overlap"),
+            "classification": row.get("classification"),
+            "train_pdb": row.get("train_pdb"),
+            "train_het": row.get("train_het"),
+        }
+    result = row.get("rnp_style_top25")
+    if not isinstance(result, dict):
+        return {}
+    return {
+        "score": result.get("sucos_shape_pocket_qcov"),
+        "classification": result.get("classification"),
+        "train_pdb": result.get("train_pdb"),
+        "train_het": result.get("train_het"),
+    }
+
+
+def _selected_blind_metric(
+    row: dict[str, Any], method: str
+) -> dict[str, Any]:
+    aggregate = row.get(method)
+    if not isinstance(aggregate, dict):
+        return {}
+    choice_id = aggregate.get("choice_id")
+    choices = row.get("choices")
+    if not isinstance(choice_id, str) or not isinstance(choices, list):
+        return {}
+    for choice in choices:
+        if (
+            isinstance(choice, dict)
+            and choice.get("choice_id") == choice_id
+            and isinstance(choice.get(method), dict)
+        ):
+            return choice[method]
+    return {}
+
+
+def _blind_metric(row: dict[str, Any], method: str) -> dict[str, Any]:
+    result = row.get(method)
+    return result if isinstance(result, dict) else {}
+
+
+def _metric_comparison(
+    pairs: Sequence[tuple[dict[str, Any], dict[str, Any]]],
+) -> dict[str, Any]:
+    methods = ("pocket_aware", "rnp_style_top25")
+    availability: dict[str, dict[str, int]] = {}
+    for method in methods:
+        exact_available = [
+            (exact, blind)
+            for exact, blind in pairs
+            if isinstance(_exact_metric(exact, method).get("score"), (int, float))
+            and _exact_metric(exact, method).get("classification")
+            in {"familiar", "novel"}
+        ]
+        blind_available = [
+            (exact, blind)
+            for exact, blind in pairs
+            if isinstance(_blind_metric(blind, method).get("score"), (int, float))
+            and _blind_metric(blind, method).get("classification")
+            in {"familiar", "novel"}
+        ]
+        paired_available = [
+            (exact, blind)
+            for exact, blind in exact_available
+            if isinstance(_blind_metric(blind, method).get("score"), (int, float))
+            and _blind_metric(blind, method).get("classification")
+            in {"familiar", "novel"}
+        ]
+        availability[method] = {
+            "exact_score_count": len(exact_available),
+            "blind_score_count": len(blind_available),
+            "paired_score_count": len(paired_available),
+        }
+    comparable: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for exact, blind in pairs:
+        if all(
+            isinstance(_exact_metric(exact, method).get("score"), (int, float))
+            and _exact_metric(exact, method).get("classification")
+            in {"familiar", "novel"}
+            and isinstance(
+                _blind_metric(blind, method).get("score"), (int, float)
+            )
+            and _blind_metric(blind, method).get("classification")
+            in {"familiar", "novel"}
+            for method in methods
+        ):
+            comparable.append((exact, blind))
+
+    exact_scores = [
+        (
+            float(_exact_metric(exact, "pocket_aware")["score"]),
+            float(_exact_metric(exact, "rnp_style_top25")["score"]),
+        )
+        for exact, _blind in comparable
+    ]
+    exact_classes = [
+        (
+            _exact_metric(exact, "pocket_aware")["classification"],
+            _exact_metric(exact, "rnp_style_top25")["classification"],
+        )
+        for exact, _blind in comparable
+    ]
+    metric_rows: dict[str, Any] = {}
+    for method in methods:
+        class_matches = [
+            _exact_metric(exact, method)["classification"]
+            == _blind_metric(blind, method)["classification"]
+            for exact, blind in comparable
+        ]
+        auc_rows = [
+            (
+                _exact_metric(exact, method)["classification"] == "familiar",
+                float(_blind_metric(blind, method)["score"]),
+            )
+            for exact, blind in comparable
+        ]
+        recovery_rows = []
+        for exact, blind in comparable:
+            exact_result = _exact_metric(exact, method)
+            selected_result = _selected_blind_metric(blind, method)
+            if isinstance(exact_result.get("train_pdb"), str) and isinstance(
+                selected_result.get("train_pdb"), str
+            ):
+                recovery_rows.append((exact_result, selected_result))
+        pdb_matches = [
+            exact_result["train_pdb"] == selected_result["train_pdb"]
+            for exact_result, selected_result in recovery_rows
+        ]
+        pdb_ligand_rows = [
+            (exact_result, selected_result)
+            for exact_result, selected_result in recovery_rows
+            if isinstance(exact_result.get("train_het"), str)
+            and isinstance(selected_result.get("train_het"), str)
+        ]
+        pdb_ligand_matches = [
+            exact_result["train_pdb"] == selected_result["train_pdb"]
+            and exact_result["train_het"] == selected_result["train_het"]
+            for exact_result, selected_result in pdb_ligand_rows
+        ]
+        metric_rows[method] = {
+            "classification_count": len(comparable),
+            "blind_classification_accuracy": _round(_rate(class_matches)),
+            "auroc": _round(roc_auc(auc_rows)),
+            "closest_training_system_recovery": {
+                "pdb_only_count": len(recovery_rows),
+                "pdb_only_match_count": sum(pdb_matches),
+                "pdb_only_match_rate": _round(_rate(pdb_matches)),
+                "pdb_and_ligand_count": len(pdb_ligand_rows),
+                "pdb_and_ligand_match_count": sum(pdb_ligand_matches),
+                "pdb_and_ligand_match_rate": _round(
+                    _rate(pdb_ligand_matches)
+                ),
+            },
+        }
+    agreement = [left == right for left, right in exact_classes]
+    return {
+        "target_pair_count": len(pairs),
+        "paired_complete_count": len(comparable),
+        "availability": availability,
+        "thresholds": {
+            "pocket_aware": NOVELTY_THRESHOLD,
+            "rnp_style_top25": RNP_NOVELTY_THRESHOLD,
+        },
+        "threshold_provenance": {
+            "pocket_aware": "fixed historical Foldarium overlap cutoff",
+            "rnp_style_top25": "Runs N' Poses published 25/100 cutoff",
+        },
+        "exact_score_correlation": {
+            "count": len(exact_scores),
+            "pearson": _round(pearson_correlation(exact_scores)),
+            "spearman": _round(spearman_correlation(exact_scores)),
+        },
+        "exact_classification_agreement": {
+            "count": len(exact_classes),
+            "agreement_count": sum(agreement),
+            "agreement_rate": _round(_rate(agreement)),
+        },
+        "metrics": metric_rows,
+    }
+
+
+def build_report(
+    exact: dict[str, Any],
+    blind: dict[str, Any],
+    *,
+    overlay_records: dict[tuple[str, str], dict[str, Any]] | None = None,
+    overlay_manifest_sha256: str | None = None,
+) -> dict[str, Any]:
     exact_records = [
         row for row in exact["records"] if isinstance(row, dict)
     ]
@@ -334,6 +582,22 @@ def build_report(exact: dict[str, Any], blind: dict[str, Any]) -> dict[str, Any]
     compact_records = []
     for row in sorted(exact_records, key=lambda value: (value.get("blind_week", ""), value["item_id"])):
         blind_row = blind_by_id.get(row["item_id"], {})
+        exact_rnp = (
+            row.get("rnp_style_top25")
+            if isinstance(row.get("rnp_style_top25"), dict)
+            else {}
+        )
+        blind_rnp = (
+            blind_row.get("rnp_style_top25")
+            if isinstance(blind_row.get("rnp_style_top25"), dict)
+            else {}
+        )
+        selected_rnp = _selected_blind_metric(
+            blind_row, "rnp_style_top25"
+        )
+        overlay_row = (overlay_records or {}).get(
+            (row.get("blind_week"), row["item_id"])
+        )
         compact_records.append(
             {
                 "week": row.get("blind_week"),
@@ -361,6 +625,36 @@ def build_report(exact: dict[str, Any], blind: dict[str, Any]) -> dict[str, Any]
                 "pocket_aware_choice_id": blind_row.get("pocket_aware", {}).get(
                     "choice_id"
                 ),
+                "rnp_exact_score": exact_rnp.get(
+                    "sucos_shape_pocket_qcov"
+                ),
+                "rnp_exact_classification": exact_rnp.get("classification"),
+                "rnp_exact_train_pdb": exact_rnp.get("train_pdb"),
+                "rnp_exact_train_het": exact_rnp.get("train_het"),
+                "rnp_blind_score": blind_rnp.get("score"),
+                "rnp_blind_classification": blind_rnp.get("classification"),
+                "rnp_blind_choice_id": blind_rnp.get("choice_id"),
+                "rnp_blind_train_pdb": selected_rnp.get("train_pdb"),
+                "rnp_blind_train_het": selected_rnp.get("train_het"),
+                "training_system_overlay_status": row.get(
+                    "training_system_overlay_status"
+                ),
+                "training_system_overlay_unavailable_reason": row.get(
+                    "training_system_overlay_unavailable_reason"
+                ),
+                "training_system_overlay": (
+                    {
+                        key: overlay_row[key]
+                        for key in (
+                            "object_uri",
+                            "sha256",
+                            "size_bytes",
+                            "media_type",
+                        )
+                    }
+                    if overlay_row is not None
+                    else None
+                ),
             }
         )
     database_snapshots = {
@@ -371,8 +665,40 @@ def build_report(exact: dict[str, Any], blind: dict[str, Any]) -> dict[str, Any]
     return {
         "format_version": REPORT_FORMAT,
         "scorer_version": SCORER_VERSION,
+        "rnp_style_version": RNP_STYLE_VERSION,
         "training_cutoff": "2021-09-30",
         "novelty_threshold": NOVELTY_THRESHOLD,
+        "rnp_style_contract": {
+            "normalized_novelty_threshold": RNP_NOVELTY_THRESHOLD,
+            "threshold_source": "Runs N' Poses published 25/100 cutoff",
+            "candidate_universe": (
+                "drug-like ligands in the same retained top-25 Foldseek PDB hits "
+                "used by the Foldarium audit"
+            ),
+            "ligand_alignment": "Crippen O3A then RDKit rdShapeAlign",
+            "ligand_similarity": (
+                "0.5 * pharmacophore feature-map score + "
+                "0.5 * (1 - shape protrude distance)"
+            ),
+            "pocket_qcov": (
+                "fraction of query 6A pocket residues whose Foldseek-aligned "
+                "target residue lies in the training ligand's 6A pocket"
+            ),
+            "combined_score": "ligand SuCOS * pocket_qcov",
+            "paper_identical": False,
+            "paper_difference": (
+                "Runs N' Poses searches PLINDER systems across the PDB; this "
+                "controlled comparison reuses Foldarium's top-25 PDB candidate set"
+            ),
+            "omitted_paper_components": [
+                "PLINDER holo-system and proper-ligand-instance enumeration",
+                "Foldseek sensitivity-11 search with up to 5000 candidates",
+                "maximum of Foldseek and MMseqs directional pocket coverage",
+                "PLIP interacting-residue augmentation of 6A geometric pockets",
+                "multi-chain greedy matching and multi-ligand pocket denominator",
+                "the recorded RDKit 2024.9.6 environment",
+            ],
+        },
         "bootstrap": {
             "method": "target-level percentile bootstrap",
             "samples": BOOTSTRAP_SAMPLES,
@@ -398,13 +724,41 @@ def build_report(exact: dict[str, Any], blind: dict[str, Any]) -> dict[str, Any]
                 json.loads(value) for value in sorted(database_snapshots)
             ],
         },
+        "training_system_overlays": (
+            {
+                "format_version": OVERLAY_MANIFEST_FORMAT,
+                "manifest_sha256": overlay_manifest_sha256,
+                "record_count": len(overlay_records or {}),
+                "status_counts": dict(
+                    sorted(
+                        Counter(
+                            row.get(
+                                "training_system_overlay_status",
+                                "unspecified",
+                            )
+                            for row in exact_records
+                        ).items()
+                    )
+                ),
+            }
+            if overlay_records is not None
+            else None
+        ),
         "by_week": weeks,
         "correct_pose_availability": outcomes,
         "automated_correctness": automated,
         "blind_estimators": {
-            method: _method_statistics(pairs, method)
-            for method in ("nearest_training_system", "pocket_aware")
+            "nearest_training_system": _method_statistics(
+                pairs, "nearest_training_system"
+            ),
+            "pocket_aware": _method_statistics(pairs, "pocket_aware"),
+            "rnp_style_top25": _method_statistics(
+                pairs,
+                "rnp_style_top25",
+                exact_method="rnp_style_top25",
+            ),
         },
+        "metric_comparison": _metric_comparison(pairs),
         "representative_neighbors": [
             {
                 key: row.get(key)
@@ -434,8 +788,15 @@ def render_markdown(report: dict[str, Any], exact_digest: str, blind_digest: str
     classification = counts["classification"]
     nearest = report["blind_estimators"]["nearest_training_system"]
     pocket = report["blind_estimators"]["pocket_aware"]
+    rnp_estimator = report["blind_estimators"]["rnp_style_top25"]
+    comparison = report["metric_comparison"]
+    pocket_comparison = comparison["metrics"]["pocket_aware"]
+    rnp_comparison = comparison["metrics"]["rnp_style_top25"]
+    correlations = comparison["exact_score_correlation"]
+    agreement = comparison["exact_classification_agreement"]
     snapshots = report["foldseek_provenance"]["database_snapshots"]
     database = snapshots[0] if len(snapshots) == 1 else {}
+    overlays = report.get("training_system_overlays")
     lines = [
         "# Weekly training-similarity audit",
         "",
@@ -462,10 +823,56 @@ def render_markdown(report: dict[str, Any], exact_digest: str, blind_digest: str
             f"{_format_rate(pocket['correct_pose_pick_rate'])} | "
             f"{_format_rate(pocket['pose_or_none_accuracy'])} |"
         ),
+        (
+            f"| RnP-style top 25 | {rnp_estimator['classification_count']} | "
+            f"{_format_rate(rnp_estimator['classification_accuracy'])} | "
+            f"{rnp_estimator['auroc'] if rnp_estimator['auroc'] is not None else 'n/a'} | "
+            f"{_format_rate(rnp_estimator['correct_pose_pick_rate'])} | "
+            f"{_format_rate(rnp_estimator['pose_or_none_accuracy'])} |"
+        ),
         "",
-        "Percentile confidence intervals in the JSON report use 2,000 deterministic "
-        "target-level bootstrap samples. The fixed historical 0.25 overlap threshold "
-        "was not calibrated on these Weekly targets.",
+        (
+            "Percentile confidence intervals in the JSON report use 2,000 "
+            "deterministic target-level bootstrap samples. Thresholds were fixed "
+            "before this comparison: Foldarium's historical 0.25 overlap cutoff "
+            "and Runs N' Poses' published 25/100 cutoff."
+        ),
+        "",
+        "## Parallel metric comparison",
+        "",
+        "| Metric | Threshold | Blind class accuracy | AUROC | Closest PDB | Closest PDB + ligand |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        (
+            f"| Pocket-aware overlap | {comparison['thresholds']['pocket_aware']} | "
+            f"{_format_rate(pocket_comparison['blind_classification_accuracy'])} | "
+            f"{pocket_comparison['auroc'] if pocket_comparison['auroc'] is not None else 'n/a'} | "
+            f"{_format_rate(pocket_comparison['closest_training_system_recovery']['pdb_only_match_rate'])} | "
+            f"{_format_rate(pocket_comparison['closest_training_system_recovery']['pdb_and_ligand_match_rate'])} |"
+        ),
+        (
+            f"| RnP-style top 25 | {comparison['thresholds']['rnp_style_top25']} | "
+            f"{_format_rate(rnp_comparison['blind_classification_accuracy'])} | "
+            f"{rnp_comparison['auroc'] if rnp_comparison['auroc'] is not None else 'n/a'} | "
+            f"{_format_rate(rnp_comparison['closest_training_system_recovery']['pdb_only_match_rate'])} | "
+            f"{_format_rate(rnp_comparison['closest_training_system_recovery']['pdb_and_ligand_match_rate'])} |"
+        ),
+        "",
+        (
+            f"Across {comparison['paired_complete_count']} targets scored completely by "
+            f"both metrics, exact-score Pearson correlation was "
+            f"{correlations['pearson'] if correlations['pearson'] is not None else 'n/a'} "
+            f"and Spearman correlation was "
+            f"{correlations['spearman'] if correlations['spearman'] is not None else 'n/a'}. "
+            f"Exact classifications agreed for {agreement['agreement_count']} of "
+            f"{agreement['count']} targets ({_format_rate(agreement['agreement_rate'])})."
+        ),
+        (
+            f"Before restricting to that common cohort, pocket-aware overlap had "
+            f"{comparison['availability']['pocket_aware']['paired_score_count']} "
+            f"scored exact/blind pairs and RnP-style had "
+            f"{comparison['availability']['rnp_style_top25']['paired_score_count']} "
+            f"of {comparison['target_pair_count']} complete audit pairs."
+        ),
         "",
         "## Scientific contract",
         "",
@@ -474,7 +881,11 @@ def render_markdown(report: dict[str, Any], exact_digest: str, blind_digest: str
         "- At least four Foldseek-aligned Cα atoms within 8 Å of the query pocket.",
         "- Pocket-local Cα RMSD at most 3 Å.",
         "- Familiar when maximum carried-ligand vdW-volume overlap is at least 0.25; novel below 0.25.",
-        "- Search, download, parse, or incomplete-candidate failures are unknown rather than novel.",
+        "- The parallel RnP-style metric is familiar at or above its separately defined published 25/100 threshold and novel below it.",
+        "- Canonical search, download, parse, or incomplete-candidate failures are unknown rather than novel.",
+        "- RnP-style invalid ligand candidates are logged and skipped, matching its per-ligand exception isolation; query failures or zero valid candidates after failures are unknown.",
+        "- This is an RnP-style controlled approximation, not the published RnP metric or a paper-identical PLINDER rerun.",
+        "- It reuses Foldarium's retained top-25 PDB candidates and one Foldseek pocket correspondence; the paper uses PLINDER holo systems, up to 5,000 Foldseek hits, MMseqs coverage, PLIP-augmented pockets, multi-chain matching, and RDKit 2024.9.6.",
         "",
         "The exact label is retrospective: it uses the released RCSB crystal and crystal "
         "ligand. The blind estimates use only the archived predicted receptor, predicted "
@@ -567,11 +978,20 @@ def render_markdown(report: dict[str, Any], exact_digest: str, blind_digest: str
             "## Provenance",
             "",
             f"- Scorer: `{report['scorer_version']}`",
+            f"- RnP-style scorer: `{report['rnp_style_version']}`",
             f"- Foldseek backend counts: `{json.dumps(report['foldseek_provenance']['backend_counts'], sort_keys=True)}`",
             f"- Foldseek release: `{database.get('foldseek_release', 'multiple or unavailable')}`",
             f"- Foldseek database downloaded: `{database.get('downloaded_at', 'multiple or unavailable')}`",
             f"- Exact audit SHA-256: `{exact_digest}`",
             f"- Blind audit SHA-256: `{blind_digest}`",
+            *(
+                [
+                    f"- Training-system overlay manifest: `{overlays['format_version']}`",
+                    f"- Training-system overlay manifest SHA-256: `{overlays['manifest_sha256']}`",
+                ]
+                if isinstance(overlays, dict)
+                else []
+            ),
             "- Raw structures, API responses, and resumable caches are intentionally outside Git.",
             "",
             "Per-target results and all confidence intervals are in "
@@ -590,10 +1010,31 @@ def write_artifacts(
     csv_path: Path,
     markdown_path: Path,
     api_sensitivity_path: Path | None = None,
+    overlay_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     exact = _read_audit(exact_path, "exact")
     blind = _read_audit(blind_path, "blind")
-    report = build_report(exact, blind)
+    exact_digest = sha256(exact_path.read_bytes()).hexdigest()
+    overlay_records = None
+    overlay_manifest_digest = None
+    if overlay_manifest_path is not None:
+        try:
+            overlay_records, overlay_manifest_digest = load_overlay_manifest(
+                overlay_manifest_path,
+                audit=exact,
+                audit_digest=exact_digest,
+                require_complete=True,
+            )
+        except Exception as exc:
+            raise WeeklyTrainingReportError(
+                "training-system overlay manifest is invalid"
+            ) from exc
+    report = build_report(
+        exact,
+        blind,
+        overlay_records=overlay_records,
+        overlay_manifest_sha256=overlay_manifest_digest,
+    )
     if api_sensitivity_path is not None:
         api = _read_audit(api_sensitivity_path, "exact")
         final_by_id = {
@@ -654,7 +1095,6 @@ def write_artifacts(
         if records:
             writer.writeheader()
             writer.writerows(records)
-    exact_digest = sha256(exact_path.read_bytes()).hexdigest()
     blind_digest = sha256(blind_path.read_bytes()).hexdigest()
     markdown_path.write_text(render_markdown(report, exact_digest, blind_digest))
     return report
@@ -668,6 +1108,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--csv", required=True, type=Path)
     parser.add_argument("--markdown", required=True, type=Path)
     parser.add_argument("--api-sensitivity", type=Path)
+    parser.add_argument("--overlay-manifest", type=Path)
     options = parser.parse_args(arguments)
     report = write_artifacts(
         options.exact,
@@ -676,6 +1117,7 @@ def main(arguments: list[str] | None = None) -> int:
         options.csv,
         options.markdown,
         options.api_sensitivity,
+        options.overlay_manifest,
     )
     print(json.dumps(report["counts"], sort_keys=True))
     return 0
@@ -692,7 +1134,9 @@ __all__ = [
     "bootstrap_interval",
     "build_report",
     "main",
+    "pearson_correlation",
     "render_markdown",
     "roc_auc",
+    "spearman_correlation",
     "write_artifacts",
 ]

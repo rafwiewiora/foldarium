@@ -8,8 +8,19 @@ The post-reveal audit covers 100 published targets. It classified 39 as familiar
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Nearest training system | 80 | 77.5% | 0.7539 | 42.5% | 55.0% |
 | Top-25 pocket-aware | 80 | 63.7% | 0.6628 | 45.0% | 61.3% |
+| RnP-style top 25 | 52 | 63.5% | 0.7322 | 48.1% | 53.7% |
 
-Percentile confidence intervals in the JSON report use 2,000 deterministic target-level bootstrap samples. The fixed historical 0.25 overlap threshold was not calibrated on these Weekly targets.
+Percentile confidence intervals in the JSON report use 2,000 deterministic target-level bootstrap samples. Thresholds were fixed before this comparison: Foldarium's historical 0.25 overlap cutoff and Runs N' Poses' published 25/100 cutoff.
+
+## Parallel metric comparison
+
+| Metric | Threshold | Blind class accuracy | AUROC | Closest PDB | Closest PDB + ligand |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pocket-aware overlap | 0.25 | 76.5% | 0.6875 | 35.3% | 35.3% |
+| RnP-style top 25 | 0.25 | 76.5% | 0.8077 | 44.1% | 44.1% |
+
+Across 34 targets scored completely by both metrics, exact-score Pearson correlation was 0.8995 and Spearman correlation was 0.9206. Exact classifications agreed for 32 of 34 targets (94.1%).
+Before restricting to that common cohort, pocket-aware overlap had 47 scored exact/blind pairs and RnP-style had 34 of 96 complete audit pairs.
 
 ## Scientific contract
 
@@ -18,7 +29,11 @@ Percentile confidence intervals in the JSON report use 2,000 deterministic targe
 - At least four Foldseek-aligned Cα atoms within 8 Å of the query pocket.
 - Pocket-local Cα RMSD at most 3 Å.
 - Familiar when maximum carried-ligand vdW-volume overlap is at least 0.25; novel below 0.25.
-- Search, download, parse, or incomplete-candidate failures are unknown rather than novel.
+- The parallel RnP-style metric is familiar at or above its separately defined published 25/100 threshold and novel below it.
+- Canonical search, download, parse, or incomplete-candidate failures are unknown rather than novel.
+- RnP-style invalid ligand candidates are logged and skipped, matching its per-ligand exception isolation; query failures or zero valid candidates after failures are unknown.
+- This is an RnP-style controlled approximation, not the published RnP metric or a paper-identical PLINDER rerun.
+- It reuses Foldarium's retained top-25 PDB candidates and one Foldseek pocket correspondence; the paper uses PLINDER holo systems, up to 5,000 Foldseek hits, MMseqs coverage, PLIP-augmented pockets, multi-chain matching, and RDKit 2024.9.6.
 
 The exact label is retrospective: it uses the released RCSB crystal and crystal ligand. The blind estimates use only the archived predicted receptor, predicted pocket, and candidate poses. Reveal manifests, crystal structures, answer overlays, and answer RMSDs are not accepted by the blind scorer.
 
@@ -77,11 +92,14 @@ The public Foldseek queue completed 62 of 100 targets before repeated timeouts. 
 ## Provenance
 
 - Scorer: `foldseek-pdb100-carried-ligand-overlap/v7`
+- RnP-style scorer: `rnp-style-sucos-pocket-qcov/v1`
 - Foldseek backend counts: `{"local-foldseek-batch": 97}`
 - Foldseek release: `10-941cd33`
 - Foldseek database downloaded: `2026-08-27T09:10:23.761167+00:00`
-- Exact audit SHA-256: `55de26cb65e79bead0a4a9e7cc2f35175ab340907de5bbc056ec28e7c3e246e1`
-- Blind audit SHA-256: `922f7a5f3b912a80a1e6eb86b423d075beb5ccb051ab70bd87db2f0ff50c67c5`
+- Exact audit SHA-256: `911a638269c9569dc94a709b87c0283e3be8118b3b439b8d5f9e2b446c7c021f`
+- Blind audit SHA-256: `6a19f126bab7869178f85b6a4d4710956427f974fd88a8b37177460725d5dcaf`
+- Training-system overlay manifest: `foldarium.weekly-training-overlay-manifest/v1`
+- Training-system overlay manifest SHA-256: `d07af7a535b8945b6eaac2fe3576d6785a8cda596fc0446c5bf367a414ed51b8`
 - Raw structures, API responses, and resumable caches are intentionally outside Git.
 
 Per-target results and all confidence intervals are in [`weekly-training-similarity-results.json`](weekly-training-similarity-results.json) and [`weekly-training-similarity-results.csv`](weekly-training-similarity-results.csv).

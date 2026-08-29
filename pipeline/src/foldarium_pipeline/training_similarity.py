@@ -16,7 +16,7 @@ import re
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -33,9 +33,13 @@ POCKET_RADIUS_ANGSTROM = 8.0
 MAX_LOCAL_RMSD_ANGSTROM = 3.0
 NOVELTY_THRESHOLD = 0.25
 SCORER_VERSION = "foldseek-pdb100-carried-ligand-overlap/v7"
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 MAX_STRUCTURE_BYTES = 64 * 1024 * 1024
 USER_AGENT = "Foldarium weekly training-similarity audit/1.0"
+TRAINING_OVERLAY_MEDIA_TYPE = "chemical/x-pdb"
+MAX_PDB_ATOMS = 99_999
+MIN_PDB_COORDINATE = -999.999
+MAX_PDB_COORDINATE = 9_999.999
 
 VDW_RADII = {
     "B": 1.92,
@@ -96,6 +100,21 @@ class TrainingAnalog:
     local_residue_count: int
     hit_rank: int
     cloud: AtomCloud
+    _source_structure: str | None = field(default=None, repr=False, compare=False)
+    _source_structure_sha256: str | None = field(
+        default=None, repr=False, compare=False
+    )
+    _ligand_chain_index: int | None = field(default=None, repr=False, compare=False)
+    _ligand_residue_index: int | None = field(default=None, repr=False, compare=False)
+    _rotation: Any = field(default=None, repr=False, compare=False)
+    _translation: Any = field(default=None, repr=False, compare=False)
+    _query_residue_indices: tuple[int, ...] | None = field(
+        default=None, repr=False, compare=False
+    )
+    _target_chain_index: int | None = field(default=None, repr=False, compare=False)
+    _target_residue_indices: tuple[int, ...] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 def _science() -> tuple[Any, Any]:
@@ -295,6 +314,134 @@ def _matched_ca(hit: Mapping[str, Any], query_ca: Sequence[Any | None]) -> tuple
     return numpy.asarray(query_matched), numpy.asarray(target_matched)
 
 
+def _alignment_residue_indices(
+    hit: Mapping[str, Any], query_residue_count: int
+) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+    query_alignment = hit.get("qAln")
+    target_alignment = hit.get("dbAln")
+    if not isinstance(query_alignment, str) or not isinstance(target_alignment, str):
+        return None
+    try:
+        query_index = int(hit.get("qStartPos") or 1) - 1
+        target_index = int(hit.get("dbStartPos") or 1) - 1
+    except (TypeError, ValueError):
+        return None
+    query_indices: list[int] = []
+    target_indices: list[int] = []
+    for query_code, target_code in zip(query_alignment, target_alignment):
+        if (
+            query_code != "-"
+            and target_code != "-"
+            and 0 <= query_index < query_residue_count
+            and target_index >= 0
+        ):
+            query_indices.append(query_index)
+            target_indices.append(target_index)
+        if query_code != "-":
+            query_index += 1
+        if target_code != "-":
+            target_index += 1
+    if not query_indices:
+        return None
+    return tuple(query_indices), tuple(target_indices)
+
+
+def _target_polymer_provenance(
+    model: Any, hit: Mapping[str, Any], query_residue_count: int
+) -> tuple[tuple[int, ...], int, tuple[int, ...]] | None:
+    _gemmi, numpy = _science()
+    correspondence = _alignment_residue_indices(hit, query_residue_count)
+    if correspondence is None:
+        return None
+    target_name: str | None = None
+    raw_target = hit.get("target")
+    if isinstance(raw_target, str):
+        match = re.search(
+            r"(?:^|[|])(?:pdb\|)?[0-9][A-Za-z0-9]{3}"
+            r"(?:-assembly[0-9]+)?[_:.]([^|]+)$",
+            raw_target,
+            re.IGNORECASE,
+        )
+        if match:
+            # Foldseek's PDB100 assembly identifiers append ``-N`` to the
+            # asymmetric-unit chain name for repeated assembly copies.
+            target_name = re.sub(r"-[0-9]+$", "", match.group(1))
+    polymer_chains = [
+        (chain_index, chain)
+        for chain_index, chain in enumerate(model)
+        if len(chain.get_polymer()) > 0
+    ]
+    selected: tuple[int, Any] | None = None
+    if target_name is not None:
+        selected = next(
+            (
+                (chain_index, chain)
+                for chain_index, chain in polymer_chains
+                if chain.name == target_name
+            ),
+            None,
+        )
+        if selected is None:
+            selected = next(
+                (
+                    (chain_index, chain)
+                    for chain_index, chain in polymer_chains
+                    if chain.name.upper() == target_name.upper()
+                ),
+                None,
+            )
+    if selected is None and len(polymer_chains) == 1:
+        selected = polymer_chains[0]
+    if selected is None:
+        try:
+            target_ca = numpy.asarray(
+                [float(value) for value in str(hit.get("tCa", "")).split(",")],
+                dtype=float,
+            ).reshape(-1, 3)
+        except (TypeError, ValueError):
+            target_ca = numpy.empty((0, 3), dtype=float)
+        _query_indices, target_indices = correspondence
+        chain_matches: list[tuple[float, int, Any]] = []
+        for chain_index, chain in polymer_chains:
+            polymer = chain.get_polymer()
+            distances: list[float] = []
+            for target_index in target_indices:
+                if not 0 <= target_index < min(len(polymer), len(target_ca)):
+                    continue
+                atom = polymer[target_index].find_atom("CA", "*")
+                if atom is None:
+                    continue
+                source_position = numpy.asarray(
+                    [atom.pos.x, atom.pos.y, atom.pos.z], dtype=float
+                )
+                distances.append(
+                    float(numpy.linalg.norm(source_position - target_ca[target_index]))
+                )
+            if distances:
+                chain_matches.append((max(distances), chain_index, chain))
+        close_matches = [match for match in chain_matches if match[0] <= 0.05]
+        if len(close_matches) == 1:
+            _distance, chain_index, chain = close_matches[0]
+            selected = (chain_index, chain)
+    if selected is None:
+        return None
+    chain_index, chain = selected
+    target_residue_count = len(chain.get_polymer())
+    query_indices, target_indices = correspondence
+    retained = [
+        (query_index, target_index)
+        for query_index, target_index in zip(query_indices, target_indices)
+        if target_index < target_residue_count
+    ]
+    if not retained:
+        return None
+    return (
+        tuple(query_index for query_index, _target_index in retained),
+        chain_index,
+        tuple(target_index for _query_index, target_index in retained),
+    )
+
+
 def _kabsch(source: Any, target: Any) -> tuple[Any, Any]:
     _gemmi, numpy = _science()
     source_center = source.mean(0)
@@ -411,6 +558,7 @@ def parse_foldseek_hits(
         hits.append(
             {
                 "pdb": pdb_id,
+                "target": alignment.get("target"),
                 "identity": identity,
                 "qStartPos": alignment.get("qStartPos"),
                 "dbStartPos": alignment.get("dbStartPos"),
@@ -753,19 +901,25 @@ def download_rcsb_structure(
     return destination
 
 
-def _training_ligands(model: Any) -> list[tuple[str, Any]]:
-    by_name: dict[str, Any] = {}
-    for chain in model:
-        for residue in chain:
+def _training_ligands(model: Any) -> list[tuple[str, int, int, Any]]:
+    by_name: dict[str, tuple[int, int, Any]] = {}
+    for chain_index, chain in enumerate(model):
+        for residue_index, residue in enumerate(chain):
             name = residue.name.upper()
             if (
                 residue.het_flag == "H"
                 and not residue.is_water()
                 and is_druglike_ligand(name)
-                and (name not in by_name or len(residue) > len(by_name[name]))
+                and (
+                    name not in by_name
+                    or len(residue) > len(by_name[name][2])
+                )
             ):
-                by_name[name] = residue
-    return sorted(by_name.items())
+                by_name[name] = (chain_index, residue_index, residue)
+    return [
+        (name, chain_index, residue_index, residue)
+        for name, (chain_index, residue_index, residue) in sorted(by_name.items())
+    ]
 
 
 def collect_training_analogs(
@@ -809,8 +963,17 @@ def collect_training_analogs(
             rotation, translation, rmsd, local_count = superposition
             if rmsd > MAX_LOCAL_RMSD_ANGSTROM:
                 continue
-            reference_model = read_model(reference_loader(pdb_id))
-            for ligand_name, residue in _training_ligands(reference_model):
+            reference_path = Path(reference_loader(pdb_id))
+            reference_model = read_model(reference_path)
+            residue_provenance = _target_polymer_provenance(
+                reference_model, hit, len(query_polymer)
+            )
+            for (
+                ligand_name,
+                chain_index,
+                residue_index,
+                residue,
+            ) in _training_ligands(reference_model):
                 source = atom_cloud_for_residue(residue)
                 transformed = (rotation @ source.positions.T).T + translation
                 analogs.append(
@@ -826,6 +989,27 @@ def collect_training_analogs(
                         local_residue_count=local_count,
                         hit_rank=rank,
                         cloud=AtomCloud(transformed, numpy.asarray(source.radii)),
+                        _source_structure=str(reference_path),
+                        _source_structure_sha256=file_sha256(reference_path),
+                        _ligand_chain_index=chain_index,
+                        _ligand_residue_index=residue_index,
+                        _rotation=numpy.asarray(rotation, dtype=float).copy(),
+                        _translation=numpy.asarray(translation, dtype=float).copy(),
+                        _query_residue_indices=(
+                            residue_provenance[0]
+                            if residue_provenance is not None
+                            else None
+                        ),
+                        _target_chain_index=(
+                            residue_provenance[1]
+                            if residue_provenance is not None
+                            else None
+                        ),
+                        _target_residue_indices=(
+                            residue_provenance[2]
+                            if residue_provenance is not None
+                            else None
+                        ),
                     )
                 )
         except Exception as exc:
@@ -852,6 +1036,243 @@ def atom_cloud_for_residue(residue: Any) -> AtomCloud:
     if not positions:
         raise TrainingSimilarityError("ligand residue has no heavy atoms")
     return AtomCloud(numpy.asarray(positions), numpy.asarray(radii))
+
+
+def _transform_residue(residue: Any, rotation: Any, translation: Any) -> Any:
+    _gemmi, numpy = _science()
+    transformed = residue.clone()
+    atoms = list(transformed)
+    if not atoms:
+        return transformed
+    positions = numpy.asarray(
+        [[atom.pos.x, atom.pos.y, atom.pos.z] for atom in atoms], dtype=float
+    )
+    positions = (rotation @ positions.T).T + translation
+    if (
+        not numpy.isfinite(positions).all()
+        or numpy.any(positions < MIN_PDB_COORDINATE)
+        or numpy.any(positions > MAX_PDB_COORDINATE)
+    ):
+        raise TrainingSimilarityError(
+            "training overlay coordinates exceed PDB format bounds"
+        )
+    for atom, position in zip(atoms, positions):
+        atom.pos = _gemmi.Position(*(float(value) for value in position))
+    return transformed
+
+
+def materialize_training_overlay(analog: TrainingAnalog) -> bytes:
+    """Build a scorer-frame PDB for every source polymer chain and the scored ligand."""
+
+    gemmi, numpy = _science()
+    if (
+        analog._source_structure is None
+        or analog._source_structure_sha256 is None
+        or analog._ligand_chain_index is None
+        or analog._ligand_residue_index is None
+        or analog._rotation is None
+        or analog._translation is None
+    ):
+        raise TrainingSimilarityError("training analog has no overlay provenance")
+    if file_sha256(analog._source_structure) != analog._source_structure_sha256:
+        raise TrainingSimilarityError("training analog source structure changed")
+    try:
+        source = gemmi.read_structure(analog._source_structure)
+        source.setup_entities()
+        model = source[0]
+        source_chain = model[analog._ligand_chain_index]
+        source_ligand = source_chain[analog._ligand_residue_index]
+    except Exception as exc:
+        raise TrainingSimilarityError("training analog overlay provenance is invalid") from exc
+    if source_ligand.name.upper() != analog.ligand:
+        raise TrainingSimilarityError("training analog ligand provenance does not match")
+
+    output = gemmi.Structure()
+    output.name = f"{analog.pdb_id}_{analog.ligand}_scorer_overlay"
+    output.cell = source.cell
+    output.spacegroup_hm = source.spacegroup_hm
+    output_model = gemmi.Model("1")
+    output_ligand = None
+    polymer_chain_count = 0
+    for chain_index, chain in enumerate(model):
+        polymer = chain.get_polymer()
+        if not polymer:
+            continue
+        if polymer_chain_count >= len(_CHAIN_NAMES):
+            raise TrainingSimilarityError(
+                "training overlay has too many chains for PDB format"
+            )
+        output_chain_name = _CHAIN_NAMES[polymer_chain_count]
+        polymer_chain_count += 1
+        output_chain = gemmi.Chain(output_chain_name)
+        for residue in polymer:
+            if (
+                chain_index == analog._ligand_chain_index
+                and residue == source_ligand
+            ):
+                continue
+            output_chain.add_residue(
+                _transform_residue(residue, analog._rotation, analog._translation)
+            )
+        if chain_index == analog._ligand_chain_index:
+            output_ligand = _transform_residue(
+                source_ligand, analog._rotation, analog._translation
+            )
+            output_chain.add_residue(output_ligand)
+        output_model.add_chain(output_chain)
+    if polymer_chain_count == 0:
+        raise TrainingSimilarityError("training overlay source has no polymer chains")
+    if output_ligand is None:
+        output_ligand = _transform_residue(
+            source_ligand, analog._rotation, analog._translation
+        )
+        output_model[0].add_residue(output_ligand)
+    output.add_model(output_model)
+    atom_count = sum(
+        len(residue)
+        for chain in output_model
+        for residue in chain
+    )
+    if atom_count > MAX_PDB_ATOMS:
+        raise TrainingSimilarityError(
+            "training overlay exceeds the PDB atom serial limit"
+        )
+
+    transformed_cloud = atom_cloud_for_residue(output_ligand)
+    if (
+        transformed_cloud.positions.shape != analog.cloud.positions.shape
+        or transformed_cloud.radii.shape != analog.cloud.radii.shape
+        or not numpy.allclose(
+            transformed_cloud.positions,
+            analog.cloud.positions,
+            rtol=0.0,
+            atol=1e-10,
+        )
+        or not numpy.array_equal(transformed_cloud.radii, analog.cloud.radii)
+    ):
+        raise TrainingSimilarityError(
+            "materialized training ligand does not match its scored cloud"
+        )
+
+    try:
+        pdb_text = output.make_pdb_string()
+    except Exception as exc:
+        raise TrainingSimilarityError(
+            "training overlay could not be encoded as PDB"
+        ) from exc
+    try:
+        content = pdb_text.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise TrainingSimilarityError(
+            "training overlay PDB contains non-ASCII identifiers"
+        ) from exc
+    if not content or len(content) > MAX_STRUCTURE_BYTES:
+        raise TrainingSimilarityError("training overlay PDB is empty or too large")
+    coordinate_lines = [
+        line
+        for line in pdb_text.splitlines()
+        if line.startswith(("ATOM  ", "HETATM"))
+    ]
+    if (
+        len(coordinate_lines) != atom_count
+        or any(
+            len(line) < 80 or line[21] not in _CHAIN_NAMES
+            for line in coordinate_lines
+        )
+    ):
+        raise TrainingSimilarityError("training overlay PDB encoding is invalid")
+    try:
+        reparsed = gemmi.read_pdb_string(content.decode("utf-8"))
+        ligand_residues = [
+            residue
+            for chain in reparsed[0]
+            for residue in chain
+            if residue.het_flag == "H" and residue.name.upper() == analog.ligand
+        ]
+        matching_ligands = []
+        for residue in ligand_residues:
+            serialized_cloud = atom_cloud_for_residue(residue)
+            if (
+                serialized_cloud.positions.shape == analog.cloud.positions.shape
+                and numpy.allclose(
+                    serialized_cloud.positions,
+                    analog.cloud.positions,
+                    rtol=0.0,
+                    atol=0.00051,
+                )
+                and numpy.array_equal(
+                    serialized_cloud.radii, analog.cloud.radii
+                )
+            ):
+                matching_ligands.append(residue)
+        if len(matching_ligands) != 1:
+            raise ValueError(
+                "overlay does not contain exactly one copy of the scored ligand"
+            )
+    except Exception as exc:
+        raise TrainingSimilarityError(
+            "serialized training ligand does not match its scored cloud"
+        ) from exc
+    return content
+
+
+def training_overlay_cache_path(
+    cache_directory: str | Path, digest: str
+) -> Path:
+    if not _SHA256_RE.fullmatch(digest):
+        raise TrainingSimilarityError("training overlay digest is invalid")
+    return (
+        Path(cache_directory)
+        / "training-overlays"
+        / "sha256"
+        / digest[:2]
+        / f"{digest}.pdb"
+    )
+
+
+def _cache_training_overlay(
+    analog: TrainingAnalog, cache_directory: str | Path
+) -> dict[str, Any]:
+    content = materialize_training_overlay(analog)
+    digest = sha256(content).hexdigest()
+    destination = training_overlay_cache_path(cache_directory, digest)
+    if destination.is_file():
+        if file_sha256(destination) != digest:
+            raise TrainingSimilarityError("cached training overlay digest mismatch")
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=destination.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+        try:
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return {
+        "sha256": digest,
+        "size_bytes": len(content),
+        "media_type": TRAINING_OVERLAY_MEDIA_TYPE,
+    }
+
+
+def cache_training_overlay(
+    analog: TrainingAnalog, cache_directory: str | Path
+) -> dict[str, Any]:
+    """Atomically cache one validated overlay under its content digest."""
+
+    try:
+        return _cache_training_overlay(analog, cache_directory)
+    except TrainingSimilarityError:
+        raise
+    except Exception as exc:
+        raise TrainingSimilarityError(
+            "training overlay materialization or cache write failed"
+        ) from exc
 
 
 def best_similarity(
@@ -897,6 +1318,24 @@ def similarity_result(
     *,
     maximum_hit_rank: int = TRAINING_HIT_LIMIT,
 ) -> dict[str, Any]:
+    result, _winner = similarity_result_with_winner(
+        query_ligand,
+        analogs,
+        failures,
+        hits,
+        maximum_hit_rank=maximum_hit_rank,
+    )
+    return result
+
+
+def similarity_result_with_winner(
+    query_ligand: AtomCloud,
+    analogs: Sequence[TrainingAnalog],
+    failures: Sequence[Mapping[str, Any]],
+    hits: Sequence[Mapping[str, Any]],
+    *,
+    maximum_hit_rank: int = TRAINING_HIT_LIMIT,
+) -> tuple[dict[str, Any], TrainingAnalog | None]:
     score, best = best_similarity(
         query_ligand, analogs, maximum_hit_rank=maximum_hit_rank
     )
@@ -944,7 +1383,7 @@ def similarity_result(
         "foldseek_database": FOLDSEEK_DATABASE,
         "foldseek_mode": FOLDSEEK_MODE,
         "scorer_version": SCORER_VERSION,
-    }
+    }, best
 
 
 __all__ = [
@@ -957,12 +1396,14 @@ __all__ = [
     "SCORER_VERSION",
     "TRAINING_CUTOFF",
     "TRAINING_HIT_LIMIT",
+    "TRAINING_OVERLAY_MEDIA_TYPE",
     "AtomCloud",
     "TrainingAnalog",
     "TrainingSimilarityError",
     "atom_cloud",
     "atom_cloud_for_residue",
     "best_similarity",
+    "cache_training_overlay",
     "classify_similarity",
     "collect_training_analogs",
     "download_rcsb_structure",
@@ -973,11 +1414,14 @@ __all__ = [
     "import_local_foldseek_tsv",
     "is_druglike_ligand",
     "ligand_cloud",
+    "materialize_training_overlay",
     "parse_foldseek_hits",
     "pocket_superposition",
     "protein_only_pdb",
     "read_model",
     "search_pre_cutoff",
     "similarity_result",
+    "similarity_result_with_winner",
+    "training_overlay_cache_path",
     "volume_tanimoto",
 ]

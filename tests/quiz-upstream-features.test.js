@@ -150,7 +150,7 @@ function gridLayerSandbox(overrides = {}) {
     pinCameraSnapshot: async (_plugin, snapshot) => { calls.push(`pin:${snapshot.question}`); },
     buildSingleLayer: async preserve => { calls.push(`single:${preserve}`); },
     buildGrid: async (...args) => { calls.push(`grid:${args.join(',')}`); },
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     viewingReleasedCrystal: () => false,
     buildReleasedCrystalScene: async preserve => { calls.push(`released:${preserve}`); },
     hideGrid: () => { calls.push('hideGrid'); },
@@ -348,7 +348,7 @@ test('retrospective layout switches preserve camera intent and normalize Show-al
     },
     viewerControlBlocked: () => false,
     retrospectiveAnswerActive: () => true,
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     clusterForChoice: () => ({ rep }),
     visibleIndexForChoice: () => 0,
     syncButtons: () => {},
@@ -674,7 +674,7 @@ test('archive retrospective One at a time replaces ballot actions with protein-f
     retrospectiveAnswerActive: () => true,
     isArchiveRetrospective: () => true,
     retrospectiveProteinFrame: 'folded',
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
   });
 
   syncOneReviewState();
@@ -861,7 +861,7 @@ test('Weekly Show all routes a ligand click through the normal pose picker', asy
     canonicalInteractionIsEmpty: () => false,
     clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     visibleIndexForChoice: () => 3,
     clearTransientPoseSelection: () => {},
     plugin: {},
@@ -891,7 +891,9 @@ test('retrospective Show all switches protein context for predicted and Xtal lig
     canonicalInteractionIsEmpty: () => false,
     clearWeeklyShowAllContext: async () => {},
     sameChoice: () => false,
-    isXtalReferenceChoice: choice => choice._xtalReference === true,
+    isFixedReferenceChoice: choice => (
+      choice._xtalReference === true || choice._trainingReference === true
+    ),
     visibleIndexForChoice: () => 4,
     clearTransientPoseSelection: () => {},
     plugin: {},
@@ -974,7 +976,7 @@ test('retrospective One at a time maps clustered ghost clicks to the visible rep
     retrospectiveAnswerActive: () => true,
     viewerControlBlocked: () => false,
     interactionBlocked: () => true,
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     visibleIndexForChoice: choice => choice === ghost ? 3 : -1,
     retrospectiveNavChoices: () => [],
     recordAppEvent: () => {},
@@ -1051,7 +1053,7 @@ test('Weekly Grid inspects without preferring the exact pose clicked inside its 
     sameChoice: (left, right) => left?.pose_file === right?.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => null, buildInteractions: async () => {},
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     itemHasReleasedCrystal: () => false,
     focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
@@ -1089,7 +1091,9 @@ test('Archive Grid builds the Xtal reference from retrospective crystal artifact
   const sandbox = {
     gridBuildRevision: 7,
     gridProteinUrls: () => ({ prot: undefined, pocket: undefined, color: 0 }),
-    isXtalReferenceChoice: candidate => candidate?._xtalReference === true,
+    isFixedReferenceChoice: candidate => (
+      candidate?._xtalReference === true || candidate?._trainingReference === true
+    ),
     buildRetrospectiveFoldedGridCell: async () => { calls.push('folded'); },
     buildRetrospectiveGridCell: async () => { calls.push('crystal'); },
     itemHasReleasedCrystal: () => true,
@@ -1360,6 +1364,7 @@ test('Weekly Grid shows compact confidence while retrospective Grid shows cluste
     acceptedChoiceCorrect: () => false,
     gridChoiceSelected: () => false,
     isXtalReferenceChoice: () => false,
+    isTrainingReferenceChoice: () => false,
     GOOD: 1,
     BAD: 2,
   })({ choice, memberCount: 2 });
@@ -1379,6 +1384,7 @@ test('Weekly Grid shows compact confidence while retrospective Grid shows cluste
     answerViewPoseCorrect: () => true,
     gridChoiceSelected: () => false,
     isXtalReferenceChoice: () => false,
+    isTrainingReferenceChoice: () => false,
     GOOD: 1,
     BAD: 2,
   })({
@@ -1407,6 +1413,7 @@ test('Weekly Grid shows compact confidence while retrospective Grid shows cluste
     retrospectiveAnswerActive: () => false,
     retrospectiveNavChoices: () => [choice],
     isXtalReferenceChoice: () => false,
+    isTrainingReferenceChoice: () => false,
     $: registry.$,
   };
   const syncStageBadge = evaluateDeclaration(app, 'function syncStageBadge()', badgeSandbox);
@@ -1476,7 +1483,7 @@ test('Weekly Grid renders ghost cluster members and representative H-bonds', asy
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => ({ radius: 1 }),
     buildInteractions: async (...args) => { interactionCalls.push(args); },
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     itemHasReleasedCrystal: () => false,
     focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
@@ -1534,7 +1541,7 @@ test('Surface mode adds representative protein and ligand surfaces in Grid', asy
     sameChoice: (left, right) => left.pose_file === right.pose_file,
     GHOST_PROTEIN_ALPHA: 0.12, GHOST_POSE_ALPHA: 0.18, GHOST_POSE_SIZE: 0.14,
     structureSphere: () => null, buildInteractions: async () => {},
-    isXtalReferenceChoice: () => false,
+    isFixedReferenceChoice: () => false,
     itemHasReleasedCrystal: () => false,
     focusLigandSpheres: () => false,
     cameraChanges: target => target.canvas3d.camera.changed,
