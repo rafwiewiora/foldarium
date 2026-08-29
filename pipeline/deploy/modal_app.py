@@ -871,6 +871,7 @@ def _nextweekly_retry_budget(
     """
 
     invalid_run_ids: list[str] = []
+    conservatively_accounted_run_ids: list[str] = []
     exact_original_seconds: list[float] = []
     exact_original_cost_usd: list[float] = []
     authorized_retry_count = 0
@@ -928,19 +929,6 @@ def _nextweekly_retry_budget(
                 timeout_seconds * NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS[gpu_class]
             )
             continue
-        result = row.get("result")
-        duration_seconds = (
-            result.get("duration_seconds") if isinstance(result, Mapping) else None
-        )
-        if (
-            isinstance(duration_seconds, bool)
-            or not isinstance(duration_seconds, (int, float))
-            or not math.isfinite(float(duration_seconds))
-            or duration_seconds < 0
-        ):
-            invalid_run_ids.append(run_id)
-            continue
-        exact_original_seconds.append(float(duration_seconds))
         task_payload = row.get("task_payload")
         resources = (
             task_payload.get("resources")
@@ -952,8 +940,28 @@ def _nextweekly_retry_budget(
         )
         if gpu_class not in NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS:
             invalid_run_ids.append(run_id)
-            exact_original_seconds.pop()
             continue
+        result = row.get("result")
+        duration_seconds = (
+            result.get("duration_seconds") if isinstance(result, Mapping) else None
+        )
+        if (
+            isinstance(duration_seconds, bool)
+            or not isinstance(duration_seconds, (int, float))
+            or not math.isfinite(float(duration_seconds))
+            or duration_seconds < 0
+        ):
+            timeout_seconds = resources.get("timeout_seconds")
+            if (
+                isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, int)
+                or not 1 <= timeout_seconds <= NEXTWEEKLY_OOM_RETRY_TIMEOUT_SECONDS
+            ):
+                invalid_run_ids.append(run_id)
+                continue
+            duration_seconds = timeout_seconds
+            conservatively_accounted_run_ids.append(run_id)
+        exact_original_seconds.append(float(duration_seconds))
         exact_original_cost_usd.append(
             float(duration_seconds) * NEXTWEEKLY_RETRY_RATE_BY_GPU_CLASS[gpu_class]
         )
@@ -1047,6 +1055,9 @@ def _nextweekly_retry_budget(
         "candidate_reserved_seconds": candidate_seconds,
         "candidate_reserved_cost_usd": candidate_cost_usd,
         "invalid_run_ids": sorted(invalid_run_ids),
+        "conservatively_accounted_run_ids": sorted(
+            conservatively_accounted_run_ids
+        ),
     }
 
 
@@ -1213,10 +1224,11 @@ if modal is not None:
         report = _lifecycle_deployment_report()
         report["nextweekly"].update(
             {
-                "automatic_retry_error_codes": [
+                "automatic_retry_kinds": [
                     "gpu_out_of_memory",
                     "msa_generation_timeout",
                     "msa_preprocessing_failed",
+                    "repeat_once",
                 ],
                 "retry_batch_size": NEXTWEEKLY_RETRY_BATCH_SIZE,
                 "gpu_command_budget_seconds": NEXTWEEKLY_GPU_COMMAND_BUDGET_SECONDS,
@@ -2821,10 +2833,16 @@ if modal is not None:
                             if isinstance(row, Mapping)
                         ],
                     }
+                elif report["retry_candidates"]:
+                    outcome = {
+                        **identity,
+                        **report,
+                        "status": "waiting-for-retry-authorization",
+                        "environment": NEXTWEEKLY_ENVIRONMENT,
+                        "automatic_retry_budget": retry_budget,
+                        "automatic_retry_status": "blocked",
+                    }
                 else:
-                    # Retry authorization is optional. A missing/invalid duration
-                    # or exhausted budget skips metered work and lets the existing
-                    # fail-closed assembler omit incomplete method pairs.
                     assembled = assemble_weekly_quiz_round.remote(
                         identity["campaign_id"],
                         identity["round_id"],
@@ -2845,9 +2863,6 @@ if modal is not None:
                         "environment": NEXTWEEKLY_ENVIRONMENT,
                         "assembly": assembled,
                     }
-                    if retry_budget is not None:
-                        outcome["automatic_retry_budget"] = retry_budget
-                        outcome["automatic_retry_status"] = "skipped"
         log_outcome = {
             key: value
             for key, value in outcome.items()
