@@ -1,21 +1,31 @@
 # Production handoff — 2026-08-28
 
-This note records the production state at the end of the Weekly
-training-similarity rollout. It distinguishes shipped work from active and
-unmerged follow-ups so a new session can resume without relying on chat history.
+This note records the production state after the Weekly training-similarity
+rollout and the 2026-08-29 quiz deployment. It distinguishes shipped work from
+remaining research so a new session can resume without relying on chat history.
 
 ## Production state
 
 - Canonical repository: `JunctionBioscience/foldarium`.
-- Deployed commit: `65c0a6290f1237e7d19b99c9d45a2d11c18c467b`.
+- Current Junction `main`: `7af7b75b1532950922ba182a67af71aa2ddee9f4`.
+- Browser deployment commit: `0e614ec`.
+- Modal deployment commit: `7af7b75`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
 - Runtime packaging and commit-attestation fix:
   [Junction PR #38](https://github.com/JunctionBioscience/foldarium/pull/38).
-- Vercel deployment: `dpl_GFLHVrxcG6E7RXsmRtD4z88CM8Eu`.
+- One-retry lifecycle:
+  [Junction PR #41](https://github.com/JunctionBioscience/foldarium/pull/41).
+- Retrospective Play for fun:
+  [Junction PR #42](https://github.com/JunctionBioscience/foldarium/pull/42).
+- Retry-accounting and v4 assembly guard:
+  [Junction PR #43](https://github.com/JunctionBioscience/foldarium/pull/43).
+- Vercel deployment: `dpl_9xUqbDWLsjiM3cndZ8t3QEXZcHvF`.
 - Immutable deployment URL:
-  <https://foldarium-oltxjqkaj-junctionbioscience.vercel.app>.
+  <https://foldarium-182pldlmo-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
+- Modal profile digest:
+  `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 - Deployment was made manually from a clean detached worktree at the merged
   Junction `main` commit. Do not assume that pushes to `main` deploy
   automatically.
@@ -67,6 +77,11 @@ Primary references:
 - `.vercelignore` excludes other documentation while explicitly shipping
   `docs/weekly-training-similarity-results.json`; removing that exception
   silently disables production similarity hydration.
+- Revealed archive rounds expose a solid-green **Play for fun** action beside
+  the solid-blue **Open molecular review** action.
+- For-fun sessions and vote attempts use the post-reveal tables and are scored
+  separately from blind-week and all-time rankings. There are no seeded or fake
+  production leaderboard rows.
 
 Primary references:
 
@@ -87,37 +102,26 @@ Primary references:
 - Production serves the v2 similarity report with 100 records, while
   non-runtime documentation remains excluded.
 - Production `/api/config` reports environment `production` and exact commit
-  `65c0a6290f1237e7d19b99c9d45a2d11c18c467b`.
+  `0e614ec`.
 - A production browser smoke test confirmed Xtal then Training navigation,
   successful report and overlay requests, no Training in Show all, no bottom
   annotation, and a wrapping active label with no horizontal overflow.
+- Production serves the Play-for-fun endpoint, preserves the password gate, and
+  serves the requested green/blue archive action styling.
+- The 2026-08-29 production round is
+  `weekly-2026-08-29-beta-v2`, promoted from
+  `preview-weekly-2026-08-29-nextweekly-v4`.
+- The final round has 33 items and 330 choices. Prediction state is 71 succeeded
+  and 7 failed across 78 method runs; the failures are the six repeated failures
+  below plus the previously exhausted `13IB` run.
+- Seven previously unretried failures were authorized at exactly attempt 2/2.
+  `38GO` OpenFold3 recovered; the other six runs failed again and cannot receive
+  a third attempt.
+- The production Selector kit is registered with SHA-256
+  `cfa18b867e84b3886706e349ea3ed4a46b4665ee4628a993127ada85a020cd68`.
 - `git diff --check junction/main...HEAD` passed before merge.
 
 ## Remaining work
-
-### Preview intake-cap warning — not shipped
-
-The warning requested when eligible targets exceed the 40-target cap remains
-uncommitted in `/private/tmp/foldarium-weekly-cap-warning` on
-`fix/weekly-cap-preview-warning`. It includes intake counts, preview manifest
-metadata, Modal summary output, browser warning rendering, and tests. Reconcile
-it onto current Junction `main`, review, commit, open a PR, deploy the pipeline
-and browser changes, and verify with a synthetic overflow preview.
-
-### Public open-source mirror — not at production parity
-
-`rafwiewiora/foldarium` is the public mirror, not the production source.
-`origin/feature/weekly-training-similarity-audit` contains an earlier audit
-stage, while the final RnP, overlay, and UI changes shipped through Junction
-PR #36. Reconcile and review the sanitized final change before merging it into
-public `origin/main`; do not copy deployment-specific access configuration.
-
-### Aug 29 Weekly operations — active
-
-Monitoring remains active for the Aug 29 intake, cofolding lifecycle, and first
-approval preview. Confirm target counts, prediction completion, quiz assembly,
-and preview readiness. The preview intake-cap warning above is not yet
-available, so inspect the pre-cap eligible and excluded counts operationally.
 
 ### Research backlog
 
@@ -127,8 +131,8 @@ protein familiarity and ligand-bound-system familiarity.
 
 ## Resume checklist
 
-1. Confirm production still resolves to commit `65c0a62`.
-2. Check the Aug 29 lifecycle and approval-preview status.
-3. Finish and ship the preview intake-cap warning.
-4. Reconcile the public mirror with Junction PR #36.
-5. Promote apo-pocket similarity to a plan only if it becomes a priority.
+1. Confirm production still resolves to browser commit `0e614ec`.
+2. Confirm the current production round remains
+   `weekly-2026-08-29-beta-v2` with 33 items.
+3. Treat all seven terminal failed runs as final at attempt 2/2.
+4. Promote apo-pocket similarity to a plan only if it becomes a priority.
