@@ -66,6 +66,10 @@ Set these variables for Production:
   `FOLDARIUM_PRODUCTION_SUPABASE_ANON_KEY`)
 - Optional: `FOLDARIUM_PRODUCTION_STRUCTURE_BASE_URL`; when omitted, the public
   `structures` bucket URL is derived from the project URL.
+- For a manual CLI deployment, pass `FOLDARIUM_COMMIT_SHA` as a per-deployment
+  environment value containing the exact reviewed Git commit. `/api/config`
+  uses it only when Vercel did not supply `VERCEL_GIT_COMMIT_SHA`; do not store
+  a stale commit attestation as a persistent project value.
 
 Preview is deliberately disabled unless a separate staging project is configured
 with all of the following:

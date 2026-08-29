@@ -40,7 +40,6 @@ test('Vercel excludes local and operational-only source trees', async () => {
     '.github/',
     'data/',
     'data_rnp/',
-    'docs/',
     'local/',
     'local-retrospective-proxy.mjs',
     'pipeline/',
@@ -50,6 +49,13 @@ test('Vercel excludes local and operational-only source trees', async () => {
   ]) {
     assert.equal(ignored.has(path), true, `${path} must stay outside the Vercel artifact`);
   }
+  assert.equal(ignored.has('docs/'), false, 'the runtime report parent must remain traversable');
+  assert.equal(ignored.has('docs/*'), true, 'documentation stays excluded by default');
+  assert.equal(
+    ignored.has('!docs/weekly-training-similarity-results.json'),
+    true,
+    'the browser training-similarity report must be included',
+  );
 });
 
 test('weekly-only chrome stays focused on human play while the Selector API remains separate', async () => {

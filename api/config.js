@@ -24,7 +24,8 @@ const ENVIRONMENT_CONFIG = Object.freeze({
 export function resolveBrowserConfig(env = {}) {
   const deploymentEnvironment = normalizeEnvironment(env.VERCEL_ENV);
   const names = ENVIRONMENT_CONFIG[deploymentEnvironment];
-  const commitSha = publicCommitSha(env.VERCEL_GIT_COMMIT_SHA);
+  const commitSha = publicCommitSha(env.VERCEL_GIT_COMMIT_SHA)
+    || publicCommitSha(env.FOLDARIUM_COMMIT_SHA);
   const url = normalizedHttpsUrl(env[names.url]);
   const publishableKey = publicBrowserKey(env[names.publishableKey] || env[names.anonKey]);
   const writesEnabled = !names.writesEnabled || env[names.writesEnabled] === '1';
