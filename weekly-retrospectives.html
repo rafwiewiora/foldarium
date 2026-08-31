@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Foldarium · Weekly retrospectives</title>
   <link rel="icon" type="image/svg+xml" href="/assets/foldarium-mark.svg?v=2026082501"/>
-  <link rel="stylesheet" href="/weekly-retrospectives.css?v=2026082701"/>
+  <link rel="stylesheet" href="/weekly-retrospectives.css?v=2026083002"/>
 </head>
 <body>
   <div id="archive-app">
@@ -18,8 +18,9 @@
     </header>
 
     <nav class="archive-tabs" aria-label="Retrospective views">
-      <a id="archive-tab" href="/weekly/retrospectives">Archive</a>
-      <a id="all-time-tab" href="/weekly/retrospectives?view=all-time">All-time</a>
+      <a id="archive-tab" data-view="archive" href="/weekly/retrospectives">Archive</a>
+      <a id="all-time-tab" data-view="all-time" href="/weekly/retrospectives?view=all-time">All-time</a>
+      <a id="cofolding-tab" data-view="cofolding" href="/weekly/retrospectives?view=cofolding">Cofolding</a>
     </nav>
 
     <main class="archive-shell">
@@ -60,6 +61,27 @@
         <div id="all-time-status" class="status" role="status" aria-live="polite"></div>
         <div id="all-time-table" class="ranking-table"></div>
       </section>
+
+      <section id="cofolding-view" hidden aria-labelledby="cofolding-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Raw-pose method performance</p>
+            <h1 id="cofolding-heading">Cofolding rankings</h1>
+          </div>
+        </div>
+        <p class="method-definition">Oracle counts a target when the method produces any raw pose below
+          1.5 Å RMSD. Top-1 tests the pose with that method’s highest ligand pLDDT.</p>
+        <div class="ranking-controls" aria-label="Cofolding controls">
+          <div class="segmented" id="cofolding-ranking-view">
+            <button type="button" data-cofolding-view="overall">Overall</button>
+            <button type="button" data-cofolding-view="weekly">Weekly trends</button>
+          </div>
+          <div class="segmented" id="cofolding-method-filter" aria-label="Cofolding method" hidden></div>
+        </div>
+        <div id="cofolding-status" class="status" role="status" aria-live="polite"></div>
+        <div id="cofolding-overall" class="ranking-table"></div>
+        <div id="cofolding-weekly" class="method-trend" hidden></div>
+      </section>
     </main>
 
     <dialog id="round-chooser" class="round-chooser" aria-labelledby="round-chooser-title">
@@ -70,6 +92,6 @@
       <div id="round-chooser-list" class="chooser-list"></div>
     </dialog>
   </div>
-  <script type="module" src="/weekly-retrospectives.js?v=2026082701"></script>
+  <script type="module" src="/weekly-retrospectives.js?v=2026083003"></script>
 </body>
 </html>

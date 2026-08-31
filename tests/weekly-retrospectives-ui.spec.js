@@ -51,8 +51,18 @@ const blindItems = [
     protein_uri: 'https://example.supabase.co/storage/v1/object/public/structures/protein.pdb',
     metadata: {},
     choices: [
-      { id: 'choice-a', pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/a.pdb' },
-      { id: 'choice-b', pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/b.pdb' },
+      {
+        id: 'choice-a',
+        method: 'boltz2',
+        confidence: { metric: 'ligand_plddt', value: 88 },
+        pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/a.pdb',
+      },
+      {
+        id: 'choice-b',
+        method: 'openfold3',
+        confidence: { metric: 'ligand_plddt', value: 82 },
+        pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/b.pdb',
+      },
     ],
   },
   {
@@ -62,7 +72,12 @@ const blindItems = [
     protein_uri: 'https://example.supabase.co/storage/v1/object/public/structures/protein.pdb',
     metadata: {},
     choices: [
-      { id: 'choice-c', pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/c.pdb' },
+      {
+        id: 'choice-c',
+        method: 'boltz2',
+        confidence: { metric: 'ligand_plddt', value: 76 },
+        pose_uri: 'https://example.supabase.co/storage/v1/object/public/structures/c.pdb',
+      },
     ],
   },
 ];
@@ -330,6 +345,13 @@ test('detail filters four outcomes, safely renders admin names, and fits mobile'
   await expect(page.locator('.question-list')).toContainText('Human players');
   await expect(page.locator('.question-list')).toContainText('0/2 correct');
   await expect(page.locator('.question-list')).toContainText('Automated methods');
+  await expect(page.locator('.target-method-table')).toHaveCount(2);
+  await expect(page.locator('.target-method-table').first().locator('tbody tr')).toHaveCount(2);
+  await expect(page.locator('.target-method-table').first()).toContainText('Boltz-2');
+  await expect(page.locator('.target-method-table').first()).toContainText('OpenFold3');
+  await expect(page.locator('.target-method-table').first().locator('.correct')).toHaveCount(2);
+  await expect(page.locator('.target-method-table').first().locator('.wrong')).toHaveCount(2);
+  await expect(page.locator('.target-method-table').nth(1).locator('.missing')).toHaveCount(2);
   await page.locator('.filter-row button[data-filter="pose-solved"]').click();
   await expect(page.locator('.question-row')).toHaveCount(1);
   await expect(page.locator('.question-row')).toContainText('LIG');
@@ -361,4 +383,26 @@ test('all-time exposes public Human pseudonyms and marks provisional rows', asyn
   await expect(page.locator('.ranking-table')).toContainText(maliciousName);
   await expect(page.locator('.ranking-table')).toContainText('Provisional');
   await expect(page.locator('.ranking-table img')).toHaveCount(0);
+});
+
+test('cofolding ranks raw-pose methods and exposes weekly trends', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await mockApi(page);
+  await unlock(page, baseUrl);
+  await page.evaluate(() => { window.cofoldingNavigationMarker = 'same-document'; });
+  await page.locator('#cofolding-tab').click();
+  await expect(page).toHaveURL(`${baseUrl}?view=cofolding`);
+  expect(await page.evaluate(() => window.cofoldingNavigationMarker)).toBe('same-document');
+  await expect(page.locator('#archive-gate')).toBeHidden();
+  await expect(page.locator('#cofolding-tab')).toHaveAttribute('aria-current', '');
+  await expect(page.locator('#cofolding-overall .method-ranking-row')).toHaveCount(3);
+  await expect(page.locator('#cofolding-overall')).toContainText('Boltz-2');
+  await expect(page.locator('#cofolding-overall')).toContainText('46%');
+  await page.locator('[data-cofolding-view="weekly"]').click();
+  await expect(page.locator('#cofolding-method-filter')).toBeVisible();
+  await expect(page.locator('.method-chart')).toBeVisible();
+  await expect(page.locator('.method-chart-oracle')).toHaveCount(1);
+  await expect(page.locator('.method-chart-top1')).toHaveCount(1);
+  await expect(page.locator('.method-data summary')).toHaveText('View data table');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
