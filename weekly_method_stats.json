@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "source": "Production revealed Weekly rounds through 2026-08-22",
+  "metric": {
+    "correctness": "Raw pose RMSD < 1.5 A",
+    "oracle": "Any raw-correct pose produced by the method",
+    "top1": "Highest ligand pLDDT pose; choice ID ascending breaks ties",
+    "missing_confidence": "Excluded from the top-1 denominator"
+  },
+  "weeks": [
+    {
+      "week": "2026-08-08",
+      "method": "boltz2",
+      "targets": 29,
+      "oracle_successes": 13,
+      "top1_evaluated": 29,
+      "top1_successes": 10
+    },
+    {
+      "week": "2026-08-08",
+      "method": "openfold3",
+      "targets": 29,
+      "oracle_successes": 13,
+      "top1_evaluated": 29,
+      "top1_successes": 8
+    },
+    {
+      "week": "2026-08-15",
+      "method": "boltz2",
+      "targets": 32,
+      "oracle_successes": 15,
+      "top1_evaluated": 32,
+      "top1_successes": 13
+    },
+    {
+      "week": "2026-08-15",
+      "method": "openfold3",
+      "targets": 32,
+      "oracle_successes": 13,
+      "top1_evaluated": 32,
+      "top1_successes": 8
+    },
+    {
+      "week": "2026-08-22",
+      "method": "boltz2",
+      "targets": 39,
+      "oracle_successes": 18,
+      "top1_evaluated": 39,
+      "top1_successes": 18
+    },
+    {
+      "week": "2026-08-22",
+      "method": "openfold3",
+      "targets": 39,
+      "oracle_successes": 18,
+      "top1_evaluated": 39,
+      "top1_successes": 15
+    }
+  ]
+}

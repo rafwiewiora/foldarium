@@ -122,6 +122,15 @@ Results and retrospective displays preserve the distinction among cluster
 labels, raw pose labels, and `None`. Names and counts stay attached to the mode
 actually submitted.
 
+### Cofolding method performance
+
+Cofolding performance is scientific scoring, not ballot scoring. Oracle and
+top-1 rates use each raw pose's strict `correct` value (RMSD below 1.5 Å);
+cluster `accepted_correct` must not inflate either metric. Top-1 is selected
+independently within each method by highest ligand pLDDT, with stable choice ID
+as the tie-breaker. A target without ligand pLDDT is excluded from only that
+method's top-1 denominator.
+
 ### Deterministic Smina player
 
 `Smina` is a synthetic, reproducible participant, not a hidden answer oracle.
