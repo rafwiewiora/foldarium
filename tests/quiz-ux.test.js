@@ -165,6 +165,7 @@ test('weekly entry hides irrelevant setup and uses light research controls', asy
   assert.match(html, /\.participant-setup\{[\s\S]*?background:#f6f8fa\}/);
   assert.match(html, /\.dialog-form input,\.dialog-form textarea\{[\s\S]*?background:#fff/);
   assert.match(html, /\.privacy-note\{[\s\S]*?background:#f6f8fa/);
+  assert.match(html, /Includes the name entered for this quiz and your current view/);
 });
 
 test('Submit answer matches the bottom viewer controls', async () => {

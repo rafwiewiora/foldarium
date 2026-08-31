@@ -51,6 +51,18 @@ function recordingFetch(body, options = {}) {
   return fetchImpl;
 }
 
+function routingFetch(resolve) {
+  async function fetchImpl(url, requestOptions) {
+    fetchImpl.calls.push({ url, headers: requestOptions.headers });
+    return {
+      ok: true,
+      json: async () => resolve(url),
+    };
+  }
+  fetchImpl.calls = [];
+  return fetchImpl;
+}
+
 function handler({ env = configuredEnv, fetchImpl = failIfCalled() } = {}) {
   return createReplayHandler({ env, fetchImpl });
 }
@@ -147,6 +159,52 @@ test('returns ordered weekly vote attempts and bounded suggestion records from s
   assert.equal(suggestions.statusCode, 200);
   assert.match(fetchImpl.url, /replay_user_suggestions_safe/);
   assert.match(fetchImpl.url, /limit=100/);
+});
+
+test('associates suggestions with classic and weekly stored session names', async () => {
+  const classicId = '00000000-0000-4000-8000-000000000001';
+  const weeklyId = '00000000-0000-4000-8000-000000000002';
+  const fetchImpl = routingFetch(url => {
+    if (url.includes('/replay_user_suggestions_safe?')) {
+      return [
+        { suggestion_id: 'classic-feedback', quiz_session_id: classicId, weekly_session_id: null },
+        { suggestion_id: 'weekly-feedback', quiz_session_id: null, weekly_session_id: weeklyId },
+      ];
+    }
+    if (url.includes('/quiz_sessions?')) {
+      return [{ id: classicId, display_name: 'Ada Lovelace' }];
+    }
+    if (url.includes('/weekly_quiz_sessions?')) {
+      return [{ session_id: weeklyId, display_name: 'Grace Hopper' }];
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  });
+
+  const response = await invoke(handler({ fetchImpl }), {
+    password: 'correct horse',
+    action: 'suggestions',
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(JSON.parse(response.body), [
+    {
+      suggestion_id: 'classic-feedback',
+      quiz_session_id: classicId,
+      weekly_session_id: null,
+      display_name: 'Ada Lovelace',
+    },
+    {
+      suggestion_id: 'weekly-feedback',
+      quiz_session_id: null,
+      weekly_session_id: weeklyId,
+      display_name: 'Grace Hopper',
+    },
+  ]);
+  assert.equal(fetchImpl.calls.length, 3);
+  assert.match(fetchImpl.calls[0].url, /replay_user_suggestions_safe/);
+  assert.doesNotMatch(fetchImpl.calls[0].url, /display_name,/);
+  assert.match(fetchImpl.calls[1].url, new RegExp(`quiz_sessions.*id=in\\.\\(${classicId}\\)`));
+  assert.match(fetchImpl.calls[2].url, new RegExp(`weekly_quiz_sessions.*session_id=in\\.\\(${weeklyId}\\)`));
 });
 
 test('returns append-only weekly thinking batches in acknowledged order', async () => {
