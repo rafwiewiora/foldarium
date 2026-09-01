@@ -568,7 +568,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Player name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=202608287/);
+  assert.match(html, /app\.js\?v=2026090101/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);

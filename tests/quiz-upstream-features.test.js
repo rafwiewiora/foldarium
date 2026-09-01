@@ -223,8 +223,10 @@ test('a failed canonical rebuild leaves the already-loaded Grid tiles intact', a
 test('content-addressed weekly assets retain stable cache keys', async () => {
   const app = await readApp();
   assert.match(app, /url\.startsWith\('supabase:\/\/'\)\) return resolved/);
-  assert.match(app, /builders\.data\.download\(\{ url: structureRequestUrl\(url\)/);
-  assert.match(app, /fetch\(structureRequestUrl\(url\)\)/);
+  assert.match(app, /const requestUrl = structureRequestUrl\(url\)/);
+  assert.match(app, /structurePrefetcher\.text\(requestUrl\)/);
+  assert.match(app, /builders\.data\.download\(\{ url: requestUrl/);
+  assert.match(app, /fetch\(requestUrl\)/);
 });
 
 test('leaving Grid keeps rebuilding the single view before disposing Grid viewers', async () => {

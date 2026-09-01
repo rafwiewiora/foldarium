@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const appUrl = new URL('../app.js', import.meta.url);
 const htmlUrl = new URL('../index.html', import.meta.url);
+const prefetchUrl = new URL('../structure-prefetch.js', import.meta.url);
 
 test('weekly thinking trace covers periodic, navigation, vote, visibility, and completion boundaries', async () => {
   const app = await readFile(appUrl, 'utf8');
@@ -51,9 +52,21 @@ test('name form waits for readiness while persistence initializes in parallel', 
 });
 
 test('the next question immutable structure assets are prefetched with bounded concurrency', async () => {
-  const app = await readFile(appUrl, 'utf8');
+  const [app, html, prefetch] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(htmlUrl, 'utf8'),
+    readFile(prefetchUrl, 'utf8'),
+  ]);
+  assert.match(html, /import\('\.\/structure-prefetch\.js'\)/);
   assert.match(app, /async function prefetchQuestionAssets\(questionIndex\)/);
-  assert.match(app, /Array\.from\(\{ length: Math\.min\(4, urls\.length\) \}, worker\)/);
+  assert.match(app, /initialQuestionAssetPaths\(item, initialChoice\)/);
+  assert.match(app, /initialChoice = clustered \? clusters\[0\]\?\.rep : clusters\[0\]\?\.members\?\.\[0\]/);
+  assert.match(app, /WEEKLY_PREFETCHED_CLUSTERS\.set\(item\.id, clusters\)/);
+  assert.match(app, /structurePrefetcher\.cancel\(\)/);
+  assert.match(app, /structurePrefetcher\.text\(requestUrl\)/);
+  assert.match(app, /builders\.data\.rawData\(\{ data: prefetchedText/);
   assert.match(app, /void prefetchQuestionAssets\(i \+ 1\)/);
-  assert.match(app, /fetch\(url, \{ cache: 'force-cache' \}\)/);
+  assert.match(prefetch, /const DEFAULT_CONCURRENCY = 2/);
+  assert.match(prefetch, /cache: 'force-cache'/);
+  assert.match(prefetch, /new AbortController\(\)/);
 });

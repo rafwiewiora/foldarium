@@ -1262,6 +1262,67 @@ if modal is not None:
         return report
 
     @app.function(
+        image=control_image,
+        cpu=1.0,
+        memory=1024,
+        secrets=[control_plane_secret],
+        timeout=2 * 60 * 60,
+        max_containers=1,
+    )
+    def backfill_weekly_public_cache(
+        round_id: str,
+        apply: bool = False,
+        public_quiz_bucket: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify one exact round and optionally replace bytes to set cache metadata."""
+
+        from foldarium_pipeline.cache_backfill import (
+            backfill_immutable_cache,
+            verified_public_object_inventory,
+        )
+        from foldarium_pipeline.supabase import (
+            SupabaseConfigurationError,
+            SupabaseCoordinator,
+        )
+
+        private = SupabaseCoordinator.from_env()
+        try:
+            public_bucket = _weekly_public_bucket(public_quiz_bucket)
+        except ValueError as exc:
+            raise SupabaseConfigurationError(
+                f"missing or invalid {PUBLIC_QUIZ_BUCKET_ENV}"
+            ) from exc
+        public_environment = dict(os.environ)
+        public_environment["FOLDARIUM_STORAGE_BUCKET"] = public_bucket
+        public = SupabaseCoordinator.from_env(public_environment)
+        if public.storage_bucket == private.storage_bucket:
+            raise SupabaseConfigurationError("public quiz bucket must differ from predictions")
+
+        round_row = private.weekly_quiz_round(round_id)
+        if round_row.get("environment") != "production":
+            raise ValueError("cache backfill accepts production rounds only")
+        if apply and round_row.get("status") != "revealed":
+            raise ValueError("refusing to update a round that is not revealed")
+        manifest = round_row.get("blind_manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError("weekly round blind manifest is unavailable")
+        inventory = verified_public_object_inventory(
+            manifest,
+            round_id=round_id,
+            expected_manifest_sha256=round_row["blind_manifest_sha256"],
+            public_bucket=public.storage_bucket,
+        )
+        summary = backfill_immutable_cache(public, inventory, apply=apply)
+        summary.update(
+            {
+                "round_id": round_id,
+                "round_status": round_row.get("status"),
+                "object_count": len(inventory),
+            }
+        )
+        return summary
+
+    @app.function(
         image=openfold3_image,
         cpu=2.0,
         memory=8192,

@@ -105,6 +105,67 @@ class TransientMsaRetrySubmissionTests(unittest.TestCase):
             ):
                 module._weekly_public_bucket(invalid)
 
+    def test_weekly_cache_backfill_is_dry_run_first_and_reveal_gated(self) -> None:
+        module = self.deployment_module()
+        content = b"public structure"
+        digest = hashlib.sha256(content).hexdigest()
+        object_uri = (
+            f"supabase://foldarium-weekly-quiz/sha256/{digest[:2]}/{digest}"
+        )
+        manifest = {
+            "round_id": "weekly-cache-test",
+            "items": [{"protein_file": object_uri}],
+        }
+
+        class PrivateCoordinator:
+            storage_bucket = "prediction-results"
+
+            def weekly_quiz_round(self, round_id):
+                return {
+                    "round_id": round_id,
+                    "environment": "production",
+                    "status": "open",
+                    "blind_manifest": manifest,
+                    "blind_manifest_sha256": hashlib.sha256(
+                        json.dumps(
+                            manifest,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest(),
+                }
+
+        class PublicCoordinator:
+            storage_bucket = "foldarium-weekly-quiz"
+
+            def __init__(self):
+                self.replacements = []
+
+            def download_content_object(self, uri, *, expected_sha256):
+                self.download = (uri, expected_sha256)
+                return content
+
+            def replace_content_object(self, *args, **kwargs):
+                self.replacements.append((args, kwargs))
+
+        private = PrivateCoordinator()
+        public = PublicCoordinator()
+        raw_function = module.backfill_weekly_public_cache.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            side_effect=[private, public],
+        ):
+            report = raw_function("weekly-cache-test", False, "foldarium-weekly-quiz")
+        self.assertEqual(report["mode"], "dry-run")
+        self.assertEqual(report["verified_objects"], 1)
+        self.assertEqual(public.replacements, [])
+
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            side_effect=[private, public],
+        ), self.assertRaisesRegex(ValueError, "not revealed"):
+            raw_function("weekly-cache-test", True, "foldarium-weekly-quiz")
+
     def test_bare_modal_deploy_fails_before_app_construction(self) -> None:
         path = Path(__file__).resolve().parents[1] / "deploy" / "modal_app.py"
         script = f"""
