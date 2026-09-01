@@ -819,6 +819,7 @@ import {
     try {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
       await import('./structure-assets.js');
+      await import('./structure-prefetch.js');
       await import('./dev2-feedback.js');
       const rebuildModule = await import('./viewer-rebuild-coordinator.js');
       window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
@@ -831,7 +832,7 @@ import {
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=202608287');
+      await loadScript('app.js?v=2026090101');
     } catch (e) {
       console.error('Failed to load quiz assets:', e);
       wrap.hidden = false;

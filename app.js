@@ -224,6 +224,7 @@ let localWeeklyScoredItems = new Set();
 let WEEKLY_SELECTOR_RESULTS = null;
 let WEEKLY_SELECTOR_RESULTS_ERROR = '';
 let WEEKLY_ITEM_STATES = new Map();
+let WEEKLY_PREFETCHED_CLUSTERS = new Map();
 let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
 let participantDisplayName = '';
@@ -633,8 +634,12 @@ function structureRequestUrl(url) {
 async function loadStruct(url, format, targetPlugin = plugin, structureParams = undefined) {
   // Mol* otherwise uses the full signed/public Storage URL as the model label,
   // which leaks into its residue hover overlay.
-  const data = await targetPlugin.builders.data.download({ url: structureRequestUrl(url),
-    isBinary: false, label: 'Foldarium' });
+  const requestUrl = structureRequestUrl(url);
+  const prefetchedText = structurePrefetcher.text(requestUrl);
+  const data = prefetchedText === null
+    ? await targetPlugin.builders.data.download({ url: requestUrl,
+      isBinary: false, label: 'Foldarium' })
+    : await targetPlugin.builders.data.rawData({ data: prefetchedText, label: 'Foldarium' });
   const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
   const model = await targetPlugin.builders.structure.createModel(traj);
   const struct = await targetPlugin.builders.structure.createStructure(model, structureParams);
@@ -648,7 +653,10 @@ async function loadStructText(text, format, targetPlugin = plugin) {
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
-  const r = await fetch(structureRequestUrl(url));
+  const requestUrl = structureRequestUrl(url);
+  const prefetchedText = structurePrefetcher.text(requestUrl);
+  if (prefetchedText !== null) return prefetchedText;
+  const r = await fetch(requestUrl);
   return r.ok ? await r.text() : '';
 }
 function pdbCoordinateRecords(text) {
@@ -868,31 +876,33 @@ function mergeRetrospectiveInteractionPdb({
   }
   return parts.filter(Boolean).join('\nTER\n') + '\nEND\n';
 }
-const prefetchedStructureUrls = new Set();
+const structurePrefetcher = window.foldariumStructurePrefetch.createStructurePrefetcher();
+function buildQuestionClusters(item) {
+  const byCluster = {};
+  item.choices.forEach(choice => (byCluster[choice.cluster] ??= []).push({ ...choice }));
+  return shuffle(Object.values(byCluster)).map((members, index) => {
+    const color = PALETTE[index % PALETTE.length];
+    const label = LABELS[index % LABELS.length];
+    decorateClusterMembers(members, label, item.source);
+    members.forEach(member => {
+      member.color = color;
+    });
+    return { label, color, members, rep: members.find(member => member.is_rep) || members[0] };
+  });
+}
 async function prefetchQuestionAssets(questionIndex) {
   const item = ITEMS[questionIndex];
   if (!item) return;
-  const urls = [...new Set([
-    item.protein_file, item.pocket_file,
-    ...item.choices.flatMap(choice => [
-      choice.pose_file, choice.afprotein_file, choice.afpocket_file,
-    ]),
-  ].filter(Boolean).map(structureRequestUrl))]
-    .filter(url => !prefetchedStructureUrls.has(url));
-  urls.forEach(url => prefetchedStructureUrls.add(url));
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < urls.length) {
-      const url = urls[cursor++];
-      try {
-        const response = await fetch(url, { cache: 'force-cache' });
-        if (response.ok) await response.arrayBuffer();
-      } catch {
-        prefetchedStructureUrls.delete(url);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(4, urls.length) }, worker));
+  let initialChoice = item.choices?.[0];
+  if (item.source === 'weekly') {
+    const clusters = WEEKLY_ITEM_STATES.get(item.id)?.clusters
+      || WEEKLY_PREFETCHED_CLUSTERS.get(item.id)
+      || buildQuestionClusters(item);
+    WEEKLY_PREFETCHED_CLUSTERS.set(item.id, clusters);
+    initialChoice = clustered ? clusters[0]?.rep : clusters[0]?.members?.[0];
+  }
+  const paths = window.foldariumStructurePrefetch.initialQuestionAssetPaths(item, initialChoice);
+  await structurePrefetcher.prefetch(paths.map(structureRequestUrl));
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
 const atomRecords = t => t.split('\n').filter(l => /^(ATOM|HETATM|TER)/.test(l)).join('\n');
@@ -3083,6 +3093,7 @@ function requestQuestionCameraReset() {
 }
 
 async function loadQuestion(i) {
+  structurePrefetcher.cancel();
   const item = ITEMS[i];
   const loadStartedAt = Date.now();
   const wrap = $('#wrap');
@@ -3095,16 +3106,10 @@ async function loadQuestion(i) {
   $('#answer-choices').replaceChildren();
   const savedWeeklyState = item.source === 'weekly' ? WEEKLY_ITEM_STATES.get(item.id) : null;
   // Keep a Weekly question's randomised labels and all local review state stable when navigating away/back.
-  const byCluster = {};
-  item.choices.forEach(c => (byCluster[c.cluster] ??= []).push({ ...c }));
-  const clusters = savedWeeklyState?.clusters || shuffle(Object.values(byCluster)).map((members, k) => {
-    const color = PALETTE[k % PALETTE.length], label = LABELS[k % LABELS.length];
-    decorateClusterMembers(members, label, item.source);
-    members.forEach(m => {
-      m.color = color;
-    });
-    return { label, color, members, rep: members.find(m => m.is_rep) || members[0] };
-  });
+  const clusters = savedWeeklyState?.clusters
+    || WEEKLY_PREFETCHED_CLUSTERS.get(item.id)
+    || buildQuestionClusters(item);
+  if (item.source === 'weekly') WEEKLY_PREFETCHED_CLUSTERS.set(item.id, clusters);
   try {
     await viewerRebuild.enqueue(
     async () => {
@@ -4409,6 +4414,7 @@ function drawSession() {
 function beginQuiz(initialQuestionIndex = 0) {
   ITEMS = drawSession();
   WEEKLY_ITEM_STATES = new Map();
+  WEEKLY_PREFETCHED_CLUSTERS = new Map();
   localWeeklyScore = { correct: 0, answered: 0 };
   localWeeklyScoredItems = new Set();
   weeklyCommentPromptEnabled = true;
@@ -5550,6 +5556,7 @@ async function init() {
     WEEKLY_TOTALS = totals;
     WEEKLY_VOTES = new Map();
     WEEKLY_ITEM_STATES = new Map();
+    WEEKLY_PREFETCHED_CLUSTERS = new Map();
     WEEKLY_QUESTION_RESULTS = {
       items: detail.retrospective.questions.map(question => ({
         item_id: question.item_id,
@@ -5631,6 +5638,7 @@ async function init() {
     WEEKLY_TOTALS = totals;
     WEEKLY_VOTES = new Map();
     WEEKLY_ITEM_STATES = new Map();
+    WEEKLY_PREFETCHED_CLUSTERS = new Map();
     WEEKLY_QUESTION_RESULTS = null;
     WEEKLY_LEADERBOARD = weeklyLeaderboardFromRetrospectiveSummary({
       round_id: detail.round.round_id,
@@ -5998,6 +6006,7 @@ async function init() {
     WEEKLY_VOTES = new Map();
     WEEKLY_TOTALS = privateVoteTotals;
     WEEKLY_ITEM_STATES = new Map();
+    WEEKLY_PREFETCHED_CLUSTERS = new Map();
     remoteSessionId = null;
     weeklyTraceSessionSeed = null;
     retrospectiveQuestionFilter = 'all';
