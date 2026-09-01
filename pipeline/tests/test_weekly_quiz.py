@@ -1549,8 +1549,18 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
 
     def test_public_upload_result_must_match_exact_content_digest(self) -> None:
         class InvalidResultCoordinator(FakeCoordinator):
-            def store_bytes(self, content: bytes, media_type: str) -> dict:
-                result = super().store_bytes(content, media_type)
+            def store_bytes(
+                self,
+                content: bytes,
+                media_type: str,
+                *,
+                cache_control: str | None = None,
+            ) -> dict:
+                result = super().store_bytes(
+                    content,
+                    media_type,
+                    cache_control=cache_control,
+                )
                 result["sha256"] = "0" * 64
                 return result
 
