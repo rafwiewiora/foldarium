@@ -12,6 +12,7 @@ from unittest import mock
 
 from foldarium_pipeline.contracts import SCHEMA_VERSION, canonical_json
 from foldarium_pipeline.quiz import build_blind_manifest, manifest_sha256
+from foldarium_pipeline.supabase import IMMUTABLE_PUBLIC_CACHE_CONTROL
 from foldarium_pipeline.weekly_quiz import (
     WeeklyQuizAssemblyError,
     backfill_selector_kit_for_round,
@@ -82,6 +83,7 @@ class FakeCoordinator:
     def __init__(self, bucket: str) -> None:
         self.storage_bucket = bucket
         self.stored: dict[str, tuple[bytes, str]] = {}
+        self.cache_controls: list[str | None] = []
         self.downloads: list[str] = []
         self.registered: list[dict[str, Any]] = []
         self.campaign_rows: list[dict[str, Any]] = []
@@ -89,9 +91,16 @@ class FakeCoordinator:
     def require_public_bucket(self) -> None:
         return None
 
-    def store_bytes(self, content: bytes, media_type: str) -> dict[str, Any]:
+    def store_bytes(
+        self,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str | None = None,
+    ) -> dict[str, Any]:
         digest = hashlib.sha256(content).hexdigest()
         self.stored[digest] = (content, media_type)
+        self.cache_controls.append(cache_control)
         return {
             "object_uri": f"supabase://{self.storage_bucket}/sha256/{digest[:2]}/{digest}",
             "sha256": digest,
@@ -225,6 +234,8 @@ class SelectorKitPublicationTests(unittest.TestCase):
         stored_zip, media_type = public.stored[zip_digest]
         self.assertEqual(media_type, "application/zip")
         self.assertEqual(stored_zip, zip_bytes)
+        self.assertEqual(public.cache_controls, [IMMUTABLE_PUBLIC_CACHE_CONTROL])
+        self.assertEqual(private.cache_controls, [None])
         self.assertEqual(len(private.registered), 1)
         self.assertEqual(private.registered[0]["round_id"], self.round_id)
 

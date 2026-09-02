@@ -7,6 +7,7 @@
     writable: false,
     deploymentEnvironment: 'unknown',
     commitSha: '',
+    performanceBetaEnabled: false,
   });
 
   window.FOLDARIUM_SUPABASE = disabled;
@@ -16,7 +17,14 @@
     // Quiz startup consumes this global as soon as this script's load event fires.
     // A synchronous same-origin request keeps that existing contract race-free.
     const request = new XMLHttpRequest();
-    request.open('GET', '/api/config', false);
+    const search = window.location?.search || '';
+    const diagnosticsProduction = /(?:^|[?&])perf(?:=|&|$)/.test(search)
+      && !/(?:^|[?&])record_performance=1(?:&|$)/.test(search);
+    request.open(
+      'GET',
+      diagnosticsProduction ? '/api/config?performance_source=production' : '/api/config',
+      false,
+    );
     request.send(null);
     if (request.status !== 200) throw new Error('runtime config unavailable');
 
@@ -31,6 +39,7 @@
       writable: config.writable,
       deploymentEnvironment: config.deploymentEnvironment,
       commitSha: config.commitSha,
+      performanceBetaEnabled: config.performanceBetaEnabled,
     });
   } catch (error) {
     loadError = error;
@@ -46,7 +55,8 @@
   function isRuntimeConfig(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     if (typeof value.enabled !== 'boolean' || typeof value.writable !== 'boolean') return false;
-    if (typeof value.deploymentEnvironment !== 'string' || typeof value.commitSha !== 'string') return false;
+    if (typeof value.deploymentEnvironment !== 'string' || typeof value.commitSha !== 'string'
+      || typeof value.performanceBetaEnabled !== 'boolean') return false;
     if (typeof value.url !== 'string'
       || typeof value.publishableKey !== 'string'
       || typeof value.structureBaseUrl !== 'string') return false;

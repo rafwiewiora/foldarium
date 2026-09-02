@@ -21,23 +21,31 @@ const ENVIRONMENT_CONFIG = Object.freeze({
   }),
 });
 
-export function resolveBrowserConfig(env = {}) {
-  const deploymentEnvironment = normalizeEnvironment(env.FOLDARIUM_ENV);
-  const names = ENVIRONMENT_CONFIG[deploymentEnvironment];
+export function resolveBrowserConfig(env = {}, { readOnlyProductionData = false } = {}) {
+  const credentialEnvironment = normalizeEnvironment(env.FOLDARIUM_ENV);
+  const deploymentEnvironment = explicitEnvironment(env.FOLDARIUM_WEEKLY_DATA_ENVIRONMENT)
+    || (readOnlyProductionData && credentialEnvironment === 'preview'
+      ? 'production'
+      : credentialEnvironment);
+  const names = ENVIRONMENT_CONFIG[credentialEnvironment];
   const commitSha = publicCommitSha(env.FOLDARIUM_COMMIT_SHA);
   const url = normalizedHttpsUrl(env[names.url]);
   const publishableKey = publicBrowserKey(env[names.publishableKey] || env[names.anonKey]);
-  const writesEnabled = !names.writesEnabled || env[names.writesEnabled] === '1';
+  const writesEnabled = !readOnlyProductionData
+    && (!names.writesEnabled || env[names.writesEnabled] === '1');
+  const performanceBetaEnabled = env.FOLDARIUM_PERFORMANCE_BETA === '1';
 
   if (!url || !publishableKey) {
-    return disabledConfig(deploymentEnvironment, commitSha);
+    return disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled);
   }
 
   const configuredStructureUrl = env[names.structureBaseUrl];
   const structureBaseUrl = configuredStructureUrl
     ? normalizedHttpsUrl(configuredStructureUrl)
     : `${url}/storage/v1/object/public/structures`;
-  if (!structureBaseUrl) return disabledConfig(deploymentEnvironment, commitSha);
+  if (!structureBaseUrl) {
+    return disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled);
+  }
 
   return {
     url,
@@ -47,6 +55,7 @@ export function resolveBrowserConfig(env = {}) {
     writable: writesEnabled,
     deploymentEnvironment,
     commitSha,
+    performanceBetaEnabled,
   };
 }
 
@@ -58,12 +67,19 @@ export function createConfigHandler({ env = process.env } = {}) {
       response.setHeader('Allow', 'GET');
       return response.status(405).json({ error: 'Method not allowed' });
     }
-    return response.status(200).json(resolveBrowserConfig(env));
+    const query = new URL(request.url || '/api/config', 'https://foldarium.invalid').searchParams;
+    const readOnlyProductionData = normalizeEnvironment(env.FOLDARIUM_ENV) === 'preview'
+      && query.get('performance_source') === 'production';
+    return response.status(200).json(resolveBrowserConfig(env, { readOnlyProductionData }));
   };
 }
 
 function normalizeEnvironment(value) {
   return Object.hasOwn(ENVIRONMENT_CONFIG, value) ? value : 'development';
+}
+
+function explicitEnvironment(value) {
+  return Object.hasOwn(ENVIRONMENT_CONFIG, value) ? value : null;
 }
 
 function normalizedHttpsUrl(value) {
@@ -97,7 +113,7 @@ function publicCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{7,64}$/i.test(value) ? value : '';
 }
 
-function disabledConfig(deploymentEnvironment, commitSha) {
+function disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled = false) {
   return {
     url: '',
     publishableKey: '',
@@ -106,6 +122,7 @@ function disabledConfig(deploymentEnvironment, commitSha) {
     writable: false,
     deploymentEnvironment,
     commitSha,
+    performanceBetaEnabled,
   };
 }
 

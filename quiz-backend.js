@@ -3,6 +3,7 @@ const DEAD_LETTER_PREFIX = 'foldariumSyncDeadV2:';
 const KIND_ORDER = { session: 0, answer: 1, complete: 2 };
 const MAX_VIEWER_TRACE_BYTES = 512 * 1024;
 const MAX_SUGGESTION_CONTEXT_BYTES = 512 * 1024;
+const MAX_PERFORMANCE_REPORT_BYTES = 32 * 1024;
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/+esm';
 
 function normalizeViewerTraceResult(viewerTrace) {
@@ -97,6 +98,9 @@ const disabledBackend = {
   submitWeeklyTraceBatch: async () => {
     throw new Error('Weekly thinking-trace persistence is unavailable.');
   },
+  submitWeeklyPerformanceReport: async () => {
+    throw new Error('Weekly performance-report persistence is unavailable.');
+  },
   submitUserSuggestion: async () => {
     throw new Error('Suggestion persistence is unavailable.');
   },
@@ -138,6 +142,7 @@ function readOnlyBackend(readBackend) {
     submitWeeklyVote: async () => unavailable(),
     submitWeeklyVoteAttempt: async () => unavailable(),
     submitWeeklyTraceBatch: async () => unavailable(),
+    submitWeeklyPerformanceReport: async () => unavailable(),
     submitUserSuggestion: async () => unavailable(),
   };
 }
@@ -231,6 +236,9 @@ export function createDeferredBackend({
     },
     async submitWeeklyTraceBatch(...args) {
       return (await requireTarget()).submitWeeklyTraceBatch(...args);
+    },
+    async submitWeeklyPerformanceReport(...args) {
+      return (await requireTarget()).submitWeeklyPerformanceReport(...args);
     },
     async submitUserSuggestion(...args) {
       return (await requireTarget()).submitUserSuggestion(...args);
@@ -745,6 +753,38 @@ export function createQuizBackend({
         p_flush_reason: reason,
         p_trace: normalizedTrace,
         p_app_state: normalizedState,
+      }, true);
+    },
+    async submitWeeklyPerformanceReport({
+      reportId = uuid(), sessionId, roundId, itemId, questionIndex, report,
+    }) {
+      if (!reportId || !sessionId || !roundId || !itemId
+        || !Number.isInteger(questionIndex) || questionIndex < 0) {
+        throw new Error('Weekly performance-report identity is invalid.');
+      }
+      const normalizedReport = normalizeJsonObject(
+        report,
+        'Weekly performance report',
+        MAX_PERFORMANCE_REPORT_BYTES,
+      );
+      if (normalizedReport.schema_version !== 'foldarium.viewer-performance-diagnostics/v1'
+        || normalizedReport.consent !== 'explicit-beta-checkbox'
+        || !normalizedReport.setup || typeof normalizedReport.setup !== 'object'
+        || !normalizedReport.question || typeof normalizedReport.question !== 'object'
+        || !normalizedReport.structures || typeof normalizedReport.structures !== 'object'
+        || normalizedReport.question.item_id !== itemId
+        || normalizedReport.question.question_index !== questionIndex
+        || /"(?:display[_-]?name|participant[_-]?name|player[_-]?name|user[_-]?agent|asset[_-]?url|ip[_-]?address|plugins?|fonts?|vendor|renderer)"\s*:/i
+          .test(JSON.stringify(normalizedReport))) {
+        throw new Error('Weekly performance report is invalid.');
+      }
+      return leaderboardRpc('append_weekly_viewer_performance_report', {
+        p_report_id: reportId,
+        p_session_id: sessionId,
+        p_round_id: roundId,
+        p_item_id: itemId,
+        p_question_index: questionIndex,
+        p_report: normalizedReport,
       }, true);
     },
     async submitUserSuggestion({

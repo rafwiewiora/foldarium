@@ -165,7 +165,7 @@ function gridLayerSandbox(overrides = {}) {
   return sandbox;
 }
 
-test('Grid builds visible tiles before the hidden replay scene', async () => {
+test('Grid builds visible tiles without blocking on the hidden canonical scene', async () => {
   const app = await readApp();
   const sandbox = gridLayerSandbox();
   const buildLayer = evaluateDeclaration(app, 'async function buildLayer()', sandbox);
@@ -176,7 +176,6 @@ test('Grid builds visible tiles before the hidden replay scene', async () => {
     '#stage:grid-active',
     '#gridview:on,loading-grid',
     'grid:true,false',
-    'canonical:pose-a.pdb,pose-b.pdb:true',
   ]);
 });
 
@@ -196,14 +195,13 @@ test('released crystal mode replaces Grid with the separate experimental scene',
   ]);
 });
 
-test('initial Grid framing ignores the empty canonical camera', async () => {
+test('Grid framing ignores the hidden canonical camera', async () => {
   const app = await readApp();
-  assert.match(app, /const hadCanonicalScene = proteinData\.length > 0 \|\| layerData\.length > 0/);
-  assert.match(app, /await buildGrid\(!resetCamera, !resetCamera && hadCanonicalScene\)/);
+  assert.match(app, /await buildGrid\(!resetCamera, false\)/);
   assert.match(app, /preserveCanonicalCamera \? plugin\?\.canvas3d\?\.camera\?\.getSnapshot\?\.\(\) : null/);
 });
 
-test('a failed canonical rebuild leaves the already-loaded Grid tiles intact', async () => {
+test('Grid readiness does not invoke a failing hidden canonical rebuild', async () => {
   const app = await readApp();
   const sandbox = gridLayerSandbox({
     buildCanonicalLayer: async () => { throw new Error('pose download failed'); },
@@ -216,15 +214,16 @@ test('a failed canonical rebuild leaves the already-loaded Grid tiles intact', a
     '#stage:grid-active',
     '#gridview:on,loading-grid',
     'grid:true,false',
-    'warn:pose download failed',
   ]);
 });
 
 test('content-addressed weekly assets retain stable cache keys', async () => {
   const app = await readApp();
   assert.match(app, /url\.startsWith\('supabase:\/\/'\)\) return resolved/);
-  assert.match(app, /builders\.data\.download\(\{ url: structureRequestUrl\(url\)/);
-  assert.match(app, /fetch\(structureRequestUrl\(url\)\)/);
+  assert.match(app, /const requestUrl = structureRequestUrl\(url\)/);
+  assert.match(app, /structurePrefetcher\.textWhenReady\(requestUrl\)/);
+  assert.match(app, /builders\.data\.download\(\{\s+url: requestUrl/);
+  assert.match(app, /fetch\(requestUrl\)/);
 });
 
 test('leaving Grid keeps rebuilding the single view before disposing Grid viewers', async () => {
@@ -268,6 +267,8 @@ test('question transitions discard stale Grid and canonical cameras before recor
 
   assert.ok(stop >= 0, 'expected the recorder to stop in the queued mutation');
   assert.ok(stop < settled && settled < started, 'expected recording to start after the rebuild settles');
+  assert.match(loadQuestion, /if \(displayMode !== 'grid'\) \{\s*await window\.waitForCameraSettled/,
+    'Grid cells settle their own cameras and must not wait on the hidden canonical viewer');
   assert.match(loadQuestion, /requestReset: requestQuestionCameraReset/);
   const resetBuild = loadQuestion.indexOf('resetCameraOnNextBuild = true;');
   const disposeGrid = loadQuestion.indexOf('disposeGridViewers();');
@@ -280,10 +281,8 @@ test('question transitions discard stale Grid and canonical cameras before recor
   assert.equal(gridSandbox.resetCameraOnNextBuild, false, 'question reset must be one-shot');
   assert.equal(gridSandbox.calls[2], 'grid:false,false',
     'new Grid questions must frame their own structures');
-  assert.deepEqual(gridSandbox.calls.slice(3), [
-    'canonical:pose-a.pdb,pose-b.pdb:false',
-    'pin:fresh',
-  ], 'hidden replay viewer must rebuild without stale framing, then mirror the fresh Grid camera');
+  assert.deepEqual(gridSandbox.calls.slice(3), [],
+    'new Grid questions must not block on an invisible canonical rebuild');
 
   const singleSandbox = gridLayerSandbox({
     displayMode: 'all',

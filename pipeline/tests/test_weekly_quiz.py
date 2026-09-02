@@ -115,6 +115,7 @@ class FakeCoordinator:
     def __init__(self, bucket: str) -> None:
         self.storage_bucket = bucket
         self.stored: list[tuple[bytes, str]] = []
+        self.cache_controls: list[str | None] = []
         self.opened: dict | None = None
         self.public_bucket_checked = False
         self.registered_selector_kits: list[dict] = []
@@ -122,8 +123,15 @@ class FakeCoordinator:
     def require_public_bucket(self) -> None:
         self.public_bucket_checked = True
 
-    def store_bytes(self, content: bytes, media_type: str) -> dict:
+    def store_bytes(
+        self,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str | None = None,
+    ) -> dict:
         self.stored.append((content, media_type))
+        self.cache_controls.append(cache_control)
         digest = hashlib.sha256(content).hexdigest()
         return {
             "object_uri": f"supabase://{self.storage_bucket}/sha256/{digest[:2]}/{digest}",
@@ -148,7 +156,13 @@ class TrackingPublicCoordinator(FakeCoordinator):
         self.active_uploads = 0
         self.maximum_active_uploads = 0
 
-    def store_bytes(self, content: bytes, media_type: str) -> dict:
+    def store_bytes(
+        self,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str | None = None,
+    ) -> dict:
         with self._lock:
             self.active_uploads += 1
             self.maximum_active_uploads = max(
@@ -157,7 +171,11 @@ class TrackingPublicCoordinator(FakeCoordinator):
         try:
             digest = hashlib.sha256(content).hexdigest()
             time.sleep(0.01 + (int(digest[0], 16) % 3) * 0.005)
-            return super().store_bytes(content, media_type)
+            return super().store_bytes(
+                content,
+                media_type,
+                cache_control=cache_control,
+            )
         finally:
             with self._lock:
                 self.active_uploads -= 1
@@ -1466,6 +1484,12 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
         self.assertEqual(sequential_public.maximum_active_uploads, 1)
         self.assertGreater(parallel_public.maximum_active_uploads, 1)
         self.assertLessEqual(parallel_public.maximum_active_uploads, 2)
+        self.assertTrue(sequential_public.cache_controls)
+        self.assertEqual(
+            set(sequential_public.cache_controls),
+            {weekly_quiz_module.IMMUTABLE_PUBLIC_CACHE_CONTROL},
+        )
+        self.assertEqual(set(sequential_private.cache_controls), {None})
         self.assertEqual(
             parallel_private.opened["blind_manifest"],
             sequential_private.opened["blind_manifest"],
@@ -1525,8 +1549,18 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
 
     def test_public_upload_result_must_match_exact_content_digest(self) -> None:
         class InvalidResultCoordinator(FakeCoordinator):
-            def store_bytes(self, content: bytes, media_type: str) -> dict:
-                result = super().store_bytes(content, media_type)
+            def store_bytes(
+                self,
+                content: bytes,
+                media_type: str,
+                *,
+                cache_control: str | None = None,
+            ) -> dict:
+                result = super().store_bytes(
+                    content,
+                    media_type,
+                    cache_control=cache_control,
+                )
                 result["sha256"] = "0" * 64
                 return result
 

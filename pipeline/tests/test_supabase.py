@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from foldarium_pipeline.contracts import canonical_json, stable_id
 from foldarium_pipeline.private_evaluation import PRIVATE_EVALUATION_FORMAT_VERSION
 from foldarium_pipeline.supabase import (
+    IMMUTABLE_PUBLIC_CACHE_CONTROL,
     SupabaseConfigurationError,
     SupabaseCoordinator,
     SupabasePublicationError,
@@ -760,6 +761,66 @@ class SupabasePublisherTests(unittest.TestCase):
         self.assertEqual(stored["sha256"], hashlib.sha256(content).hexdigest())
         self.assertEqual(len(opener.calls), 2)
         self.assertEqual(opener.calls[1][0].get_method(), "GET")
+
+    def test_store_bytes_sets_cache_metadata_only_when_requested(self) -> None:
+        opener = RecordingOpener()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "results", opener=opener
+        )
+        publisher.store_bytes(
+            b"public content",
+            "chemical/x-pdb",
+            cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
+        request = opener.calls[0][0]
+        self.assertEqual(
+            request.get_header("Cache-control"),
+            IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
+
+        opener = RecordingOpener()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "private", opener=opener
+        )
+        publisher.store_bytes(b"private content", "application/json")
+        self.assertIsNone(opener.calls[0][0].get_header("Cache-control"))
+
+    def test_replace_content_object_requires_identical_digest_bound_bytes(self) -> None:
+        content = b"immutable object"
+        digest = hashlib.sha256(content).hexdigest()
+        object_uri = f"supabase://quiz-public/sha256/{digest[:2]}/{digest}"
+        opener = RecordingOpener()
+        publisher = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "quiz-public",
+            opener=opener,
+        )
+        stored = publisher.replace_content_object(
+            object_uri,
+            content,
+            "chemical/x-pdb",
+            cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
+        request = opener.calls[0][0]
+        self.assertEqual(request.get_method(), "PUT")
+        self.assertEqual(request.data, content)
+        self.assertEqual(
+            request.get_header("Cache-control"),
+            IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
+        self.assertEqual(stored["sha256"], digest)
+
+        with self.assertRaisesRegex(
+            SupabasePublicationError,
+            "do not match",
+        ):
+            publisher.replace_content_object(
+                object_uri,
+                b"different",
+                "chemical/x-pdb",
+                cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+            )
 
     def test_storage_http_400_duplicate_rejects_mismatching_object(self) -> None:
         content = b"expected quiz asset"

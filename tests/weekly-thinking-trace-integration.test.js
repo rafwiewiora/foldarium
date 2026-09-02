@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const appUrl = new URL('../app.js', import.meta.url);
 const htmlUrl = new URL('../index.html', import.meta.url);
+const prefetchUrl = new URL('../structure-prefetch.js', import.meta.url);
 
 test('weekly thinking trace covers periodic, navigation, vote, visibility, and completion boundaries', async () => {
   const app = await readFile(appUrl, 'utf8');
@@ -41,7 +42,7 @@ test('weekly vote feedback bypasses the Molstar idle gate while classic reveal k
 
 test('name form waits for readiness while persistence initializes in parallel', async () => {
   const html = await readFile(htmlUrl, 'utf8');
-  const persistenceStart = html.indexOf('void initPersistence();');
+  const persistenceStart = html.indexOf('const persistenceReady = initPersistence();');
   const molstarLoad = html.indexOf("await loadScript('https://cdn.jsdelivr.net/npm/molstar");
 
   assert.match(html, /start\.textContent = 'Loading quiz…'/);
@@ -50,10 +51,107 @@ test('name form waits for readiness while persistence initializes in parallel', 
   assert.ok(persistenceStart > 0 && persistenceStart < molstarLoad);
 });
 
-test('the next question immutable structure assets are prefetched with bounded concurrency', async () => {
-  const app = await readFile(appUrl, 'utf8');
-  assert.match(app, /async function prefetchQuestionAssets\(questionIndex\)/);
-  assert.match(app, /Array\.from\(\{ length: Math\.min\(4, urls\.length\) \}, worker\)/);
-  assert.match(app, /void prefetchQuestionAssets\(i \+ 1\)/);
-  assert.match(app, /fetch\(url, \{ cache: 'force-cache' \}\)/);
+test('three future Grid pages are prefetched without navigation cancellation', async () => {
+  const [app, html, prefetch] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(htmlUrl, 'utf8'),
+    readFile(prefetchUrl, 'utf8'),
+  ]);
+  assert.match(html, /import\('\.\/structure-prefetch\.js'\)/);
+  assert.match(html, /import\('\.\/viewer-performance\.js'\)/);
+  assert.match(app, /async function prefetchQuestionAssets\(questionIndex, \{ priority = 0 \} = \{\}\)/);
+  assert.match(app, /gridQuestionAssetPaths\(item, clusters/);
+  assert.match(app, /pageSize: GRID_PAGE_SIZE/);
+  assert.match(app, /initialQuestionAssetPaths\(item, initialChoice\)/);
+  assert.match(app, /initialChoice = isClustered \? clusters\[0\]\?\.rep : clusters\[0\]\?\.members\?\.\[0\]/);
+  assert.match(app, /WEEKLY_PREFETCHED_CLUSTERS\.set\(item\.id, clusters\)/);
+  assert.match(app, /stage: 'first-question-prefetch'/);
+  assert.match(app, /const QUESTION_PREFETCH_LOOKAHEAD = 3/);
+  assert.match(app, /stage: 'setup-lookahead-prefetch'/);
+  assert.doesNotMatch(app, /async function loadQuestion\(i\) \{\s*structurePrefetcher\.cancel\(\)/);
+  assert.match(app, /structurePrefetcher\.textWhenReady\(requestUrl\)/);
+  assert.match(app, /builders\.data\.rawData\(\{ data: prefetchedText/);
+  assert.match(app, /pendingQuestionPrefetchIndexes = Array\.from\(/);
+  assert.match(app, /priority: QUESTION_PREFETCH_LOOKAHEAD - distance/);
+  assert.match(app, /view\.classList\.remove\('loading-grid'\); syncReviewState\(\);\s*startPendingQuestionPrefetch\(\)/);
+  assert.match(prefetch, /const DEFAULT_CONCURRENCY = 4/);
+  assert.match(prefetch, /cache: 'force-cache'/);
+  assert.match(prefetch, /inFlightByUrl/);
+});
+
+test('Grid reveals ready cards progressively and defers the hidden canonical scene', async () => {
+  const [app, html] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(htmlUrl, 'utf8'),
+  ]);
+  const buildLayer = app.slice(
+    app.indexOf('async function buildLayer()'),
+    app.indexOf('function requestQuestionCameraReset()'),
+  );
+  const gridBranch = buildLayer.slice(
+    buildLayer.indexOf("if (displayMode === 'grid')"),
+    buildLayer.indexOf("if ($('#gridview').classList.contains('on'))"),
+  );
+
+  assert.doesNotMatch(html, /#gridview\.loading-grid #gridcells\{opacity:0/);
+  assert.match(html, /\.grid-card\.grid-card-loading\{visibility:hidden\}/);
+  assert.match(app, /card\.className = 'grid-card grid-card-loading'/);
+  assert.match(app, /cell\.card\.classList\.remove\('grid-card-loading'\)/);
+  assert.match(gridBranch, /await buildGrid\(!resetCamera, false\)/);
+  assert.doesNotMatch(gridBranch, /buildCanonicalLayer/);
+});
+
+test('Weekly reuses a bounded Grid viewer pool and permits explicit performance A/B opt-out', async () => {
+  const [app, html] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(htmlUrl, 'utf8'),
+  ]);
+
+  assert.match(html, /window\.foldariumGridViewerPool = await import\('\.\/grid-viewer-pool\.js'\)/);
+  assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('viewer_pool'\) !== '0'/);
+  assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('fast_camera'\) !== '0'/);
+  assert.match(app, /GRID_VIEWER_POOL_ENABLED\s*&& APP_QUERY\.get\('warm_viewers'\) !== '0'/);
+  assert.match(app, /createGridViewerPool\?\.\(\{\s*enabled: GRID_VIEWER_POOL_ENABLED,\s*maxSize: GRID_PAGE_SIZE/);
+  assert.match(app, /async function prewarmGridViewerPool\(\)/);
+  assert.match(app, /await waitForViewerPrewarmIdle\(\)/);
+  assert.match(app, /gridViewerPool\.add\(\{/);
+  assert.match(app, /cancelGridViewerPrewarm\(\);\s*if \(DEV/);
+  assert.match(app, /gridViewerPool\.release\(cell, \{/);
+  assert.match(app, /'grid-viewer-reuse-clear'/);
+  assert.match(app, /await gridViewerPool\.acquire\(\)/);
+  assert.match(app, /cell\.host\.replaceWith\(pooled\.host\)/);
+  assert.match(app, /cell\.reusable = true/);
+  assert.match(app, /gridViewersReused:/);
+  assert.match(app, /gridViewersCreated:/);
+  assert.match(app, /gridViewerPoolSize: gridViewerPool\.size\(\)/);
+  assert.match(app, /'grid-camera-finalize'/);
+  assert.match(app, /if \(FAST_GRID_CAMERA_SYNC_ENABLED\)/);
+  assert.match(app, /await nextAnimationFrame\(\)/);
+  assert.match(app, /function beginStartPerformanceTiming\(\)/);
+  assert.match(app, /'named-session-start'/);
+  assert.match(app, /const performanceTiming = pendingQuestionPerformanceTiming\s*\|\| viewerPerformance\.beginQuestion/);
+  assert.match(app, /includesStart: true/);
+});
+
+test('opt-in performance diagnostics use the named Weekly session but not its replay trace', async () => {
+  const [app, html] = await Promise.all([
+    readFile(appUrl, 'utf8'),
+    readFile(htmlUrl, 'utf8'),
+  ]);
+
+  assert.match(html, /query\.get\('record_performance'\) === '1' \|\| deploymentPerformanceBeta/);
+  assert.match(html, /window\.FOLDARIUM_SUPABASE\?\.performanceBetaEnabled === true/);
+  assert.match(html, /import\('\.\/performance-diagnostics\.js'\)/);
+  assert.match(html, /id="performance-consent-checkbox"/);
+  assert.match(html, /does not record browser fingerprints, IP addresses, plugins, fonts/);
+  assert.match(app, /PERFORMANCE_RECORDING_REQUESTED/);
+  assert.match(app, /performanceDiagnosticsConsented\(\)/);
+  assert.match(app, /performanceDiagnosticsCollector\.capture\(report/);
+  assert.match(
+    app,
+    /submitWeeklyPerformanceReport\?\.\(\{/,
+  );
+  assert.doesNotMatch(app, /recordAppEvent\?\.\('viewer_performance_diagnostics'/);
+  assert.match(app, /performance_diagnostics_opt_in: PERFORMANCE_RECORDING_REQUESTED/);
+  assert.match(app, /PERFORMANCE_RECORDING_REQUESTED \|\| isReadOnlyPreview\(\)/);
 });
