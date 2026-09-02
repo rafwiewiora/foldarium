@@ -8,14 +8,14 @@ remaining research so a new session can resume without relying on chat history.
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `f8a99e712ec1704a620348e9f17eddfdcca0c0ab`.
+  `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
+- Current public `main`: `304529b88c5fe32451f5de4701776aaa802603fd`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
-- Browser deployment commit: `0e614ec`.
+- Browser deployment commit: `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
 - Modal deployment commit: `7af7b75`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
@@ -27,10 +27,14 @@ remaining research so a new session can resume without relying on chat history.
   [Junction PR #42](https://github.com/JunctionBioscience/foldarium/pull/42).
 - Retry-accounting and v4 assembly guard:
   [Junction PR #43](https://github.com/JunctionBioscience/foldarium/pull/43).
-- Vercel deployment: `dpl_9xUqbDWLsjiM3cndZ8t3QEXZcHvF`.
+- Mol* Grid loading performance:
+  [Junction PR #50](https://github.com/JunctionBioscience/foldarium/pull/50) and
+  [public PR #13](https://github.com/rafwiewiora/foldarium/pull/13).
+- Vercel deployment: `dpl_EpFgoqLngZRW9UtMufFgBR9xiVpz`.
 - Immutable deployment URL:
-  <https://foldarium-182pldlmo-junctionbioscience.vercel.app>.
+  <https://foldarium-hfk55h5wj-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
+- Public performance beta: <https://foldarium-performance-beta.vercel.app>.
 - Modal profile digest:
   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 - Deployment was made manually from a clean detached worktree at the merged
@@ -98,11 +102,31 @@ Primary references:
 - `tests/weekly-training-similarity.test.js`
 - `tests/weekly-molecular-review.test.js`
 
+### Mol* loading performance
+
+- Weekly prefetches the next three visible Grid asset sets with four bounded
+  concurrent transfers. Foreground loads claim matching in-flight work or use
+  the bounded prefetched-byte cache instead of starting duplicate transfers.
+- Grid cards appear progressively. The hidden canonical scene is deferred
+  while Grid is active.
+- A bounded pool reuses up to nine Mol* viewers between questions. The first
+  nine empty viewers are prewarmed during intro idle time, and final settled
+  camera synchronization no longer waits an additional 600 ms.
+- Public content-addressed assets from future publications receive immutable
+  cache metadata. The backfill tool remains reveal-gated and therefore has not
+  mutated the currently open production round.
+- Production enables the speedups but not the performance clock or diagnostics
+  UI. The separate public beta enables the clock and consented, bounded reports
+  through deployment configuration, so its stable URL requires no query flags.
+- Performance reports use a dedicated private table and append-only RPC. They
+  are not stored in replay traces and exclude asset URLs, IP addresses, raw user
+  agents, plugins, fonts, and other browser-fingerprint fields.
+
 ## Verification
 
 - Required `contracts-and-adapters` and `scientific-evaluation` checks passed
   for both the feature and runtime hotfix PRs.
-- Final JavaScript suite: 523 passed, 1 optional WASM test skipped.
+- Final JavaScript suite: 571 passed, 1 optional WASM test skipped.
 - Targeted evaluation-dependent Python suite: 39 passed, 0 failed, 0 skipped.
 - All 52 overlay objects declared available in the report returned
   successfully from the public Storage bucket.
@@ -115,6 +139,13 @@ Primary references:
   annotation, and a wrapping active label with no horizontal overflow.
 - Production serves the Play-for-fun endpoint, preserves the password gate, and
   serves the requested green/blue archive action styling.
+- Production `/api/config` reports exact commit
+  `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d` with performance-beta mode off.
+- A read-only live smoke loaded nine prewarmed Grid viewers with no failed
+  cards, then recycled all nine on question 2. The measured question totals
+  were 1.802 seconds and 0.632 seconds in that run.
+- The queryless beta smoke exposed the clock and consent control, used nine
+  prewarmed viewers, created no foreground viewer, and had no failed card.
 - The 2026-08-29 production round is
   `weekly-2026-08-29-beta-v2`, promoted from
   `preview-weekly-2026-08-29-nextweekly-v4`.
@@ -146,10 +177,13 @@ protein familiarity and ligand-bound-system familiarity.
 
 ## Resume checklist
 
-1. Confirm production still resolves to browser commit `0e614ec`.
+1. Confirm production still resolves to browser commit
+   `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
 2. Confirm the current production round remains
    `weekly-2026-08-29-beta-v2` with 33 items.
 3. Treat all seven terminal failed runs as final at attempt 2/2.
-4. Confirm public `main` still contains public PRs #9 and #10 at
-   `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
-5. Promote apo-pocket similarity to a plan only if it becomes a priority.
+4. Confirm public `main` still contains public PR #13 at
+   `304529b88c5fe32451f5de4701776aaa802603fd`.
+5. Run the immutable cache metadata backfill for the active round only after it
+   is revealed; the apply path intentionally refuses an open round.
+6. Promote apo-pocket similarity to a plan only if it becomes a priority.
