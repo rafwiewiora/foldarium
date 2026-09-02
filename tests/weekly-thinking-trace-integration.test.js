@@ -111,7 +111,7 @@ test('Weekly reuses a bounded Grid viewer pool and permits explicit performance 
   assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('viewer_pool'\) !== '0'/);
   assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('fast_camera'\) !== '0'/);
   assert.match(app, /GRID_VIEWER_POOL_ENABLED\s*&& APP_QUERY\.get\('warm_viewers'\) !== '0'/);
-  assert.match(app, /DEPLOYMENT_PERFORMANCE_BETA\s*\|\|\s*\(APP_QUERY\.has\('perf'\) && APP_QUERY\.get\('first_grid'\) === '1'\)/);
+  assert.match(app, /FIRST_GRID_PREBUILD_ENABLED = GRID_VIEWER_PREWARM_ENABLED\s*&& APP_QUERY\.get\('first_grid'\) !== '0'/);
   assert.match(app, /createGridViewerPool\?\.\(\{\s*enabled: GRID_VIEWER_POOL_ENABLED,\s*maxSize: GRID_PAGE_SIZE/);
   assert.match(app, /async function prewarmGridViewerPool\(\)/);
   assert.match(app, /await waitForViewerPrewarmIdle\(\)/);

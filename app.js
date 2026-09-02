@@ -105,9 +105,7 @@ const FAST_GRID_CAMERA_SYNC_ENABLED = WEEKLY_ONLY && APP_QUERY.get('fast_camera'
 const GRID_VIEWER_PREWARM_ENABLED = GRID_VIEWER_POOL_ENABLED
   && APP_QUERY.get('warm_viewers') !== '0';
 const FIRST_GRID_PREBUILD_ENABLED = GRID_VIEWER_PREWARM_ENABLED
-  && APP_QUERY.get('first_grid') !== '0'
-  && (DEPLOYMENT_PERFORMANCE_BETA
-    || (APP_QUERY.has('perf') && APP_QUERY.get('first_grid') === '1'));
+  && APP_QUERY.get('first_grid') !== '0';
 const gridViewerPool = window.foldariumGridViewerPool?.createGridViewerPool?.({
   enabled: GRID_VIEWER_POOL_ENABLED,
   maxSize: GRID_PAGE_SIZE,
