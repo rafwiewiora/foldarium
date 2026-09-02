@@ -137,6 +137,7 @@ function normalizedQuestionReport(report) {
     viewer_pool_enabled: metadata.viewerPoolEnabled === true,
     fast_grid_camera_sync_enabled: metadata.fastGridCameraSyncEnabled === true,
     grid_viewer_prewarm_enabled: metadata.gridViewerPrewarmEnabled === true,
+    first_grid_prebuild_enabled: metadata.firstGridPrebuildEnabled === true,
     grid_viewers_reused: Number.isInteger(metadata.gridViewersReused)
       ? metadata.gridViewersReused
       : null,
@@ -145,6 +146,9 @@ function normalizedQuestionReport(report) {
       : null,
     grid_viewers_recycled: Number.isInteger(metadata.gridViewersRecycled)
       ? metadata.gridViewersRecycled
+      : null,
+    grid_viewers_prebuilt: Number.isInteger(metadata.gridViewersPrebuilt)
+      ? metadata.gridViewersPrebuilt
       : null,
     grid_viewers_created: Number.isInteger(metadata.gridViewersCreated)
       ? metadata.gridViewersCreated

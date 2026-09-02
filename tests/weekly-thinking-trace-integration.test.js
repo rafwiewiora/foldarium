@@ -111,6 +111,7 @@ test('Weekly reuses a bounded Grid viewer pool and permits explicit performance 
   assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('viewer_pool'\) !== '0'/);
   assert.match(app, /WEEKLY_ONLY && APP_QUERY\.get\('fast_camera'\) !== '0'/);
   assert.match(app, /GRID_VIEWER_POOL_ENABLED\s*&& APP_QUERY\.get\('warm_viewers'\) !== '0'/);
+  assert.match(app, /DEPLOYMENT_PERFORMANCE_BETA\s*\|\|\s*\(APP_QUERY\.has\('perf'\) && APP_QUERY\.get\('first_grid'\) === '1'\)/);
   assert.match(app, /createGridViewerPool\?\.\(\{\s*enabled: GRID_VIEWER_POOL_ENABLED,\s*maxSize: GRID_PAGE_SIZE/);
   assert.match(app, /async function prewarmGridViewerPool\(\)/);
   assert.match(app, /await waitForViewerPrewarmIdle\(\)/);
@@ -127,6 +128,11 @@ test('Weekly reuses a bounded Grid viewer pool and permits explicit performance 
   assert.match(app, /'grid-camera-finalize'/);
   assert.match(app, /if \(FAST_GRID_CAMERA_SYNC_ENABLED\)/);
   assert.match(app, /await nextAnimationFrame\(\)/);
+  assert.match(app, /async function prebuildFirstWeeklyGrid\(\)/);
+  assert.match(app, /'first-grid-scene-prebuild'/);
+  assert.match(app, /consumePreparedFirstGrid\(cur\.item, cells\.map\(cell => cell\.entry\)\)/);
+  assert.match(app, /cell\.viewerSource = 'prebuilt'/);
+  assert.match(app, /\[remoteSessionId\] = await Promise\.all\(\[sessionPromise, firstGridReady\]\)/);
   assert.match(app, /function beginStartPerformanceTiming\(\)/);
   assert.match(app, /'named-session-start'/);
   assert.match(app, /const performanceTiming = pendingQuestionPerformanceTiming\s*\|\| viewerPerformance\.beginQuestion/);
