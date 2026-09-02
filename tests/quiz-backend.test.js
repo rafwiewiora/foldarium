@@ -194,6 +194,10 @@ test('read-only Preview loads public weekly data but cannot write or create auth
     backend.startNamedSession({ displayName: 'Ada' }),
     /Preview is read-only/i,
   );
+  await assert.rejects(
+    backend.submitWeeklyPerformanceReport({}),
+    /Preview is read-only/i,
+  );
   await assert.rejects(backend.flush({ strict: true }), /Preview is read-only/i);
   assert.equal(acquisitions, 1);
   assert.deepEqual(supabase.rpcs[0], {
@@ -590,6 +594,75 @@ test('rejects a trace batch whose visit or sequence bounds do not match its entr
       entries: [{ seq: 1 }, { seq: 2 }],
     },
   }), /sequence binding/);
+  assert.deepEqual(rpcs, []);
+});
+
+test('submits one bounded performance report through its dedicated authenticated RPC', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    uuid: sequenceUuid('00000000-0000-4000-8000-000000000041'),
+  });
+  const report = {
+    schema_version: 'foldarium.viewer-performance-diagnostics/v1',
+    consent: 'explicit-beta-checkbox',
+    setup: { browser_family: 'Chrome' },
+    question: { item_id: 'item-3', question_index: 3, total_ms: 2800 },
+    structures: { request_count: 29 },
+  };
+
+  await backend.submitWeeklyPerformanceReport({
+    sessionId: '00000000-0000-4000-8000-000000000042',
+    roundId: 'weekly-1',
+    itemId: 'item-3',
+    questionIndex: 3,
+    report,
+  });
+
+  assert.deepEqual(rpcs, [{
+    name: 'append_weekly_viewer_performance_report',
+    args: {
+      p_report_id: '00000000-0000-4000-8000-000000000041',
+      p_session_id: '00000000-0000-4000-8000-000000000042',
+      p_round_id: 'weekly-1',
+      p_item_id: 'item-3',
+      p_question_index: 3,
+      p_report: report,
+    },
+  }]);
+});
+
+test('rejects invalid and oversized performance reports before calling Supabase', async () => {
+  const { client, rpcs } = fakeSupabase();
+  const backend = createQuizBackend({ client, storage: memoryStorage() });
+  const base = {
+    sessionId: '00000000-0000-4000-8000-000000000042',
+    roundId: 'weekly-1',
+    itemId: 'item-3',
+    questionIndex: 3,
+  };
+
+  await assert.rejects(
+    backend.submitWeeklyPerformanceReport({
+      ...base,
+      report: { schema_version: 'wrong', setup: {}, question: {}, structures: {} },
+    }),
+    /performance report is invalid/i,
+  );
+  await assert.rejects(
+    backend.submitWeeklyPerformanceReport({
+      ...base,
+      report: {
+        schema_version: 'foldarium.viewer-performance-diagnostics/v1',
+        consent: 'explicit-beta-checkbox',
+        setup: {},
+        question: { padding: 'x'.repeat(33 * 1024) },
+        structures: {},
+      },
+    }),
+    /32768-byte limit/i,
+  );
   assert.deepEqual(rpcs, []);
 });
 

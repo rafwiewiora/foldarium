@@ -13,6 +13,15 @@ const METHOD_NAMES = { af3: 'AF3', openfold3: 'OpenFold3', boltz: 'Boltz-1', bol
 const methodName = m => METHOD_NAMES[m] || m;
 const DEV2_FEEDBACK = window.foldariumDev2Feedback || {};
 const GRID_PAGE_SIZE = DEV2_FEEDBACK.GRID_PAGE_SIZE || 9;
+const QUESTION_PREFETCH_LOOKAHEAD = 3;
+const viewerPerformance = window.foldariumViewerPerformance || {
+  current: () => null,
+  beginQuestion: () => null,
+  measure: (_report, _stage, operation) => operation(),
+  milestone: () => {},
+  finishQuestion: () => null,
+  measureStartup: (_stage, operation) => operation(),
+};
 function weeklyPoseEvidence(choice) {
   if (!choice?._method) return '';
   const confidence = choice._confidence;
@@ -82,8 +91,36 @@ const OPTS = {
   viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowTrajectoryControls: false,
 };
 
-const DEV = new URLSearchParams(location.search).has('dev');   // no-vote inspection/browse mode (?dev=1)
+const APP_QUERY = new URLSearchParams(location.search);
+const DEV = APP_QUERY.has('dev');   // no-vote inspection/browse mode (?dev=1)
 const WEEKLY_ONLY = window.FOLDARIUM_QUIZ_MODE === 'weekly';
+const DEPLOYMENT_PERFORMANCE_BETA =
+  window.FOLDARIUM_SUPABASE?.performanceBetaEnabled === true;
+const PERFORMANCE_RECORDING_REQUESTED = DEPLOYMENT_PERFORMANCE_BETA
+  || (APP_QUERY.has('perf') && APP_QUERY.get('record_performance') === '1');
+// Accepted Weekly speedups are enabled by default. Explicit zero-valued query
+// switches remain available only for controlled A/B diagnosis.
+const GRID_VIEWER_POOL_ENABLED = WEEKLY_ONLY && APP_QUERY.get('viewer_pool') !== '0';
+const FAST_GRID_CAMERA_SYNC_ENABLED = WEEKLY_ONLY && APP_QUERY.get('fast_camera') !== '0';
+const GRID_VIEWER_PREWARM_ENABLED = GRID_VIEWER_POOL_ENABLED
+  && APP_QUERY.get('warm_viewers') !== '0';
+const gridViewerPool = window.foldariumGridViewerPool?.createGridViewerPool?.({
+  enabled: GRID_VIEWER_POOL_ENABLED,
+  maxSize: GRID_PAGE_SIZE,
+}) || {
+  enabled: false,
+  add: cell => {
+    try { cell?.viewer?.dispose?.(); } catch (_) {}
+    return false;
+  },
+  release: cell => {
+    try { cell?.viewer?.dispose?.(); } catch (_) {}
+    return false;
+  },
+  acquire: async () => null,
+  drain: () => {},
+  size: () => 0,
+};
 const researchBackend = () => DEV ? null : window.foldariumBackend;
 const isReadOnlyPreview = () => window.FOLDARIUM_SUPABASE?.enabled === true
   && window.FOLDARIUM_SUPABASE?.writable === false;
@@ -207,6 +244,9 @@ function syncXtalRow() {
 }
 const assetUrl = path => window.foldariumAssetUrl?.(path) || path;
 let viewer, plugin, ITEMS = [], idx = 0, cur = null;
+const performanceDiagnosticsCollector = PERFORMANCE_RECORDING_REQUESTED
+  ? window.foldariumPerformanceDiagnostics?.createPerformanceDiagnosticsCollector?.()
+  : null;
 let POOLS = { cameo: [], rnp: [], weekly: [] };
 let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'hard' : 'easy';
 let WEEKLY_ROUND = null;
@@ -225,6 +265,7 @@ let WEEKLY_SELECTOR_RESULTS = null;
 let WEEKLY_SELECTOR_RESULTS_ERROR = '';
 let WEEKLY_ITEM_STATES = new Map();
 let WEEKLY_PREFETCHED_CLUSTERS = new Map();
+let WEEKLY_PREPARED_SESSION = null;
 let weeklyCommentPromptEnabled = true;
 let remoteSessionId = null;
 let participantDisplayName = '';
@@ -233,12 +274,15 @@ let weeklyTraceStream = null;
 let weeklyTraceSessionSeed = null;
 let viewerRebuild = null, revealAfterIdle = null, revealRequested = false;
 let viewerTransitionBusy = false;
+let pendingQuestionPrefetchIndexes = [];
 let displayMode = WEEKLY_ONLY ? 'grid' : 'all', clustered = true, shownOne = 0, showXtal = false, releasedCrystalMode = false, releasedCrystalError = '', proteinMode = 'crystal';
 let showHbonds = false;   // H-bond overlay toggle — persisted across questions like the other view choices
 let retrospectiveHbondStatus = '';
 let showProteinEnsemble = false; // optional faint receptor backbones for the Weekly visual experiment
 let showSurface = false;
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
+let gridViewerPrewarmGeneration = 0;
+let pendingQuestionPerformanceTiming = null;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
 let poseChoiceByRepresentation = new WeakMap();
@@ -534,6 +578,34 @@ function recordAppEvent(action, stateDetails = null) {
   catch (error) { console.warn('App replay event omitted:', error.message); }
 }
 
+function performanceDiagnosticsConsented() {
+  return PERFORMANCE_RECORDING_REQUESTED
+    && $('#performance-consent-checkbox')?.checked === true;
+}
+
+function recordPerformanceDiagnostics(report) {
+  if (!report || !remoteSessionId || !performanceDiagnosticsConsented()
+      || !performanceDiagnosticsCollector) return;
+  try {
+    const payload = performanceDiagnosticsCollector.capture(report, {
+      startupReports: viewerPerformance.reports,
+      gl: plugin?.canvas3d?.webgl?.gl || plugin?.canvas3d?.webgl?.context?.gl || null,
+    });
+    const submission = researchBackend()?.submitWeeklyPerformanceReport?.({
+      sessionId: remoteSessionId,
+      roundId: WEEKLY_ROUND?.round_id,
+      itemId: report.metadata?.itemId,
+      questionIndex: report.metadata?.questionIndex,
+      report: payload,
+    });
+    void submission?.catch(error => {
+      console.warn('Performance diagnostics were not saved:', error.message);
+    });
+  } catch (error) {
+    console.warn('Performance diagnostics omitted:', error.message);
+  }
+}
+
 function saveWeeklyResumePosition(questionIndex = idx) {
   if (quizSource !== 'weekly' || !remoteSessionId || !WEEKLY_ROUND?.round_id) return;
   try {
@@ -635,28 +707,55 @@ async function loadStruct(url, format, targetPlugin = plugin, structureParams = 
   // Mol* otherwise uses the full signed/public Storage URL as the model label,
   // which leaks into its residue hover overlay.
   const requestUrl = structureRequestUrl(url);
-  const prefetchedText = structurePrefetcher.text(requestUrl);
+  const prefetchedText = await structurePrefetcher.textWhenReady(requestUrl);
+  const timing = viewerPerformance?.current();
   const data = prefetchedText === null
-    ? await targetPlugin.builders.data.download({ url: requestUrl,
-      isBinary: false, label: 'Foldarium' })
-    : await targetPlugin.builders.data.rawData({ data: prefetchedText, label: 'Foldarium' });
-  const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
-  const model = await targetPlugin.builders.structure.createModel(traj);
-  const struct = await targetPlugin.builders.structure.createStructure(model, structureParams);
+    ? await viewerPerformance.measure(timing, 'structure-download', () => (
+        targetPlugin.builders.data.download({
+          url: requestUrl,
+          isBinary: false,
+          label: 'Foldarium',
+        })
+      ))
+    : await viewerPerformance.measure(timing, 'prefetched-data-load', () => (
+        targetPlugin.builders.data.rawData({ data: prefetchedText, label: 'Foldarium' })
+      ));
+  const traj = await viewerPerformance.measure(timing, 'trajectory-parse', () => (
+    targetPlugin.builders.structure.parseTrajectory(data, format)
+  ));
+  const model = await viewerPerformance.measure(timing, 'model-create', () => (
+    targetPlugin.builders.structure.createModel(traj)
+  ));
+  const struct = await viewerPerformance.measure(timing, 'structure-create', () => (
+    targetPlugin.builders.structure.createStructure(model, structureParams)
+  ));
   return { data, struct };
 }
 async function loadStructText(text, format, targetPlugin = plugin) {
-  const data = await targetPlugin.builders.data.rawData({ data: text, label: 'Foldarium answer' });
-  const traj = await targetPlugin.builders.structure.parseTrajectory(data, format);
-  const model = await targetPlugin.builders.structure.createModel(traj);
-  const struct = await targetPlugin.builders.structure.createStructure(model);
+  const timing = viewerPerformance?.current();
+  const data = await viewerPerformance.measure(timing, 'inline-data-load', () => (
+    targetPlugin.builders.data.rawData({ data: text, label: 'Foldarium answer' })
+  ));
+  const traj = await viewerPerformance.measure(timing, 'trajectory-parse', () => (
+    targetPlugin.builders.structure.parseTrajectory(data, format)
+  ));
+  const model = await viewerPerformance.measure(timing, 'model-create', () => (
+    targetPlugin.builders.structure.createModel(traj)
+  ));
+  const struct = await viewerPerformance.measure(timing, 'structure-create', () => (
+    targetPlugin.builders.structure.createStructure(model)
+  ));
   return { data, struct };
 }
 async function fetchPdbText(url) {   // raw PDB text (for merging pocket+pose into ONE structure for interactions)
   const requestUrl = structureRequestUrl(url);
-  const prefetchedText = structurePrefetcher.text(requestUrl);
+  const prefetchedText = await structurePrefetcher.textWhenReady(requestUrl);
   if (prefetchedText !== null) return prefetchedText;
-  const r = await fetch(requestUrl);
+  const r = await viewerPerformance.measure(
+    viewerPerformance.current(),
+    'structure-text-download',
+    () => fetch(requestUrl),
+  );
   return r.ok ? await r.text() : '';
 }
 function pdbCoordinateRecords(text) {
@@ -890,19 +989,105 @@ function buildQuestionClusters(item) {
     return { label, color, members, rep: members.find(member => member.is_rep) || members[0] };
   });
 }
-async function prefetchQuestionAssets(questionIndex) {
+async function prefetchWeeklyItemAssets(item, clusters, {
+  questionIndex,
+  page = 0,
+  mode = userView.displayMode,
+  isClustered = userView.clustered,
+  proteinEnsemble = userView.showProteinEnsemble,
+  stage = 'next-question-prefetch',
+  priority = 0,
+} = {}) {
+  let initialChoice = item.choices?.[0];
+  let paths;
+  if (mode === 'grid') {
+    paths = window.foldariumStructurePrefetch.gridQuestionAssetPaths(item, clusters, {
+        page,
+        pageSize: GRID_PAGE_SIZE,
+        clustered: isClustered,
+        showProteinEnsemble: proteinEnsemble,
+    });
+  } else {
+    initialChoice = isClustered ? clusters[0]?.rep : clusters[0]?.members?.[0];
+  }
+  paths ||= window.foldariumStructurePrefetch.initialQuestionAssetPaths(item, initialChoice);
+  await viewerPerformance.measureStartup(
+    stage,
+    () => structurePrefetcher.prefetch(paths.map(structureRequestUrl), { priority }),
+    {
+      questionIndex,
+      itemId: item.id || null,
+      mode,
+      assetCount: paths.length,
+    },
+  );
+}
+
+async function prefetchQuestionAssets(questionIndex, { priority = 0 } = {}) {
   const item = ITEMS[questionIndex];
   if (!item) return;
-  let initialChoice = item.choices?.[0];
-  if (item.source === 'weekly') {
-    const clusters = WEEKLY_ITEM_STATES.get(item.id)?.clusters
-      || WEEKLY_PREFETCHED_CLUSTERS.get(item.id)
-      || buildQuestionClusters(item);
-    WEEKLY_PREFETCHED_CLUSTERS.set(item.id, clusters);
-    initialChoice = clustered ? clusters[0]?.rep : clusters[0]?.members?.[0];
+  if (item.source !== 'weekly') {
+    const paths = window.foldariumStructurePrefetch.initialQuestionAssetPaths(item);
+    await structurePrefetcher.prefetch(paths.map(structureRequestUrl), { priority });
+    return;
   }
-  const paths = window.foldariumStructurePrefetch.initialQuestionAssetPaths(item, initialChoice);
-  await structurePrefetcher.prefetch(paths.map(structureRequestUrl));
+  const savedState = WEEKLY_ITEM_STATES.get(item.id);
+  const clusters = savedState?.clusters
+    || WEEKLY_PREFETCHED_CLUSTERS.get(item.id)
+    || buildQuestionClusters(item);
+  WEEKLY_PREFETCHED_CLUSTERS.set(item.id, clusters);
+  await prefetchWeeklyItemAssets(item, clusters, {
+    questionIndex,
+    page: savedState?.savedGridPage || 0,
+    priority,
+  });
+}
+
+function startPendingQuestionPrefetch() {
+  const questionIndexes = pendingQuestionPrefetchIndexes;
+  pendingQuestionPrefetchIndexes = [];
+  questionIndexes.forEach((questionIndex, distance) => {
+    if (questionIndex >= ITEMS.length) return;
+    void prefetchQuestionAssets(questionIndex, {
+      priority: QUESTION_PREFETCH_LOOKAHEAD - distance,
+    });
+  });
+}
+
+async function prepareFirstWeeklyQuestionAssets() {
+  if (quizSource !== 'weekly' || !POOLS.weekly.length || isRetrospectiveReview()) return;
+  const items = drawSession();
+  const item = items[0];
+  if (!item) return;
+  const clusters = buildQuestionClusters(item);
+  const prefetchedClusters = new Map([[item.id, clusters]]);
+  for (const futureItem of items.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1)) {
+    prefetchedClusters.set(futureItem.id, buildQuestionClusters(futureItem));
+  }
+  WEEKLY_PREPARED_SESSION = {
+    items,
+    prefetchedClusters,
+  };
+  await prefetchWeeklyItemAssets(item, clusters, {
+    questionIndex: 0,
+    page: 0,
+    mode: userView.displayMode,
+    isClustered: userView.clustered,
+    proteinEnsemble: userView.showProteinEnsemble,
+    stage: 'first-question-prefetch',
+    priority: QUESTION_PREFETCH_LOOKAHEAD + 1,
+  });
+  items.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1).forEach((futureItem, distance) => {
+    void prefetchWeeklyItemAssets(futureItem, prefetchedClusters.get(futureItem.id), {
+      questionIndex: distance + 1,
+      page: 0,
+      mode: userView.displayMode,
+      isClustered: userView.clustered,
+      proteinEnsemble: userView.showProteinEnsemble,
+      stage: 'setup-lookahead-prefetch',
+      priority: QUESTION_PREFETCH_LOOKAHEAD - distance,
+    });
+  });
 }
 // keep only ATOM/HETATM/TER records so concatenated files parse as a single model (drop END/CONECT/etc.)
 const atomRecords = t => t.split('\n').filter(l => /^(ATOM|HETATM|TER)/.test(l)).join('\n');
@@ -1491,6 +1676,49 @@ function configurePlugin(targetPlugin) {
     });
   } catch (e) {}
 }
+function cancelGridViewerPrewarm() {
+  gridViewerPrewarmGeneration++;
+}
+function waitForViewerPrewarmIdle() {
+  return new Promise(resolve => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(resolve, { timeout: 250 });
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+async function prewarmGridViewerPool() {
+  if (!GRID_VIEWER_PREWARM_ENABLED || !WEEKLY_ONLY || quizSource !== 'weekly'
+      || displayMode !== 'grid' || isRetrospectiveReview()) return;
+  const generation = ++gridViewerPrewarmGeneration;
+  await viewerPerformance.measureStartup('grid-viewer-pool-prewarm', async () => {
+    while (gridViewerPool.size() < GRID_PAGE_SIZE && generation === gridViewerPrewarmGeneration) {
+      await waitForViewerPrewarmIdle();
+      if (generation !== gridViewerPrewarmGeneration) return;
+      const host = document.createElement('div');
+      host.className = 'grid-host';
+      let prewarmedViewer;
+      try {
+        prewarmedViewer = await molstar.Viewer.create(host, { ...OPTS, extensions: [] });
+        configurePlugin(prewarmedViewer.plugin);
+      } catch (error) {
+        try { prewarmedViewer?.dispose?.(); } catch (_) {}
+        console.warn('Grid viewer prewarm stopped:', error.message);
+        return;
+      }
+      if (generation !== gridViewerPrewarmGeneration) {
+        try { prewarmedViewer.dispose(); } catch (_) {}
+        return;
+      }
+      if (!gridViewerPool.add({
+        viewer: prewarmedViewer,
+        plugin: prewarmedViewer.plugin,
+        host,
+      })) return;
+    }
+  }, { targetSize: GRID_PAGE_SIZE });
+}
 function cameraChanges(targetPlugin) {
   return targetPlugin?.canvas3d?.camera?.changed || targetPlugin?.canvas3d?.camera?.stateChanged;
 }
@@ -2073,11 +2301,22 @@ function disposeGridViewers() {
   hideActivePoseInfoTooltip();
   if (stopGridCameraSync) { stopGridCameraSync(); stopGridCameraSync = null; }
   if (stopGridLayout) { stopGridLayout(); stopGridLayout = null; }
+  const performanceTiming = viewerPerformance.current();
   for (const cell of gridViewers) {
     cell.disposed = true;
     try { cell.poseClickSubscription?.unsubscribe?.(); } catch (e) {}
     try { cell.detachReplay?.(); } catch (e) {}
-    try { cell.viewer?.dispose(); } catch (e) {}
+    const clear = () => cell.plugin.clear();
+    gridViewerPool.release(cell, {
+      clear: performanceTiming
+        ? () => viewerPerformance.measure(
+          performanceTiming,
+          'grid-viewer-reuse-clear',
+          clear,
+          { paneId: cell.paneId },
+        )
+        : clear,
+    });
   }
   gridViewers = []; $('#gridcells').replaceChildren();
 }
@@ -2422,7 +2661,24 @@ async function populateGridCell(cell, revision, { preserveCamera = null } = {}) 
 }
 async function buildGridCell(cell, revision) {
   try {
-    const gridViewer = await molstar.Viewer.create(cell.host, { ...OPTS, extensions: [] });
+    const reporter = cell.spec.performanceReporter;
+    const pooled = typeof gridViewerPool !== 'undefined'
+      ? await gridViewerPool.acquire()
+      : null;
+    let gridViewer;
+    if (pooled) {
+      cell.host.replaceWith(pooled.host);
+      cell.host = pooled.host;
+      gridViewer = pooled.viewer;
+      cell.reusedViewer = true;
+      cell.viewerSource = pooled.source;
+    } else {
+      const createViewer = () => molstar.Viewer.create(cell.host, { ...OPTS, extensions: [] });
+      gridViewer = reporter
+        ? await reporter.measure(cell.spec.performanceTiming, 'grid-viewer-create', createViewer)
+        : await createViewer();
+      cell.viewerSource = 'created';
+    }
     cell.viewer = gridViewer; cell.plugin = gridViewer.plugin;
     if (revision !== gridBuildRevision || cell.disposed) return gridViewer.dispose();
     configurePlugin(cell.plugin);
@@ -2435,7 +2691,20 @@ async function buildGridCell(cell, revision) {
     } catch (error) {
       console.warn('Grid pane replay attachment omitted:', error.message);
     }
-    await populateGridCell(cell, revision);
+    const populate = () => populateGridCell(cell, revision);
+    if (reporter) {
+      await reporter.measure(cell.spec.performanceTiming, 'grid-cell-populate', populate);
+      if (revision !== gridBuildRevision || cell.disposed) return;
+      cell.card.classList.remove('grid-card-loading');
+      reporter.milestone(
+        cell.spec.performanceTiming,
+        'first-grid-card-ready',
+        { paneId: cell.paneId },
+      );
+    } else {
+      await populate();
+    }
+    if (revision === gridBuildRevision && !cell.disposed) cell.reusable = true;
   } catch (e) {
     try { cell.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
     cell.poseClickSubscription = null;
@@ -2443,6 +2712,7 @@ async function buildGridCell(cell, revision) {
     cell.viewer = null; cell.plugin = null;
     if (!cell.disposed && revision === gridBuildRevision) {
       cell.failed = true;
+      cell.card.classList.remove('grid-card-loading');
       cell.head.disabled = true;
       cell.head.onclick = null;
       cell.card.classList.add('failed');
@@ -2474,7 +2744,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       : (retrospectiveGridProteinFrames.get(retrospectiveChoiceKey(entry.choice)) || 'xtal');
     const exactEntryChoices = answerActive && !fixedReference
       ? exactChoicesForEntry(entry) : [];
-    card.className = 'grid-card'
+    card.className = 'grid-card grid-card-loading'
       + ((answerActive && !fixedReference)
         ? (exactEntryChoices.length ? ' correct' : ' wrong') : '')
       + (xtalReference ? ' xtal-reference' : '')
@@ -2542,27 +2812,71 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
     card.appendChild(actions);
     cellsBox.appendChild(card);
     return { entry, paneId, card, head, host, viewer: null, plugin: null, poseSphere: null,
-      cameraEnvelope: null, disposed: false,
+      cameraEnvelope: null, disposed: false, reusable: false, reusedViewer: false,
+      viewerSource: null,
       detachReplay: null, poseClickSubscription: null,
       spec: { item: cur.item, proteinMode, answer: cur.revealed && cur.showAnswer,
         clustered, showHbonds, showProteinEnsemble, showSurface,
-        retrospectiveReview: isRetrospectiveReview(), retrospectiveProteinFrame: entryProteinFrame } };
+        retrospectiveReview: isRetrospectiveReview(), retrospectiveProteinFrame: entryProteinFrame,
+        performanceTiming: viewerPerformance.current(),
+        performanceReporter: viewerPerformance } };
   });
   gridViewers = cells; startGridLayout(); syncGridSelection();
   await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
   if (revision !== gridBuildRevision) return;
   const active = cells.filter(cell => cell.plugin?.canvas3d);
+  cells[0]?.spec.performanceReporter?.milestone(
+    cells[0]?.spec.performanceTiming,
+    'all-grid-cards-ready',
+    {
+      cards: active.length,
+      failed: cells.length - active.length,
+      viewersReused: active.filter(cell => cell.reusedViewer).length,
+      viewersPrewarmed: active.filter(cell => cell.viewerSource === 'prewarmed').length,
+      viewersRecycled: active.filter(cell => cell.viewerSource === 'recycled').length,
+    },
+  );
   if (active.length) {
     const snapshot = previousCamera || active[0].plugin.canvas3d.camera.getSnapshot();
-    await Promise.all(active.map(cell => pinCameraSnapshot(
-      cell.plugin, cameraSnapshotForScene(snapshot, cell.cameraEnvelope))));
-    try {
-      await pinCameraSnapshot(plugin, cameraSnapshotForScene(
-        snapshot, plugin?.canvas3d?.camera?.getSnapshot?.()));
-    } catch (e) {}
+    const synchronizeCameras = async () => {
+      if (FAST_GRID_CAMERA_SYNC_ENABLED) {
+        for (const cell of active) {
+          cell.plugin.canvas3d.camera.setState(
+            cameraSnapshotForScene(snapshot, cell.cameraEnvelope),
+            0,
+          );
+          cell.plugin.canvas3d.requestDraw?.();
+        }
+        try {
+          plugin?.canvas3d?.camera?.setState?.(
+            cameraSnapshotForScene(snapshot, plugin?.canvas3d?.camera?.getSnapshot?.()),
+            0,
+          );
+          plugin?.canvas3d?.requestDraw?.();
+        } catch (e) {}
+        await nextAnimationFrame();
+        return;
+      }
+      await Promise.all(active.map(cell => pinCameraSnapshot(
+        cell.plugin, cameraSnapshotForScene(snapshot, cell.cameraEnvelope))));
+      try {
+        await pinCameraSnapshot(plugin, cameraSnapshotForScene(
+          snapshot, plugin?.canvas3d?.camera?.getSnapshot?.()));
+      } catch (e) {}
+    };
+    const reporter = cells[0]?.spec.performanceReporter;
+    const timing = cells[0]?.spec.performanceTiming;
+    if (reporter) {
+      await reporter.measure(timing, 'grid-camera-finalize', synchronizeCameras, {
+        fast: FAST_GRID_CAMERA_SYNC_ENABLED,
+      });
+    } else {
+      await synchronizeCameras();
+    }
     stopGridCameraSync = syncGridCameras(active);
   }
   view.classList.remove('loading-grid'); syncReviewState();
+  startPendingQuestionPrefetch();
 }
 
 // ---- two layers: a protein/pocket context (fixed for classic questions; pose-specific for Weekly
@@ -3054,29 +3368,14 @@ async function buildLayer() {
     }
   }
   if (displayMode === 'grid') {
-    // On the first question the canonical viewer has no framed scene yet. Its
-    // default camera points at empty space, so it must not override the camera
-    // that each newly loaded Grid pane derives from its actual structure.
-    const hadCanonicalScene = proteinData.length > 0 || layerData.length > 0;
     // Cover the canonical viewer before it is rebuilt with the Grid pose set;
     // otherwise One-at-a-time briefly flashes as Show all during the transition.
     $('#stage').classList.add('grid-active');
     $('#gridview').classList.add('on', 'loading-grid');
-    await buildGrid(!resetCamera, !resetCamera && hadCanonicalScene);
-    const freshGridCamera = resetCamera
-      ? plugin?.canvas3d?.camera?.getSnapshot?.() || null
-      : null;
-    try {
-      // Visible panes load first. The hidden canonical scene still completes
-      // before the rebuild coordinator enables interaction and starts tracing.
-      const canonicalChoices = gridEntries()
-        .map(entry => entry.choice)
-        .filter(choice => !isFixedReferenceChoice(choice));
-      await buildCanonicalLayer(canonicalChoices, !resetCamera);
-      if (resetCamera) await pinCameraSnapshot(plugin, freshGridCamera);
-    } catch (error) {
-      console.warn('Canonical Grid scene could not be built:', error.message);
-    }
+    // The canonical viewer is invisible in Grid. Rebuilding the same structures
+    // there duplicated Mol* parse/representation work and kept controls locked
+    // after all visible cards were ready. Non-Grid modes rebuild it lazily.
+    await buildGrid(!resetCamera, false);
     return;
   }
   if ($('#gridview').classList.contains('on')) {
@@ -3093,9 +3392,21 @@ function requestQuestionCameraReset() {
 }
 
 async function loadQuestion(i) {
-  structurePrefetcher.cancel();
+  pendingQuestionPrefetchIndexes = Array.from(
+    { length: QUESTION_PREFETCH_LOOKAHEAD },
+    (_, distance) => i + distance + 1,
+  );
   const item = ITEMS[i];
   const loadStartedAt = Date.now();
+  const performanceTiming = pendingQuestionPerformanceTiming
+    || viewerPerformance.beginQuestion({
+      itemId: item?.id || null,
+      questionIndex: i,
+      requestedMode: userView.displayMode,
+      clustered: userView.clustered,
+    });
+  pendingQuestionPerformanceTiming = null;
+  let loadSucceeded = false;
   const wrap = $('#wrap');
   wrap.classList.add('question-loading');
   $('#stage').classList.add('loading-system');
@@ -3170,10 +3481,15 @@ async function loadQuestion(i) {
       syncButtons();
     },
     async () => {
-      await window.waitForCameraSettled({
-        cameraChanged: plugin.canvas3d?.camera?.changed,
-        requestReset: requestQuestionCameraReset,
-      });
+      // Grid cells settle and pin their own cameras. Waiting on the hidden
+      // canonical viewer here can keep the question locked long after every
+      // visible Grid card is ready.
+      if (displayMode !== 'grid') {
+        await window.waitForCameraSettled({
+          cameraChanged: plugin.canvas3d?.camera?.changed,
+          requestReset: requestQuestionCameraReset,
+        });
+      }
       weeklyTraceStream?.startVisit?.({ itemId: item.id, questionIndex: i });
       viewerTraceRecorder?.start({ appState: currentReplayableAppState() });
       recordAppEvent('question_loaded', {
@@ -3183,11 +3499,39 @@ async function loadQuestion(i) {
       if (cur.revealed && weeklyResultsRevealActive()) renderRevealedQuestionUi();
       saveWeeklyResumePosition(i);
       requestAnimationFrame(() => requestAnimationFrame(() => $('#stage').classList.remove('loading-system')));
-      void prefetchQuestionAssets(i + 1);
+      startPendingQuestionPrefetch();
     },
     );
+    loadSucceeded = true;
   } finally {
     wrap.classList.remove('question-loading');
+    viewerPerformance.milestone(performanceTiming, 'question-ready');
+    const completedPerformance = viewerPerformance.finishQuestion(performanceTiming, {
+      itemId: item?.id || null,
+      questionIndex: i,
+      requestedMode: userView.displayMode,
+      clustered: userView.clustered,
+      status: loadSucceeded ? 'ready' : 'failed',
+      mode: displayMode,
+      gridCards: displayMode === 'grid' ? gridViewers.length : 0,
+      viewerPoolEnabled: GRID_VIEWER_POOL_ENABLED,
+      fastGridCameraSyncEnabled: FAST_GRID_CAMERA_SYNC_ENABLED,
+      gridViewerPrewarmEnabled: GRID_VIEWER_PREWARM_ENABLED,
+      gridViewersReused: displayMode === 'grid'
+        ? gridViewers.filter(cell => cell.reusedViewer).length
+        : 0,
+      gridViewersPrewarmed: displayMode === 'grid'
+        ? gridViewers.filter(cell => cell.viewerSource === 'prewarmed').length
+        : 0,
+      gridViewersRecycled: displayMode === 'grid'
+        ? gridViewers.filter(cell => cell.viewerSource === 'recycled').length
+        : 0,
+      gridViewersCreated: displayMode === 'grid'
+        ? gridViewers.filter(cell => cell.plugin && !cell.reusedViewer).length
+        : 0,
+      gridViewerPoolSize: gridViewerPool.size(),
+    });
+    recordPerformanceDiagnostics(completedPerformance);
   }
 }
 
@@ -4412,9 +4756,11 @@ function drawSession() {
   return shuffle(picked).slice(0, SESSION_SIZE);
 }
 function beginQuiz(initialQuestionIndex = 0) {
-  ITEMS = drawSession();
+  const prepared = quizSource === 'weekly' ? WEEKLY_PREPARED_SESSION : null;
+  ITEMS = prepared?.items || drawSession();
   WEEKLY_ITEM_STATES = new Map();
-  WEEKLY_PREFETCHED_CLUSTERS = new Map();
+  WEEKLY_PREFETCHED_CLUSTERS = prepared?.prefetchedClusters || new Map();
+  WEEKLY_PREPARED_SESSION = null;
   localWeeklyScore = { correct: 0, answered: 0 };
   localWeeklyScoredItems = new Set();
   weeklyCommentPromptEnabled = true;
@@ -4450,7 +4796,7 @@ function beginQuiz(initialQuestionIndex = 0) {
 }
 
 async function resumeWeeklyQuizIfAvailable() {
-  if (DEV || isReadOnlyPreview() || isRetrospectiveReview()
+  if (DEV || PERFORMANCE_RECORDING_REQUESTED || isReadOnlyPreview() || isRetrospectiveReview()
     || quizSource !== 'weekly' || !WEEKLY_ROUND?.round_id) return false;
   const store = window.foldariumWeeklySessionResume;
   const token = store?.read?.();
@@ -4501,13 +4847,28 @@ function syncStartGate() {
   }
   const input = $('#participant-name');
   const displayName = normalizedParticipantName();
-  const disabled = !displayName || displayName.length > 80 || !input.checkValidity();
+  const disabled = !displayName || displayName.length > 80 || !input.checkValidity()
+    || (PERFORMANCE_RECORDING_REQUESTED && !performanceDiagnosticsConsented());
   button.disabled = disabled;
   if (playForFun) playForFun.disabled = disabled;
 }
 
+function beginStartPerformanceTiming() {
+  const item = WEEKLY_PREPARED_SESSION?.items?.[0] || null;
+  pendingQuestionPerformanceTiming = viewerPerformance.beginQuestion({
+    itemId: item?.id || null,
+    questionIndex: 0,
+    requestedMode: userView.displayMode,
+    clustered: userView.clustered,
+    includesStart: true,
+  });
+  return pendingQuestionPerformanceTiming;
+}
+
 async function startQuiz() {
+  cancelGridViewerPrewarm();
   if (DEV || isRetrospectiveReview()) {
+    beginStartPerformanceTiming();
     remoteSessionId = null;
     participantDisplayName = '';
     beginQuiz();
@@ -4523,6 +4884,12 @@ async function startQuiz() {
     input.focus();
     return;
   }
+  if (PERFORMANCE_RECORDING_REQUESTED && !performanceDiagnosticsConsented()) {
+    status.textContent = 'Consent is required to record beta performance diagnostics.';
+    $('#performance-consent-checkbox')?.focus();
+    return;
+  }
+  const startPerformanceTiming = beginStartPerformanceTiming();
   if (isReadOnlyPreview() || isRetrospectiveReview()) {
     remoteSessionId = null;
     participantDisplayName = displayName;
@@ -4536,22 +4903,29 @@ async function startQuiz() {
     if (!backend) throw new Error('Quiz persistence is unavailable.');
     const postReveal = quizSource === 'weekly'
       && WEEKLY_ROUND?.public_status === 'revealed';
-    remoteSessionId = await backend.startNamedSession({
-      source: quizSource,
-      difficulty,
-      weeklyRoundId: quizSource === 'weekly' ? WEEKLY_ROUND?.round_id : null,
-      displayName,
-      initialAppState: quizSource === 'weekly'
-        ? {
-          ...currentReplayableAppState(),
-          leaderboard_opt_in: true,
-          leaderboard_name_version: 1,
-          play_mode: postReveal ? 'for_fun' : 'blind_competitive',
-          play_mode_version: 1,
-        }
-        : currentReplayableAppState(),
-      postReveal,
-    });
+    remoteSessionId = await viewerPerformance.measure(
+      startPerformanceTiming,
+      'named-session-start',
+      () => backend.startNamedSession({
+        source: quizSource,
+        difficulty,
+        weeklyRoundId: quizSource === 'weekly' ? WEEKLY_ROUND?.round_id : null,
+        displayName,
+        initialAppState: quizSource === 'weekly'
+          ? {
+            ...currentReplayableAppState(),
+            leaderboard_opt_in: true,
+            leaderboard_name_version: 1,
+            play_mode: postReveal ? 'for_fun' : 'blind_competitive',
+            play_mode_version: 1,
+            performance_diagnostics_opt_in: PERFORMANCE_RECORDING_REQUESTED,
+            performance_diagnostics_version: PERFORMANCE_RECORDING_REQUESTED ? 1 : null,
+          }
+          : currentReplayableAppState(),
+        postReveal,
+      }),
+      { source: quizSource },
+    );
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
     saveWeeklyResumePosition(0);
@@ -4559,6 +4933,12 @@ async function startQuiz() {
   } catch (error) {
     remoteSessionId = null;
     participantDisplayName = '';
+    pendingQuestionPerformanceTiming = null;
+    viewerPerformance.finishQuestion(startPerformanceTiming, {
+      status: 'failed',
+      mode: 'starting',
+      includesStart: true,
+    });
     status.textContent = `Could not start a recorded quiz. ${error.message}`;
   } finally {
     syncStartGate();
@@ -5717,7 +6097,10 @@ async function init() {
       };
     } else {
       const backend = researchBackend();
-      WEEKLY_ROUND = await backend?.getWeeklyRound() || null;
+      WEEKLY_ROUND = await viewerPerformance.measureStartup(
+        'weekly-round-rpc',
+        () => backend?.getWeeklyRound(),
+      ) || null;
       if (WEEKLY_ROUND && backend) {
         const [votes, totals] = await Promise.all([
           backend.getWeeklyVotes(WEEKLY_ROUND.round_id, {
@@ -5914,6 +6297,7 @@ async function init() {
   $('#start').onclick = startQuiz;
   $('#play-for-fun-start').onclick = startQuiz;
   $('#participant-name').addEventListener('input', syncStartGate);
+  $('#performance-consent-checkbox')?.addEventListener('change', syncStartGate);
   $('#participant-name').addEventListener('keydown', event => {
     if (event.key === 'Enter' && !$('#start').disabled) { event.preventDefault(); startQuiz(); }
   });
@@ -5976,7 +6360,12 @@ async function init() {
   if (!WEEKLY_ONLY && !POOLS.cameo.length && !POOLS.rnp.length) {
     $('#ligand').textContent = 'no quiz items'; return;
   }
-  if (!await resumeWeeklyQuizIfAvailable()) showIntro();
+  if (!await resumeWeeklyQuizIfAvailable()) {
+    showIntro();
+    void prepareFirstWeeklyQuestionAssets()
+      .then(() => prewarmGridViewerPool())
+      .catch(error => console.warn('Weekly preview preparation omitted:', error.message));
+  }
   if (isArchiveRetrospective() && POOLS.weekly.length) await startQuiz();
   window.foldariumApplyPrivateReviewBundle = async (bundle) => {
     if (!bundle) {

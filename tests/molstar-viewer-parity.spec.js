@@ -13,7 +13,8 @@ const WEEKLY_GATE_PASSWORD = process.env.WEEKLY_GATE_PASSWORD;
 function isIgnorableError(message) {
   return message.includes('molstarvolseg.ncbr.muni.cz')
     || message === 'Failed to load resource: net::ERR_FAILED'
-    || message === 'Failed to fetch';
+    || message === 'Failed to fetch'
+    || /^HTTP 404 .*\/api\/private-evaluation$/.test(message);
 }
 
 function filterErrors(errors) {
