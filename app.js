@@ -104,6 +104,8 @@ const GRID_VIEWER_POOL_ENABLED = WEEKLY_ONLY && APP_QUERY.get('viewer_pool') !==
 const FAST_GRID_CAMERA_SYNC_ENABLED = WEEKLY_ONLY && APP_QUERY.get('fast_camera') !== '0';
 const GRID_VIEWER_PREWARM_ENABLED = GRID_VIEWER_POOL_ENABLED
   && APP_QUERY.get('warm_viewers') !== '0';
+const FIRST_GRID_PREBUILD_ENABLED = GRID_VIEWER_PREWARM_ENABLED
+  && APP_QUERY.get('first_grid') !== '0';
 const gridViewerPool = window.foldariumGridViewerPool?.createGridViewerPool?.({
   enabled: GRID_VIEWER_POOL_ENABLED,
   maxSize: GRID_PAGE_SIZE,
@@ -282,6 +284,10 @@ let showProteinEnsemble = false; // optional faint receptor backbones for the We
 let showSurface = false;
 let gridViewers = [], gridBuildRevision = 0, gridMethodIndex = 0;
 let gridViewerPrewarmGeneration = 0;
+let firstGridPrebuildGeneration = 0;
+let firstGridPreparationPromise = null;
+let firstGridPrebuildPromise = null;
+let preparedFirstGrid = null;
 let pendingQuestionPerformanceTiming = null;
 let activePaneId = null, selectedPaneId = null;
 let stopGridCameraSync = null, stopGridLayout = null;
@@ -1719,6 +1725,185 @@ async function prewarmGridViewerPool() {
     }
   }, { targetSize: GRID_PAGE_SIZE });
 }
+function initialWeeklyQuestionState(item, clusters) {
+  return {
+    item,
+    clusters,
+    gridMethods: [],
+    selected: null,
+    selectionExact: false,
+    selectedAsCluster: false,
+    contextChoice: null,
+    answerChoices: [],
+    revealed: false,
+    showAnswer: false,
+    rejectedChoiceIds: new Set(),
+    voteCommentHandled: false,
+    voteCommentText: null,
+    pendingWeeklyVote: null,
+  };
+}
+function firstGridEntries(item, clusters) {
+  const previousCur = cur;
+  const previousGridMethodIndex = gridMethodIndex;
+  try {
+    cur = initialWeeklyQuestionState(item, clusters);
+    gridMethodIndex = 0;
+    return gridEntries();
+  } finally {
+    cur = previousCur;
+    gridMethodIndex = previousGridMethodIndex;
+  }
+}
+function firstGridSignature(item, entries) {
+  return JSON.stringify({
+    itemId: item?.id || null,
+    clustered: userView.clustered,
+    proteinMode: userView.proteinMode,
+    showHbonds: userView.showHbonds,
+    showProteinEnsemble: userView.showProteinEnsemble,
+    entries: entries.map(entry => ({
+      pose: entry.choice?.pose_file || null,
+      members: (entry.cluster?.members || [entry.choice])
+        .map(choice => choice?.pose_file || null),
+    })),
+  });
+}
+function releasePreparedGridScenes(scenes) {
+  for (const scene of scenes || []) {
+    scene.disposed = true;
+    try { scene.poseClickSubscription?.unsubscribe?.(); } catch (_) {}
+    scene.poseClickSubscription = null;
+    scene.reusable = true;
+    gridViewerPool.release(scene);
+  }
+}
+function discardPreparedFirstGrid() {
+  firstGridPrebuildGeneration++;
+  if (preparedFirstGrid) {
+    releasePreparedGridScenes(preparedFirstGrid.scenes);
+    preparedFirstGrid = null;
+  }
+}
+async function buildPreparedGridScene(entry, paneIndex, generation, revision) {
+  await waitForViewerPrewarmIdle();
+  if (generation !== firstGridPrebuildGeneration) return null;
+  const paneId = `pane-0-${paneIndex}`;
+  const card = document.createElement('div');
+  const head = document.createElement('button');
+  let host = document.createElement('div');
+  card.append(host, head);
+  const pooled = await gridViewerPool.acquire();
+  let gridViewer;
+  let viewerSource = 'created';
+  if (pooled) {
+    host.replaceWith(pooled.host);
+    host = pooled.host;
+    gridViewer = pooled.viewer;
+    viewerSource = pooled.source;
+  } else {
+    gridViewer = await molstar.Viewer.create(host, { ...OPTS, extensions: [] });
+  }
+  const cell = {
+    entry,
+    paneId,
+    card,
+    head,
+    host,
+    viewer: gridViewer,
+    plugin: gridViewer.plugin,
+    poseSphere: null,
+    cameraEnvelope: null,
+    disposed: false,
+    reusable: false,
+    reusedViewer: viewerSource !== 'created',
+    viewerSource: 'prebuilt',
+    detachReplay: null,
+    poseClickSubscription: null,
+    spec: {
+      item: WEEKLY_PREPARED_SESSION?.items?.[0],
+      proteinMode: userView.proteinMode,
+      answer: false,
+      clustered: userView.clustered,
+      showHbonds: userView.showHbonds,
+      showProteinEnsemble: userView.showProteinEnsemble,
+      showSurface: false,
+      retrospectiveReview: false,
+      retrospectiveProteinFrame: 'xtal',
+      performanceTiming: null,
+      performanceReporter: null,
+      deferInteraction: true,
+    },
+  };
+  configurePlugin(cell.plugin);
+  try {
+    await populateGridCell(cell, revision);
+    if (generation !== firstGridPrebuildGeneration || revision !== gridBuildRevision) {
+      cell.reusable = true;
+      gridViewerPool.release(cell);
+      return null;
+    }
+    cell.reusable = true;
+    return cell;
+  } catch (error) {
+    try { cell.viewer?.dispose?.(); } catch (_) {}
+    throw error;
+  }
+}
+async function prebuildFirstWeeklyGrid() {
+  if (!FIRST_GRID_PREBUILD_ENABLED || displayMode !== 'grid' || isRetrospectiveReview()) return null;
+  const item = WEEKLY_PREPARED_SESSION?.items?.[0];
+  const clusters = item && WEEKLY_PREPARED_SESSION?.prefetchedClusters?.get(item.id);
+  if (!item || !clusters) return null;
+  const entries = firstGridEntries(item, clusters);
+  const signature = firstGridSignature(item, entries);
+  if (preparedFirstGrid?.signature === signature) return preparedFirstGrid;
+  discardPreparedFirstGrid();
+  const generation = firstGridPrebuildGeneration;
+  const revision = gridBuildRevision;
+  const scenes = [];
+  try {
+    await viewerPerformance.measureStartup('first-grid-scene-prebuild', async () => {
+      const built = await Promise.all(entries.map(
+        (entry, paneIndex) => buildPreparedGridScene(
+          entry,
+          paneIndex,
+          generation,
+          revision,
+        ),
+      ));
+      scenes.push(...built.filter(Boolean));
+    }, { itemId: item.id, cards: entries.length });
+    if (generation !== firstGridPrebuildGeneration || scenes.length !== entries.length) {
+      releasePreparedGridScenes(scenes);
+      return null;
+    }
+    preparedFirstGrid = { itemId: item.id, signature, scenes };
+    return preparedFirstGrid;
+  } catch (error) {
+    releasePreparedGridScenes(scenes);
+    console.warn('First Grid scene prebuild omitted:', error.message);
+    return null;
+  }
+}
+function scheduleFirstWeeklyGridPrebuild() {
+  if (!FIRST_GRID_PREBUILD_ENABLED) return Promise.resolve(null);
+  if (!firstGridPrebuildPromise) {
+    firstGridPrebuildPromise = prebuildFirstWeeklyGrid();
+  }
+  return firstGridPrebuildPromise;
+}
+function consumePreparedFirstGrid(item, entries) {
+  if (!preparedFirstGrid) return null;
+  const signature = firstGridSignature(item, entries);
+  if (preparedFirstGrid.itemId !== item?.id || preparedFirstGrid.signature !== signature) {
+    discardPreparedFirstGrid();
+    return null;
+  }
+  const prepared = preparedFirstGrid;
+  preparedFirstGrid = null;
+  return prepared.scenes;
+}
 function cameraChanges(targetPlugin) {
   return targetPlugin?.canvas3d?.camera?.changed || targetPlugin?.canvas3d?.camera?.stateChanged;
 }
@@ -1789,6 +1974,16 @@ function focusLigandSpheres(targetPlugin, spheres) {
   return true;
 }
 function sameChoice(a, b) { return !!(a && b && (a === b || a.pose_file === b.pose_file)); }
+function attachPreparedGridPoseInteraction(cell) {
+  if (cell.spec.item.source !== 'weekly' || cell.poseClickSubscription) return;
+  const choice = cell.entry.choice;
+  cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
+    if ((locked() && !cell.spec.retrospectiveReview)
+        || !sameChoice(choiceFromPoseInteraction(event), choice)) return;
+    clearTransientPoseSelection(cell.plugin);
+    inspectGridChoice(cell.entry, cell.paneId, 'ligand-click');
+  }) || null;
+}
 function registerPoseClickTarget(representationSelector, choice) {
   const representation = representationSelector?.obj?.data?.repr;
   if (representation && typeof representation === 'object') {
@@ -2639,7 +2834,7 @@ async function populateGridCell(cell, revision, { preserveCamera = null } = {}) 
       await buildInteractions(urls.pocket, [c.pose_file], cell.plugin);
     }
   }
-  if (cell.spec.item.source === 'weekly') {
+  if (cell.spec.item.source === 'weekly' && !cell.spec.deferInteraction) {
     cell.poseClickSubscription = cell.plugin.behaviors?.interaction?.click?.subscribe(event => {
       if ((locked() && !cell.spec.retrospectiveReview)
           || !sameChoice(choiceFromPoseInteraction(event), c)) return;
@@ -2821,8 +3016,33 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
         performanceTiming: viewerPerformance.current(),
         performanceReporter: viewerPerformance } };
   });
+  const preparedScenes = consumePreparedFirstGrid(cur.item, cells.map(cell => cell.entry));
+  if (preparedScenes?.length === cells.length) {
+    cells.forEach((cell, index) => {
+      const prepared = preparedScenes[index];
+      cell.host.replaceWith(prepared.host);
+      cell.host = prepared.host;
+      cell.viewer = prepared.viewer;
+      cell.plugin = prepared.plugin;
+      cell.poseSphere = prepared.poseSphere;
+      cell.cameraEnvelope = prepared.cameraEnvelope;
+      cell.reusable = true;
+      cell.reusedViewer = true;
+      cell.viewerSource = 'prebuilt';
+      attachPreparedGridPoseInteraction(cell);
+      cell.card.classList.remove('grid-card-loading');
+      cell.viewer.handleResize?.();
+    });
+    cells[0]?.spec.performanceReporter?.milestone(
+      cells[0]?.spec.performanceTiming,
+      'first-grid-card-ready',
+      { paneId: cells[0]?.paneId, prebuilt: true },
+    );
+  }
   gridViewers = cells; startGridLayout(); syncGridSelection();
-  await Promise.allSettled(cells.map(cell => buildGridCell(cell, revision)));
+  await Promise.allSettled(cells
+    .filter(cell => !cell.plugin)
+    .map(cell => buildGridCell(cell, revision)));
   if (revision !== gridBuildRevision) return;
   const active = cells.filter(cell => cell.plugin?.canvas3d);
   cells[0]?.spec.performanceReporter?.milestone(
@@ -2834,6 +3054,7 @@ async function buildGrid(preserveCamera = true, preserveCanonicalCamera = true) 
       viewersReused: active.filter(cell => cell.reusedViewer).length,
       viewersPrewarmed: active.filter(cell => cell.viewerSource === 'prewarmed').length,
       viewersRecycled: active.filter(cell => cell.viewerSource === 'recycled').length,
+      viewersPrebuilt: active.filter(cell => cell.viewerSource === 'prebuilt').length,
     },
   );
   if (active.length) {
@@ -3435,10 +3656,14 @@ async function loadQuestion(i) {
       idx = i;
       const gridMethods = savedWeeklyState?.gridMethods || (item.source === 'rnp'
         ? shuffle([...new Set(item.choices.map(c => c._method).filter(Boolean))]) : []);
-      cur = savedWeeklyState || { item, clusters, gridMethods, selected: null, selectionExact: false,
-        selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false,
-        rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null,
-        pendingWeeklyVote: null };
+      cur = savedWeeklyState || (
+        item.source === 'weekly'
+          ? { ...initialWeeklyQuestionState(item, clusters), gridMethods }
+          : { item, clusters, gridMethods, selected: null, selectionExact: false,
+            selectedAsCluster: false, contextChoice: null, answerChoices: [], revealed: false, showAnswer: false,
+            rejectedChoiceIds: new Set(), voteCommentHandled: false, voteCommentText: null,
+            pendingWeeklyVote: null }
+      );
       cur.item = item;
       const restoreWeeklyResult = !!(savedWeeklyState?.revealed && weeklyResultsRevealActive());
       if (!restoreWeeklyResult) {
@@ -3517,6 +3742,7 @@ async function loadQuestion(i) {
       viewerPoolEnabled: GRID_VIEWER_POOL_ENABLED,
       fastGridCameraSyncEnabled: FAST_GRID_CAMERA_SYNC_ENABLED,
       gridViewerPrewarmEnabled: GRID_VIEWER_PREWARM_ENABLED,
+      firstGridPrebuildEnabled: FIRST_GRID_PREBUILD_ENABLED,
       gridViewersReused: displayMode === 'grid'
         ? gridViewers.filter(cell => cell.reusedViewer).length
         : 0,
@@ -3525,6 +3751,9 @@ async function loadQuestion(i) {
         : 0,
       gridViewersRecycled: displayMode === 'grid'
         ? gridViewers.filter(cell => cell.viewerSource === 'recycled').length
+        : 0,
+      gridViewersPrebuilt: displayMode === 'grid'
+        ? gridViewers.filter(cell => cell.viewerSource === 'prebuilt').length
         : 0,
       gridViewersCreated: displayMode === 'grid'
         ? gridViewers.filter(cell => cell.plugin && !cell.reusedViewer).length
@@ -4866,9 +5095,13 @@ function beginStartPerformanceTiming() {
 }
 
 async function startQuiz() {
-  cancelGridViewerPrewarm();
+  const firstGridReady = FIRST_GRID_PREBUILD_ENABLED
+    ? (firstGridPreparationPromise || Promise.resolve(null))
+    : Promise.resolve(null);
+  if (!FIRST_GRID_PREBUILD_ENABLED) cancelGridViewerPrewarm();
   if (DEV || isRetrospectiveReview()) {
     beginStartPerformanceTiming();
+    await firstGridReady;
     remoteSessionId = null;
     participantDisplayName = '';
     beginQuiz();
@@ -4891,6 +5124,7 @@ async function startQuiz() {
   }
   const startPerformanceTiming = beginStartPerformanceTiming();
   if (isReadOnlyPreview() || isRetrospectiveReview()) {
+    await firstGridReady;
     remoteSessionId = null;
     participantDisplayName = displayName;
     beginQuiz();
@@ -4903,7 +5137,7 @@ async function startQuiz() {
     if (!backend) throw new Error('Quiz persistence is unavailable.');
     const postReveal = quizSource === 'weekly'
       && WEEKLY_ROUND?.public_status === 'revealed';
-    remoteSessionId = await viewerPerformance.measure(
+    const sessionPromise = viewerPerformance.measure(
       startPerformanceTiming,
       'named-session-start',
       () => backend.startNamedSession({
@@ -4926,6 +5160,7 @@ async function startQuiz() {
       }),
       { source: quizSource },
     );
+    [remoteSessionId] = await Promise.all([sessionPromise, firstGridReady]);
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
     saveWeeklyResumePosition(0);
@@ -6362,8 +6597,17 @@ async function init() {
   }
   if (!await resumeWeeklyQuizIfAvailable()) {
     showIntro();
-    void prepareFirstWeeklyQuestionAssets()
-      .then(() => prewarmGridViewerPool())
+    const firstQuestionAssets = prepareFirstWeeklyQuestionAssets();
+    if (FIRST_GRID_PREBUILD_ENABLED) {
+      firstGridPreparationPromise = Promise.all([
+        firstQuestionAssets,
+        scheduleFirstWeeklyGridPrebuild(),
+      ]).then(([, prepared]) => prepared);
+    } else {
+      firstGridPreparationPromise = firstQuestionAssets
+        .then(() => prewarmGridViewerPool());
+    }
+    firstGridPreparationPromise = firstGridPreparationPromise
       .catch(error => console.warn('Weekly preview preparation omitted:', error.message));
   }
   if (isArchiveRetrospective() && POOLS.weekly.length) await startQuiz();

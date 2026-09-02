@@ -70,6 +70,8 @@ async function unlockWeekly(page, url) {
 
 async function startQuiz(page, participantName) {
   await page.locator('#participant-name').fill(participantName);
+  const performanceConsent = page.locator('#performance-consent-checkbox');
+  if (await performanceConsent.isVisible()) await performanceConsent.check();
   await expect(page.locator('#start')).toBeEnabled({ timeout: VIEWER_TIMEOUT_MS });
   await page.locator('#start').click();
   await expect(page.locator('#progress')).toContainText('question 1 /', { timeout: VIEWER_TIMEOUT_MS });

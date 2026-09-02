@@ -108,9 +108,11 @@ test('collector records startup once and only newly observed resource timings', 
       viewerPoolEnabled: true,
       fastGridCameraSyncEnabled: true,
       gridViewerPrewarmEnabled: true,
+      firstGridPrebuildEnabled: true,
       gridViewersReused: 9,
       gridViewersPrewarmed: 0,
       gridViewersRecycled: 9,
+      gridViewersPrebuilt: 9,
       gridViewersCreated: 0,
       gridViewerPoolSize: 0,
     },
@@ -133,9 +135,11 @@ test('collector records startup once and only newly observed resource timings', 
   assert.equal(first.question.viewer_pool_enabled, true);
   assert.equal(first.question.fast_grid_camera_sync_enabled, true);
   assert.equal(first.question.grid_viewer_prewarm_enabled, true);
+  assert.equal(first.question.first_grid_prebuild_enabled, true);
   assert.equal(first.question.grid_viewers_reused, 9);
   assert.equal(first.question.grid_viewers_prewarmed, 0);
   assert.equal(first.question.grid_viewers_recycled, 9);
+  assert.equal(first.question.grid_viewers_prebuilt, 9);
   assert.equal(first.question.grid_viewers_created, 0);
   assert.equal(first.question.grid_viewer_pool_size, 0);
   assert.equal(first.structures.request_count, 1);
