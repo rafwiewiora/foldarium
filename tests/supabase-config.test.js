@@ -5,7 +5,12 @@ import vm from 'node:vm';
 
 const loaderSource = await readFile(new URL('../supabase-config.js', import.meta.url), 'utf8');
 
-async function runLoader({ status = 200, response = validConfig(), requestError = null } = {}) {
+async function runLoader({
+  status = 200,
+  response = validConfig(),
+  requestError = null,
+  search = '',
+} = {}) {
   const requests = [];
   const warnings = [];
   class XMLHttpRequest {
@@ -18,7 +23,7 @@ async function runLoader({ status = 200, response = validConfig(), requestError 
       this.responseText = JSON.stringify(response);
     }
   }
-  const window = {};
+  const window = { location: { search } };
   vm.runInNewContext(loaderSource, {
     window,
     XMLHttpRequest,
@@ -45,6 +50,7 @@ function validConfig(overrides = {}) {
     writable: true,
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
+    performanceBetaEnabled: false,
     ...overrides,
   };
 }
@@ -85,6 +91,39 @@ test('a read-only response retains public read credentials without enabling writ
   assert.equal(config.publishableKey, 'sb_publishable_staging');
   assert.equal(config.enabled, true);
   assert.equal(config.writable, false);
+});
+
+test('performance mode requests production data through the read-only config path', async () => {
+  const result = await runLoader({
+    search: '?perf=1',
+    response: validConfig({ writable: false, deploymentEnvironment: 'production' }),
+  });
+  assert.deepEqual(result.requests, [{
+    method: 'GET',
+    url: '/api/config?performance_source=production',
+    async: false,
+  }]);
+  assert.equal(result.config.deploymentEnvironment, 'production');
+  assert.equal(result.config.writable, false);
+});
+
+test('recording mode keeps the writable Preview data environment', async () => {
+  const result = await runLoader({
+    search: '?perf=1&record_performance=1',
+  });
+  assert.deepEqual(result.requests, [{
+    method: 'GET',
+    url: '/api/config',
+    async: false,
+  }]);
+  assert.equal(result.config.deploymentEnvironment, 'preview');
+});
+
+test('retains a deployment-controlled queryless performance beta flag', async () => {
+  const { config } = await runLoader({
+    response: validConfig({ performanceBetaEnabled: true }),
+  });
+  assert.equal(config.performanceBetaEnabled, true);
 });
 
 test('a disabled response strips browser credentials', async () => {

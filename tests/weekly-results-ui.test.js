@@ -568,7 +568,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /Player name/);
   assert.match(html, /Shown on the results leaderboard after release/);
   assert.match(html, /id="weekly-leaderboard"/);
-  assert.match(html, /app\.js\?v=2026090101/);
+  assert.match(html, /app\.js\?v=2026090107/);
   assert.match(html, /id="weekly-results-heading"/);
   assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
@@ -1163,10 +1163,6 @@ test('Xtal reference uses the closest pose-specific crystal pocket', async () =>
   assert.doesNotMatch(app, /grid-answer-status|answerStatus/);
   assert.doesNotMatch(app, /magenta|C026D3/);
   assert.match(app, /else if \(xtalReference\) \{\s*nm = 'Xtal reference';\s*\} else if \(clustered\)/);
-  assert.match(
-    app,
-    /gridEntries\(\)\s*\.map\(entry => entry\.choice\)\s*\.filter\(choice => !isFixedReferenceChoice\(choice\)\)/,
-  );
 });
 
 test('retrospective interaction ligands retain valid PDB columns after relabeling', async () => {

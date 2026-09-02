@@ -54,10 +54,10 @@
   #gridcells{display:flex;flex-wrap:wrap;justify-content:center;align-content:center;gap:10px;width:100%;
     margin-inline:auto;
     min-height:100%;transition:opacity .14s ease-out}
-  #gridview.loading-grid #gridcells{opacity:0;transition:none}
   .grid-card{position:relative;flex:0 0 var(--grid-card-w,300px);width:var(--grid-card-w,300px);
     height:var(--grid-card-h,225px);min-width:0;overflow:hidden;background:#fff;
     border:2px solid #cbd5df;border-radius:9px;box-shadow:0 1px 4px #16202b18}
+  .grid-card.grid-card-loading{visibility:hidden}
   .grid-card.selected{border-color:var(--accent);box-shadow:0 0 0 2px #3fb6e033}
   .grid-card.inspecting{border-color:#6c7b8a;box-shadow:0 0 0 2px #6c7b8a2c}
   .grid-card.rejected,#app.rejected{opacity:.32;filter:grayscale(.8)}
@@ -360,6 +360,11 @@
     color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
   .participant-setup input:focus{outline:none;border-color:var(--accent)}
   .participant-setup .hint.action-required{color:var(--ink);font-weight:650}
+  .performance-consent{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;
+    padding:8px;border:1px solid #b8dce9;border-radius:7px;background:#edf8fc;color:#36515e!important;
+    font-size:11px!important;line-height:1.4}
+  .performance-consent[hidden]{display:none}
+  .participant-setup .performance-consent input{width:auto;margin:2px 0 0;padding:0}
   .weekly-selector-leaderboard{margin-top:10px;display:flex;flex-direction:column;gap:8px}
   .weekly-selector-leaderboard[hidden]{display:none!important}
   .weekly-selector-row{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;
@@ -473,6 +478,10 @@
           aria-describedby="participant-name-hint name-status"/>
       </label>
       <p class="hint" id="participant-name-hint">Shown on the results leaderboard after release.</p>
+      <label class="performance-consent" id="performance-consent" hidden>
+        <input id="performance-consent-checkbox" type="checkbox"/>
+        <span>Share beta performance diagnostics with this player name. This records load timings and coarse browser, screen, device, network, and WebGL capabilities. It does not record browser fingerprints, IP addresses, plugins, fonts, page content, or exact hardware identifiers.</span>
+      </label>
       <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
     </section>
 
@@ -697,7 +706,7 @@ import {
   const wrap = document.getElementById('wrap');
   const archiveLoading = document.getElementById('archive-review-loading');
   let loading = false;
-  let persistenceStarted = false;
+  let persistencePromise = null;
   const archiveParams = new URLSearchParams(location.search);
   const archiveRoundId = (() => {
     const value = archiveParams.get('retrospective_round');
@@ -765,25 +774,28 @@ import {
     return window.foldariumApplyPrivateReviewBundle(bundle);
   }
 
-  async function initPersistence() {
-    if (persistenceStarted) return;
-    persistenceStarted = true;
-    try {
-      await loadScript('supabase-config.js');
-      const config = window.FOLDARIUM_CONFIG_READY
-        ? await window.FOLDARIUM_CONFIG_READY
-        : (window.FOLDARIUM_SUPABASE || {});
-      window.foldariumBackend.attach(initQuizBackend(config));
-      if (!archiveRoundId) {
-        foldariumPrivateReview.mountPrivateReviewUi({
-          config,
-          onBundleLoaded: applyPrivateReviewBundleWhenReady,
-        });
-      }
-    } catch (e) {
-      window.foldariumBackend.fail(e);
-      console.warn('Remote quiz persistence disabled:', e.message);
+  function initPersistence() {
+    if (!persistencePromise) {
+      persistencePromise = (async () => {
+        try {
+          await loadScript('supabase-config.js');
+          const config = window.FOLDARIUM_CONFIG_READY
+            ? await window.FOLDARIUM_CONFIG_READY
+            : (window.FOLDARIUM_SUPABASE || {});
+          window.foldariumBackend.attach(initQuizBackend(config));
+          if (!archiveRoundId) {
+            foldariumPrivateReview.mountPrivateReviewUi({
+              config,
+              onBundleLoaded: applyPrivateReviewBundleWhenReady,
+            });
+          }
+        } catch (e) {
+          window.foldariumBackend.fail(e);
+          console.warn('Remote quiz persistence disabled:', e.message);
+        }
+      })();
     }
+    return persistencePromise;
   }
 
   async function unlock() {
@@ -811,7 +823,7 @@ import {
           return payload;
         })
       : Promise.resolve(null);
-    void initPersistence();
+    const persistenceReady = initPersistence();
     const css = document.createElement('link');
     css.rel = 'stylesheet';
     css.href = 'https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.css';
@@ -820,6 +832,26 @@ import {
       await loadScript('https://cdn.jsdelivr.net/npm/molstar@4.6.0/build/viewer/molstar.js');
       await import('./structure-assets.js');
       await import('./structure-prefetch.js');
+      window.foldariumGridViewerPool = await import('./grid-viewer-pool.js');
+      await persistenceReady;
+      const query = new URLSearchParams(location.search);
+      const performanceModule = await import('./viewer-performance.js');
+      const deploymentPerformanceBeta =
+        window.FOLDARIUM_SUPABASE?.performanceBetaEnabled === true;
+      const performanceEnabled = query.has('perf') || deploymentPerformanceBeta;
+      const performanceRecording = performanceEnabled
+        && (query.get('record_performance') === '1' || deploymentPerformanceBeta);
+      if (performanceRecording) {
+        window.foldariumPerformanceDiagnostics = await import('./performance-diagnostics.js');
+        document.getElementById('performance-consent').hidden = false;
+      }
+      window.foldariumViewerPerformance = performanceModule.createViewerPerformanceReporter({
+        enabled: performanceEnabled,
+        observer: performanceEnabled
+          ? performanceModule.createViewerPerformanceOverlay()
+          : null,
+      });
+      window.FOLDARIUM_PERFORMANCE_REPORTS = window.foldariumViewerPerformance.reports;
       await import('./dev2-feedback.js');
       const rebuildModule = await import('./viewer-rebuild-coordinator.js');
       window.createViewerRebuildCoordinator = rebuildModule.createViewerRebuildCoordinator;
@@ -832,7 +864,7 @@ import {
       } catch (error) {
         console.warn('Viewer recording disabled:', error.message);
       }
-      await loadScript('app.js?v=2026090101');
+      await loadScript('app.js?v=2026090107');
     } catch (e) {
       console.error('Failed to load quiz assets:', e);
       wrap.hidden = false;
