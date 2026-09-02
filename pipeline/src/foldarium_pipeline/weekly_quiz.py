@@ -29,6 +29,7 @@ from .evaluation import (
     exact_complex_tm_superposition,
 )
 from .quiz import build_blind_manifest, manifest_sha256
+from .supabase import IMMUTABLE_PUBLIC_CACHE_CONTROL
 from .weekly_selector import (
     WeeklySelectorError,
     assert_no_forbidden_content,
@@ -2463,7 +2464,11 @@ def publish_selector_kit(
         raise WeeklyQuizAssemblyError(str(exc)) from exc
     if parsed["kit_sha256"] != kit_sha256:
         raise WeeklyQuizAssemblyError("selector kit ZIP manifest does not match descriptor")
-    stored = public_coordinator.store_bytes(zip_bytes, SELECTOR_KIT_ZIP_MEDIA_TYPE)
+    stored = public_coordinator.store_bytes(
+        zip_bytes,
+        SELECTOR_KIT_ZIP_MEDIA_TYPE,
+        cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+    )
     storage_path = _selector_storage_path(public_coordinator.storage_bucket, stored["sha256"])
     catalog_descriptor = {
         **dict(descriptor),
@@ -2752,7 +2757,11 @@ def _store_public_objects_concurrently(
     def store(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         content = request["content"]
         media_type = request["media_type"]
-        result = public_coordinator.store_bytes(content, media_type)
+        result = public_coordinator.store_bytes(
+            content,
+            media_type,
+            cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
         return request["key"], _validated_public_object(
             result,
             content=content,

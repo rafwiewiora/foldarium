@@ -30,6 +30,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STORAGE_ERROR_BYTES = 16 * 1024
+IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 # Retrying a prediction is a metered state transition, not ordinary queue
 # maintenance. Keep the authorization deliberately narrower than the worker's
@@ -1234,13 +1235,25 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError("downloaded artifact does not match its object digest")
         return body
 
-    def store_bytes(self, content: bytes, media_type: str) -> dict[str, Any]:
+    def store_bytes(
+        self,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str | None = None,
+    ) -> dict[str, Any]:
         """Store bytes by digest without overwriting an existing object."""
 
         if not isinstance(content, bytes) or not content:
             raise SupabasePublicationError("stored content must be non-empty bytes")
         if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
             raise SupabasePublicationError("media_type must be a short string")
+        if cache_control is not None and (
+            not isinstance(cache_control, str)
+            or not cache_control
+            or len(cache_control) > 255
+        ):
+            raise SupabasePublicationError("cache_control must be a short string")
         digest = hashlib.sha256(content).hexdigest()
         object_path = self._object_path(digest)
         endpoint = (
@@ -1254,7 +1267,10 @@ class SupabaseCoordinator(SupabasePublisher):
             content,
             operation="source snapshot upload",
             content_type=media_type,
-            extra_headers={"x-upsert": "false"},
+            extra_headers={
+                "x-upsert": "false",
+                **({"Cache-Control": cache_control} if cache_control else {}),
+            },
             allow_conflict=True,
         )
         if response is None:
@@ -1264,6 +1280,61 @@ class SupabaseCoordinator(SupabasePublisher):
             "sha256": digest,
             "size_bytes": len(content),
             "media_type": media_type,
+        }
+
+    def replace_content_object(
+        self,
+        object_uri: str,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str,
+    ) -> dict[str, Any]:
+        """Replace exact content-addressed bytes only to update object metadata."""
+
+        if not isinstance(content, bytes) or not content:
+            raise SupabasePublicationError("stored content must be non-empty bytes")
+        if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
+            raise SupabasePublicationError("media_type must be a short string")
+        if not isinstance(cache_control, str) or not cache_control or len(cache_control) > 255:
+            raise SupabasePublicationError("cache_control must be a short string")
+        parsed = urlsplit(object_uri)
+        object_path = parsed.path.lstrip("/")
+        match = re.fullmatch(r"sha256/([0-9a-f]{2})/([0-9a-f]{64})", object_path)
+        if (
+            parsed.scheme != "supabase"
+            or parsed.netloc != self.storage_bucket
+            or parsed.query
+            or parsed.fragment
+            or match is None
+            or match.group(1) != match.group(2)[:2]
+        ):
+            raise SupabasePublicationError("object_uri is not a valid object in this bucket")
+        digest = match.group(2)
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise SupabasePublicationError(
+                "replacement bytes do not match the content-addressed object digest"
+            )
+        endpoint = (
+            "/storage/v1/object/"
+            + quote(self.storage_bucket, safe="")
+            + "/"
+            + quote(object_path, safe="/")
+        )
+        self._request(
+            endpoint,
+            content,
+            operation="content metadata replacement",
+            content_type=media_type,
+            extra_headers={"Cache-Control": cache_control},
+            method="PUT",
+        )
+        return {
+            "object_uri": object_uri,
+            "sha256": digest,
+            "size_bytes": len(content),
+            "media_type": media_type,
+            "cache_control": cache_control,
         }
 
     def _storage_bucket_metadata(self, operation: str) -> dict[str, Any]:
