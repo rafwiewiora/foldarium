@@ -8,14 +8,14 @@ remaining research so a new session can resume without relying on chat history.
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
+  `7fa1eb1120385286c496665eceef4e860eda7f75`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `304529b88c5fe32451f5de4701776aaa802603fd`.
+- Current public `main`: `1152fdad0d0e4f7e73a761fdf2b718e39ebbbbd5`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
-- Browser deployment commit: `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
+- Browser deployment commit: `7fa1eb1120385286c496665eceef4e860eda7f75`.
 - Modal deployment commit: `7af7b75`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
@@ -30,9 +30,12 @@ remaining research so a new session can resume without relying on chat history.
 - Mol* Grid loading performance:
   [Junction PR #50](https://github.com/JunctionBioscience/foldarium/pull/50) and
   [public PR #13](https://github.com/rafwiewiora/foldarium/pull/13).
-- Vercel deployment: `dpl_EpFgoqLngZRW9UtMufFgBR9xiVpz`.
+- First-Grid background construction:
+  [Junction PR #53](https://github.com/JunctionBioscience/foldarium/pull/53)
+  and [public PR #15](https://github.com/rafwiewiora/foldarium/pull/15).
+- Vercel deployment: `dpl_2nKPXvs89JA2bvSEf69cAd7vzdnH`.
 - Immutable deployment URL:
-  <https://foldarium-hfk55h5wj-junctionbioscience.vercel.app>.
+  <https://foldarium-5daogvakc-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
 - Public performance beta: <https://foldarium-performance-beta.vercel.app>.
 - Modal profile digest:
@@ -109,9 +112,11 @@ Primary references:
   the bounded prefetched-byte cache instead of starting duplicate transfers.
 - Grid cards appear progressively. The hidden canonical scene is deferred
   while Grid is active.
-- A bounded pool reuses up to nine Mol* viewers between questions. The first
-  nine empty viewers are prewarmed during intro idle time, and final settled
-  camera synchronization no longer waits an additional 600 ms.
+- A bounded pool reuses up to nine Mol* viewers between questions. While the
+  participant enters their name, the first nine complete molecular scenes are
+  built offscreen and adopted only when their exact question/view signature
+  matches. Any remaining preparation overlaps named-session creation. Final
+  settled camera synchronization no longer waits an additional 600 ms.
 - Public content-addressed assets from future publications receive immutable
   cache metadata. The backfill tool remains reveal-gated and therefore has not
   mutated the currently open production round.
@@ -132,20 +137,18 @@ Primary references:
   successfully from the public Storage bucket.
 - Production serves the v2 similarity report with 100 records, while
   non-runtime documentation remains excluded.
-- Production `/api/config` reports environment `production` and exact commit
-  `0e614ec`.
 - A production browser smoke test confirmed Xtal then Training navigation,
   successful report and overlay requests, no Training in Show all, no bottom
   annotation, and a wrapping active label with no horizontal overflow.
 - Production serves the Play-for-fun endpoint, preserves the password gate, and
   serves the requested green/blue archive action styling.
 - Production `/api/config` reports exact commit
-  `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d` with performance-beta mode off.
-- A read-only live smoke loaded nine prewarmed Grid viewers with no failed
-  cards, then recycled all nine on question 2. The measured question totals
-  were 1.802 seconds and 0.632 seconds in that run.
-- The queryless beta smoke exposed the clock and consent control, used nine
-  prewarmed viewers, created no foreground viewer, and had no failed card.
+  `7fa1eb1120385286c496665eceef4e860eda7f75` with performance-beta mode off.
+- A read-only live smoke adopted nine prepared Grid scenes, created no
+  foreground viewer, and had no failed card. Click-to-ready was 346 ms and the
+  first card was ready at 317 ms in that run.
+- The queryless beta smoke exposed the clock and consent control, adopted nine
+  prepared scenes, created no foreground viewer, and had no failed card.
 - The 2026-08-29 production round is
   `weekly-2026-08-29-beta-v2`, promoted from
   `preview-weekly-2026-08-29-nextweekly-v4`.
@@ -163,9 +166,9 @@ Primary references:
   was closed as superseded.
 - Public PR #10 added the production-equivalent `/datasets` mapping to the
   provider-neutral local server and updated the public sync handoff.
-- Public verification passed: all six required GitHub checks, 552 JavaScript
-  tests, 471 Python tests, the public-tree boundary audit, and shared-module
-  production parity.
+- Public PR #15 passed all six required GitHub checks, 585 JavaScript tests
+  with one optional WASM skip, and the public-tree boundary audit. The
+  feature-on versus feature-off desktop/mobile viewer parity audit also passed.
 
 ## Remaining work
 
@@ -178,12 +181,12 @@ protein familiarity and ligand-bound-system familiarity.
 ## Resume checklist
 
 1. Confirm production still resolves to browser commit
-   `6b271f9d933c7addc3c3ed0d4e80f605f55cdf8d`.
+   `7fa1eb1120385286c496665eceef4e860eda7f75`.
 2. Confirm the current production round remains
    `weekly-2026-08-29-beta-v2` with 33 items.
 3. Treat all seven terminal failed runs as final at attempt 2/2.
-4. Confirm public `main` still contains public PR #13 at
-   `304529b88c5fe32451f5de4701776aaa802603fd`.
+4. Confirm public `main` still contains public PR #15 at
+   `1152fdad0d0e4f7e73a761fdf2b718e39ebbbbd5`.
 5. Run the immutable cache metadata backfill for the active round only after it
    is revealed; the apply path intentionally refuses an open round.
 6. Promote apo-pocket similarity to a plan only if it becomes a priority.
