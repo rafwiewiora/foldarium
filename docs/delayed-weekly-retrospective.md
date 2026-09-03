@@ -29,14 +29,21 @@ The safety close prevents indefinite voting if Saturday activation never
 occurs. It is not permission to reveal: delayed rounds without a recorded
 successor remain fail-closed.
 
-## Operator entry points
+## Portable lifecycle entry points
 
-- `configure_delayed_weekly_retrospective`: exact-round dry-run/apply gate.
-- `weekly_retrospective_tick`: scheduled or exact-round private preparation.
-- `delayed_weekly_retrospective_handoff`: exact predecessor/successor
-  dry-run/apply gate and recovery path.
-- `weekly_production_promotion_tick`: starts the handoff after opening the next
-  production round.
+- `SupabaseCoordinator.configure_delayed_weekly_retrospective`: exact-round
+  compare-and-set opt-in.
+- `materialize_delayed_preclose_weekly_evaluation`: private preparation without
+  reveal or post-close catalog registration.
+- `SupabaseCoordinator.close_delayed_weekly_round_for_successor`: exact
+  predecessor/successor close transition.
+- `materialize_postclose_weekly_evaluation`: promotion of the prepared artifact
+  after the close transition.
+
+A deployment adapter is responsible for scheduling private preparation and
+orchestrating close, reveal, vote snapshot, and retrospective publication after
+the successor opens. Provider-specific scheduling and deployment code is not
+part of this public tree.
 
 Current rounds without `metadata.retrospective_release` retain the deployed
 Wednesday behavior.
