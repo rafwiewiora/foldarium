@@ -8,15 +8,15 @@ remaining research so a new session can resume without relying on chat history.
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `7fa1eb1120385286c496665eceef4e860eda7f75`.
+  `abf857b397ce59491458e23727db0e0a4b507a63`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `1152fdad0d0e4f7e73a761fdf2b718e39ebbbbd5`.
+- Current public `main`: `6cce655a8b097f630f30a253e0c634d1f567f36c`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
 - Browser deployment commit: `7fa1eb1120385286c496665eceef4e860eda7f75`.
-- Modal deployment commit: `7af7b75`.
+- Modal deployment commit: `abf857b397ce59491458e23727db0e0a4b507a63`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
 - Runtime packaging and commit-attestation fix:
@@ -33,6 +33,9 @@ remaining research so a new session can resume without relying on chat history.
 - First-Grid background construction:
   [Junction PR #53](https://github.com/JunctionBioscience/foldarium/pull/53)
   and [public PR #15](https://github.com/rafwiewiora/foldarium/pull/15).
+- Delayed Weekly retrospective release:
+  [Junction PR #55](https://github.com/JunctionBioscience/foldarium/pull/55)
+  and provider-neutral [public PR #16](https://github.com/rafwiewiora/foldarium/pull/16).
 - Vercel deployment: `dpl_2nKPXvs89JA2bvSEf69cAd7vzdnH`.
 - Immutable deployment URL:
   <https://foldarium-5daogvakc-junctionbioscience.vercel.app>.
@@ -127,6 +130,26 @@ Primary references:
   are not stored in replay traces and exclude asset URLs, IP addresses, raw user
   agents, plugins, fonts, and other browser-fingerprint fields.
 
+### Delayed Weekly retrospective release
+
+- The current production round is explicitly opted into
+  `next-weekly-activation`. Its voting close is extended to the finite
+  2026-09-09 safety close, while public reveal and retrospective publication
+  remain blocked until the exact successor production round activates.
+- The scheduled retrospective job detects an opted-in open round and performs
+  private pre-close preparation instead of calling the post-close evaluator.
+  Existing rounds without the policy retain the deployed Wednesday behavior.
+- The 2026-08-29 round completed private evaluation for 33 items and 330 choices.
+  The artifact is stored privately, is not registered in the post-close
+  catalog, and caused no public mutation. An immediate replay reused the same
+  evaluation idempotently.
+- Successor handoff is bound to exact predecessor and successor IDs. It shortens
+  the predecessor close to activation time, promotes the prepared artifact,
+  reveals the round, snapshots final votes, and publishes the retrospective.
+  Missing or inconsistent lifecycle provenance fails closed.
+- Ballot scope, correctness, vote persistence, result aggregation, and
+  player-name disclosure semantics are unchanged.
+
 ## Verification
 
 - Required `contracts-and-adapters` and `scientific-evaluation` checks passed
@@ -169,8 +192,25 @@ Primary references:
 - Public PR #15 passed all six required GitHub checks, 585 JavaScript tests
   with one optional WASM skip, and the public-tree boundary audit. The
   feature-on versus feature-off desktop/mobile viewer parity audit also passed.
+- Junction PR #55 passed both required checks. The complete local pipeline suite
+  passed 546 tests with 160 optional-dependency skips.
+- The reviewed Modal profile deployed commit
+  `abf857b397ce59491458e23727db0e0a4b507a63`; post-deploy verification matched
+  configuration digest
+  `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
+- Public PR #16 passed all six checks after rerunning one GitHub API rate-limit
+  failure in the Supabase CLI setup step. Its portable pipeline suite passed
+  486 tests with 113 optional-dependency skips.
 
 ## Remaining work
+
+### Operational follow-up
+
+- At the next production Weekly activation, verify that the exact delayed
+  predecessor handoff completes close, reveal, vote snapshot, and retrospective
+  publication before treating the lifecycle as fully shipped.
+- Apply the immutable cache metadata backfill for the current round only after
+  that reveal; the apply path intentionally refuses an open round.
 
 ### Research backlog
 
@@ -182,11 +222,14 @@ protein familiarity and ligand-bound-system familiarity.
 
 1. Confirm production still resolves to browser commit
    `7fa1eb1120385286c496665eceef4e860eda7f75`.
-2. Confirm the current production round remains
-   `weekly-2026-08-29-beta-v2` with 33 items.
-3. Treat all seven terminal failed runs as final at attempt 2/2.
-4. Confirm public `main` still contains public PR #15 at
-   `1152fdad0d0e4f7e73a761fdf2b718e39ebbbbd5`.
-5. Run the immutable cache metadata backfill for the active round only after it
-   is revealed; the apply path intentionally refuses an open round.
-6. Promote apo-pocket similarity to a plan only if it becomes a priority.
+2. Confirm the Modal app still reports deployment configuration digest
+   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
+3. Confirm `weekly-2026-08-29-beta-v2` remains open through its 2026-09-09
+   safety close and retains its private prepared evaluation until successor
+   activation.
+4. Treat all seven terminal failed runs as final at attempt 2/2.
+5. Confirm public `main` still contains public PR #16 at
+   `6cce655a8b097f630f30a253e0c634d1f567f36c`.
+6. Verify the exact delayed predecessor handoff at the next production Weekly
+   activation, then run the immutable cache metadata backfill after reveal.
+7. Promote apo-pocket similarity to a plan only if it becomes a priority.
