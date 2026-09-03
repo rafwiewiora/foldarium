@@ -36,6 +36,7 @@ from .wednesday_reveal import (
     rcsb_reference_url,
     run_private_preclose_evaluation,
 )
+from .weekly_lifecycle import WeeklyLifecycleError, delayed_retrospective_release
 
 PRIVATE_EVALUATION_FORMAT_VERSION = "foldarium.weekly-private-evaluation/v5"
 PRIVATE_EVALUATION_MEDIA_TYPE = "application/json"
@@ -1206,6 +1207,140 @@ def _materialize_private_weekly_evaluation(
     )
 
 
+def _prepared_delayed_evaluation(
+    round_record: Mapping[str, Any],
+    *,
+    coordinator: Any,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Load and verify a privately prepared delayed-release artifact."""
+
+    try:
+        release = delayed_retrospective_release(round_record)
+    except WeeklyLifecycleError as exc:
+        raise PrivateEvaluationError(str(exc)) from exc
+    if release is None or release.get("prepared_evaluation") is None:
+        return None
+    prepared = release["prepared_evaluation"]
+    artifact = prepared.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise PrivateEvaluationError("prepared evaluation artifact metadata is missing")
+    content = coordinator.download_content_object(
+        artifact.get("object_uri"),
+        expected_sha256=artifact.get("sha256"),
+    )
+    described = describe_private_evaluation_artifact(
+        content,
+        expected_artifact_sha256=artifact.get("sha256"),
+    )
+    for field in (
+        "evaluation_id",
+        "blind_manifest_sha256",
+        "private_index_sha256",
+        "reveal_manifest_sha256",
+        "item_count",
+        "choice_count",
+    ):
+        if described.get(field) != prepared.get(field):
+            raise PrivateEvaluationError(
+                f"prepared evaluation metadata differs at {field}"
+            )
+    for field in (
+        "round_id",
+        "campaign_id",
+        "environment",
+        "blind_manifest_sha256",
+        "round_opens_at",
+    ):
+        round_field = "opens_at" if field == "round_opens_at" else field
+        if described.get(field) != round_record.get(round_field):
+            raise PrivateEvaluationError(
+                f"prepared evaluation is not bound to round field {field}"
+            )
+    if _aware_datetime(
+        described.get("round_closes_at"), "prepared round_closes_at"
+    ) != _aware_datetime(
+        release.get("safety_closes_at"), "prepared safety_closes_at"
+    ):
+        raise PrivateEvaluationError(
+            "prepared evaluation is not bound to the configured safety close"
+        )
+    if described.get("artifact_object_uri") != artifact.get("object_uri"):
+        raise PrivateEvaluationError("prepared evaluation object URI is inconsistent")
+    try:
+        decoded = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PrivateEvaluationError("prepared evaluation artifact is invalid") from exc
+    if not isinstance(decoded, Mapping):
+        raise PrivateEvaluationError("prepared evaluation artifact must be an object")
+    return deepcopy(dict(prepared)), deepcopy(dict(decoded))
+
+
+def materialize_delayed_preclose_weekly_evaluation(
+    round_id: str,
+    destination: str | Path,
+    *,
+    coordinator: Any,
+    prediction_resolver: CoordinateResolver | None = None,
+    reference_resolver: CoordinateResolver = fetch_rcsb_released_reference,
+    evaluator: PoseEvaluator = evaluate_ligand_pose,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Idempotently prepare an opted-in open round without publishing answers."""
+
+    round_record, _private_index_content = coordinator.weekly_quiz_reveal_inputs(
+        round_id
+    )
+    try:
+        release = delayed_retrospective_release(round_record)
+    except WeeklyLifecycleError as exc:
+        raise PrivateEvaluationError(str(exc)) from exc
+    if release is None:
+        raise PrivateEvaluationError(
+            "round is not opted into next-weekly retrospective release"
+        )
+    existing = _prepared_delayed_evaluation(
+        round_record,
+        coordinator=coordinator,
+    )
+    if existing is not None:
+        prepared, _decoded = existing
+        return {
+            "status": "already-materialized-private-delayed-preclose",
+            "round_id": round_id,
+            "register_catalog": False,
+            "catalog_registered": False,
+            **{
+                field: prepared[field]
+                for field in (
+                    "evaluation_id",
+                    "item_count",
+                    "choice_count",
+                    "blind_manifest_sha256",
+                    "private_index_sha256",
+                    "reveal_manifest_sha256",
+                )
+            },
+            "artifact": deepcopy(dict(prepared["artifact"])),
+        }
+    report = _materialize_private_weekly_evaluation(
+        round_id,
+        destination,
+        coordinator=coordinator,
+        prediction_resolver=prediction_resolver,
+        reference_resolver=reference_resolver,
+        evaluator=evaluator,
+        now=now,
+        register_catalog=False,
+        require_allowlist=False,
+    )
+    coordinator.record_prepared_weekly_evaluation(
+        round_id,
+        report,
+        prepared_at=now,
+    )
+    return {**report, "status": "materialized-private-delayed-preclose"}
+
+
 def materialize_private_preclose_evaluation(
     round_id: str,
     destination: str | Path,
@@ -1258,6 +1393,38 @@ def materialize_postclose_weekly_evaluation(
             catalog=existing,
         )
         return {**report, "status": "already-materialized-private-postclose"}
+    round_record, _private_index_content = coordinator.weekly_quiz_reveal_inputs(
+        round_id
+    )
+    prepared = _prepared_delayed_evaluation(
+        round_record,
+        coordinator=coordinator,
+    )
+    if prepared is not None:
+        _prepared_metadata, decoded = prepared
+        counts = decoded.get("counts")
+        integrity = decoded.get("integrity")
+        if not isinstance(counts, Mapping) or not isinstance(integrity, Mapping):
+            raise PrivateEvaluationError(
+                "prepared evaluation has invalid counts or integrity"
+            )
+        result = {
+            "status": "evaluated-private-postclose",
+            "round_id": round_id,
+            "item_count": counts.get("item_count"),
+            "choice_count": counts.get("choice_count"),
+            "reveal_manifest_sha256": integrity.get("reveal_manifest_sha256"),
+            "reveal_manifest": decoded.get("reveal_manifest"),
+            "references": decoded.get("references"),
+            "answer_overlays": decoded.get("answer_overlays"),
+        }
+        report = materialize_private_evaluation_result(
+            round_record,
+            result,
+            coordinator=coordinator,
+            register_catalog=True,
+        )
+        return {**report, "status": "promoted-private-delayed-postclose"}
     report = _materialize_private_weekly_evaluation(
         round_id,
         destination,
@@ -1283,6 +1450,7 @@ __all__ = [
     "PrivateEvaluationError",
     "build_private_evaluation_artifact",
     "describe_private_evaluation_artifact",
+    "materialize_delayed_preclose_weekly_evaluation",
     "materialize_postclose_weekly_evaluation",
     "materialize_private_preclose_evaluation",
     "materialize_private_evaluation_result",
