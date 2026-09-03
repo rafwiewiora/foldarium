@@ -1661,6 +1661,153 @@ class SupabaseCoordinatorTests(unittest.TestCase):
             coordinator.weekly_quiz_round("weekly-2026-08-08")
         self.assertEqual(len(opener.calls), 1)
 
+    def test_configures_delayed_retrospective_with_exact_compare_and_set(self) -> None:
+        original = {
+            "round_id": "weekly-2026-08-29-beta-v2",
+            "campaign_id": "wwpdb-2026-08-29",
+            "environment": "production",
+            "status": "open",
+            "opens_at": "2026-08-29T03:00:00+00:00",
+            "closes_at": "2026-09-02T00:00:00+00:00",
+            "reveal_manifest": None,
+            "revealed_at": None,
+            "metadata": {"private_index": {"sha256": "a" * 64}},
+        }
+        updated = {
+            **original,
+            "closes_at": "2026-09-09T00:00:00+00:00",
+        }
+
+        class ConfigureOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() == "GET":  # type: ignore[attr-defined]
+                    return FakeResponse(json.dumps([original]).encode())
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    request.get_method(), "PATCH"
+                )
+                query = parse_qs(urlsplit(request.full_url).query)  # type: ignore[attr-defined]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    query["round_id"], ["eq.weekly-2026-08-29-beta-v2"]
+                )
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    query["closes_at"], ["eq.2026-09-02T00:00:00+00:00"]
+                )
+                payload = json.loads(request.data)  # type: ignore[attr-defined]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    payload["closes_at"], "2026-09-09T00:00:00+00:00"
+                )
+                release = payload["metadata"]["retrospective_release"]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    release["policy"], "next-weekly-activation"
+                )
+                response = {
+                    **updated,
+                    "metadata": payload["metadata"],
+                }
+                return FakeResponse(json.dumps([response]).encode())
+
+        opener = ConfigureOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=opener,
+        )
+        result = coordinator.configure_delayed_weekly_retrospective(
+            original["round_id"],
+            expected_closes_at="2026-09-02T00:00:00Z",
+            safety_closes_at="2026-09-09T00:00:00Z",
+            now=datetime(2026, 9, 1, 19, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result["closes_at"], updated["closes_at"])
+        self.assertEqual(len(opener.calls), 2)
+
+    def test_closes_delayed_round_only_for_open_production_successor(self) -> None:
+        release = {
+            "policy": "next-weekly-activation",
+            "original_closes_at": "2026-09-02T00:00:00+00:00",
+            "safety_closes_at": "2026-09-09T00:00:00+00:00",
+            "configured_at": "2026-09-01T19:00:00+00:00",
+        }
+        previous = {
+            "round_id": "weekly-2026-08-29-beta-v2",
+            "campaign_id": "wwpdb-2026-08-29",
+            "environment": "production",
+            "status": "open",
+            "opens_at": "2026-08-29T03:00:00+00:00",
+            "closes_at": release["safety_closes_at"],
+            "reveal_manifest": None,
+            "revealed_at": None,
+            "metadata": {"retrospective_release": release},
+        }
+        successor = {
+            "round_id": "weekly-2026-09-05-beta-v2",
+            "campaign_id": "wwpdb-2026-09-05",
+            "environment": "production",
+            "status": "open",
+            "opens_at": "2026-09-05T03:00:00+00:00",
+            "closes_at": "2026-09-09T00:00:00+00:00",
+            "opened_at": "2026-09-05T03:10:00+00:00",
+            "metadata": {},
+        }
+        activated = datetime(2026, 9, 5, 3, 10, tzinfo=timezone.utc)
+
+        class HandoffOpener(RecordingOpener):
+            def __init__(self):
+                super().__init__()
+                self.get_count = 0
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() == "GET":  # type: ignore[attr-defined]
+                    row = previous if self.get_count == 0 else successor
+                    self.get_count += 1
+                    return FakeResponse(json.dumps([row]).encode())
+                payload = json.loads(request.data)  # type: ignore[attr-defined]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    payload["closes_at"], activated.isoformat()
+                )
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    payload["metadata"]["retrospective_release"][
+                        "activated_by_round_id"
+                    ],
+                    successor["round_id"],
+                )
+                query = parse_qs(urlsplit(request.full_url).query)  # type: ignore[attr-defined]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    query["closes_at"],
+                    ["eq.2026-09-09T00:00:00+00:00"],
+                )
+                return FakeResponse(
+                    json.dumps(
+                        [
+                            {
+                                **previous,
+                                "closes_at": activated.isoformat(),
+                                "metadata": payload["metadata"],
+                            }
+                        ]
+                    ).encode()
+                )
+
+        opener = HandoffOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=opener,
+        )
+        result = coordinator.close_delayed_weekly_round_for_successor(
+            previous["round_id"],
+            successor["round_id"],
+            activated_at=activated,
+        )
+        self.assertEqual(result["closes_at"], activated.isoformat())
+        self.assertEqual(len(opener.calls), 3)
+
     def test_current_weekly_round_is_bound_to_expected_campaign(self) -> None:
         current = {
             "round_id": "weekly-2026-08-08-v2",

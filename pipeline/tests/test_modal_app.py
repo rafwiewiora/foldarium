@@ -1537,6 +1537,74 @@ class WeeklyLifecycleReconciliationTests(unittest.TestCase):
         self.assertEqual(second["status"], "production-ready")
         self.assertEqual(second["selector_kit_status"], "registered")
 
+    def test_new_production_activation_spawns_opted_in_predecessor_handoff(
+        self,
+    ) -> None:
+        module = self.deployment_module()
+        calls = []
+
+        class PrivateCoordinator:
+            storage_bucket = "private-predictions"
+
+            @staticmethod
+            def weekly_quiz_round_exists(round_id):
+                return round_id.startswith("preview-weekly-")
+
+            @staticmethod
+            def current_weekly_quiz_round():
+                return {"round_id": "weekly-2026-08-08-beta-v1"}
+
+            @staticmethod
+            def weekly_quiz_round(round_id):
+                return {
+                    "round_id": round_id,
+                    "metadata": {
+                        "retrospective_release": {
+                            "policy": "next-weekly-activation",
+                            "original_closes_at": "2026-08-12T00:00:00Z",
+                            "safety_closes_at": "2026-08-19T00:00:00Z",
+                            "configured_at": "2026-08-11T00:00:00Z",
+                        }
+                    },
+                }
+
+        class Promotion:
+            @staticmethod
+            def remote(*args):
+                return {"status": "opened", "round_id": args[1]}
+
+        class Handoff:
+            @staticmethod
+            def spawn(*args):
+                calls.append(args)
+
+        with patch.object(
+            module,
+            "_weekly_quiz_public_private_coordinators",
+            return_value=(PrivateCoordinator(), object()),
+        ), patch.object(
+            module, "promote_weekly_quiz_round", Promotion
+        ), patch.object(
+            module, "delayed_weekly_retrospective_handoff", Handoff
+        ):
+            report = module.weekly_production_promotion_tick.get_raw_f()(
+                "2026-08-15",
+                True,
+                False,
+            )
+
+        self.assertTrue(report["delayed_retrospective_handoff_spawned"])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "weekly-2026-08-08-beta-v1",
+                    "weekly-2026-08-15-beta-v1",
+                    True,
+                )
+            ],
+        )
+
     def test_lifecycle_preflight_reports_round_existence(self) -> None:
         module = self.deployment_module()
 
@@ -1807,6 +1875,45 @@ class WednesdayRevealDeploymentTests(unittest.TestCase):
         self.assertEqual(report["closes_at"], "2099-08-23T23:59:59Z")
         self.assertEqual(report["mode"], "dry-run")
         self.assertFalse(report["mutation_enabled"])
+
+    def test_delayed_round_never_reveals_before_successor_activation(self) -> None:
+        module = self.deployment_module()
+
+        class Coordinator:
+            def current_weekly_quiz_round(self):
+                return {"round_id": "weekly-delayed"}
+
+            def weekly_quiz_reveal_inputs(self, round_id):
+                return {
+                    "round_id": round_id,
+                    "closes_at": "2026-08-23T23:59:59Z",
+                    "metadata": {
+                        "retrospective_release": {
+                            "policy": "next-weekly-activation",
+                            "original_closes_at": "2026-08-19T00:00:00Z",
+                            "safety_closes_at": "2026-08-26T00:00:00Z",
+                            "configured_at": "2026-08-18T00:00:00Z",
+                        }
+                    },
+                }, b"private-index"
+
+            def reveal_weekly_quiz_round(self, **kwargs):
+                raise AssertionError("delayed round must not publish before activation")
+
+        raw_function = module.wednesday_reveal_tick.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ), patch(
+            "foldarium_pipeline.wednesday_reveal.run_wednesday_reveal"
+        ) as reveal_service:
+            report = raw_function(None, True)
+
+        reveal_service.assert_not_called()
+        self.assertEqual(
+            report["status"], "awaiting-next-weekly-activation"
+        )
+        self.assertTrue(report["mutation_enabled"])
 
     def test_schedule_and_cpu_image_have_bounded_retries_and_evaluation_stack(self) -> None:
         module = self.deployment_module()
