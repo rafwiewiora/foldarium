@@ -2259,6 +2259,54 @@ if modal is not None:
         return result
 
     @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def configure_delayed_weekly_retrospective(
+        round_id: str,
+        expected_closes_at: str,
+        safety_closes_at: str,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Opt one exact open production round into next-round release timing."""
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+
+        if not isinstance(apply, bool):
+            raise TypeError("apply must be a boolean")
+        coordinator = SupabaseCoordinator.from_env()
+        before = coordinator.weekly_quiz_round(round_id)
+        updated = (
+            coordinator.configure_delayed_weekly_retrospective(
+                round_id,
+                expected_closes_at=expected_closes_at,
+                safety_closes_at=safety_closes_at,
+            )
+            if apply
+            else before
+        )
+        result = {
+            "status": "configured" if apply else "planned",
+            "round_id": round_id,
+            "apply": apply,
+            "previous_closes_at": before.get("closes_at"),
+            "closes_at": (
+                updated.get("closes_at") if apply else safety_closes_at
+            ),
+            "policy": "next-weekly-activation",
+        }
+        print(
+            "foldarium.delayed_weekly_retrospective "
+            + json.dumps(result, sort_keys=True),
+            flush=True,
+        )
+        return result
+
+    @app.function(
         image=quiz_assembly_image,
         cpu=8.0,
         memory=32768,
@@ -2358,6 +2406,14 @@ if modal is not None:
         )
         production_exists = private.weekly_quiz_round_exists(window["round_id"])
         preview_exists = private.weekly_quiz_round_exists(window["preview_round_id"])
+        previous_round_id = None
+        if open_round and not production_exists and preview_exists:
+            try:
+                candidate = private.current_weekly_quiz_round().get("round_id")
+                if isinstance(candidate, str) and candidate != window["round_id"]:
+                    previous_round_id = candidate
+            except Exception:
+                previous_round_id = None
         selector_result = None
         promoted = None
         just_promoted = False
@@ -2386,6 +2442,20 @@ if modal is not None:
                     private_coordinator=private,
                     public_coordinator=public,
                 )
+        handoff_spawned = False
+        if just_promoted and open_round and previous_round_id is not None:
+            from foldarium_pipeline.weekly_lifecycle import (
+                delayed_retrospective_release,
+            )
+
+            previous = private.weekly_quiz_round(previous_round_id)
+            if delayed_retrospective_release(previous) is not None:
+                delayed_weekly_retrospective_handoff.spawn(
+                    previous_round_id,
+                    window["round_id"],
+                    True,
+                )
+                handoff_spawned = True
         selector_fields = _production_selector_kit_status(
             open_round=open_round,
             register_selector_kit=register_selector_kit,
@@ -2403,6 +2473,8 @@ if modal is not None:
             ),
             "open_round": open_round,
             "register_selector_kit": register_selector_kit,
+            "previous_round_id": previous_round_id,
+            "delayed_retrospective_handoff_spawned": handoff_spawned,
             **selector_fields,
         }
         if promoted is not None:
@@ -2493,14 +2565,16 @@ if modal is not None:
     def weekly_retrospective_tick(
         round_id: str | None = None,
     ) -> dict[str, Any]:
-        """Materialize one closed round privately without blocking its reveal."""
+        """Prepare opted-in rounds pre-close or catalog closed rounds privately."""
 
         import tempfile
 
         from foldarium_pipeline.private_evaluation import (
+            materialize_delayed_preclose_weekly_evaluation,
             materialize_postclose_weekly_evaluation,
         )
         from foldarium_pipeline.supabase import SupabaseCoordinator
+        from foldarium_pipeline.weekly_lifecycle import delayed_retrospective_release
 
         coordinator = SupabaseCoordinator.from_env()
         selected_round_id = round_id
@@ -2508,17 +2582,42 @@ if modal is not None:
             selected_round_id = coordinator.current_weekly_quiz_round(
                 _default_weekly_campaign_id()
             )["round_id"]
+        prepare_preclose = False
+        if hasattr(coordinator, "weekly_quiz_round"):
+            round_record = coordinator.weekly_quiz_round(selected_round_id)
+            delayed_release = delayed_retrospective_release(round_record)
+            closes_at = datetime.fromisoformat(
+                str(round_record.get("closes_at")).replace("Z", "+00:00")
+            )
+            if closes_at.tzinfo is None:
+                raise RuntimeError("weekly round closes_at must include a timezone")
+            prepare_preclose = (
+                delayed_release is not None
+                and datetime.now(timezone.utc) < closes_at
+            )
         with tempfile.TemporaryDirectory(
             prefix="foldarium-weekly-retrospective-"
         ) as temporary:
-            result = materialize_postclose_weekly_evaluation(
-                selected_round_id,
-                temporary,
-                coordinator=coordinator,
+            result = (
+                materialize_delayed_preclose_weekly_evaluation(
+                    selected_round_id,
+                    temporary,
+                    coordinator=coordinator,
+                )
+                if prepare_preclose
+                else materialize_postclose_weekly_evaluation(
+                    selected_round_id,
+                    temporary,
+                    coordinator=coordinator,
+                )
             )
         outcome = {
             **result,
-            "mode": "private-postclose",
+            "mode": (
+                "private-delayed-preclose"
+                if prepare_preclose
+                else "private-postclose"
+            ),
             "private_catalog_mutation_enabled": True,
             "public_mutation_enabled": False,
         }
@@ -2597,6 +2696,126 @@ if modal is not None:
         image=quiz_assembly_image,
         cpu=8.0,
         memory=32768,
+        secrets=[control_plane_secret],
+        timeout=2 * 60 * 60,
+        retries=modal.Retries(
+            max_retries=WEDNESDAY_REVEAL_MODAL_RETRIES,
+            backoff_coefficient=1.0,
+            initial_delay=60.0,
+            max_delay=60.0,
+        ),
+        max_containers=1,
+    )
+    def delayed_weekly_retrospective_handoff(
+        previous_round_id: str,
+        successor_round_id: str,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Close, reveal, and retrospectivize an opted-in predecessor."""
+
+        import tempfile
+
+        from foldarium_pipeline.private_evaluation import (
+            describe_private_evaluation_artifact,
+            materialize_postclose_weekly_evaluation,
+        )
+        from foldarium_pipeline.quiz import manifest_sha256
+        from foldarium_pipeline.retrospective_archive import (
+            publish_missing_retrospectives,
+        )
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+        from foldarium_pipeline.weekly_lifecycle import delayed_retrospective_release
+
+        if not isinstance(apply, bool):
+            raise TypeError("apply must be a boolean")
+        coordinator = SupabaseCoordinator.from_env()
+        previous = coordinator.weekly_quiz_round(previous_round_id)
+        successor = coordinator.weekly_quiz_round(successor_round_id)
+        release = delayed_retrospective_release(previous)
+        if release is None:
+            raise RuntimeError("previous round has no delayed retrospective policy")
+        if successor.get("environment") != "production":
+            raise RuntimeError("successor round must be production")
+        if not apply:
+            return {
+                "status": "planned",
+                "previous_round_id": previous_round_id,
+                "successor_round_id": successor_round_id,
+                "previous_closes_at": previous.get("closes_at"),
+                "apply": False,
+            }
+
+        closed = coordinator.close_delayed_weekly_round_for_successor(
+            previous_round_id,
+            successor_round_id,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="foldarium-delayed-weekly-handoff-"
+        ) as temporary:
+            evaluation = materialize_postclose_weekly_evaluation(
+                previous_round_id,
+                temporary,
+                coordinator=coordinator,
+            )
+        catalog = coordinator.private_weekly_evaluation(previous_round_id)
+        if not isinstance(catalog, Mapping):
+            raise RuntimeError("delayed weekly handoff has no private evaluation")
+        content = coordinator.download_content_object(
+            catalog.get("artifact_object_uri"),
+            expected_sha256=catalog.get("artifact_sha256"),
+        )
+        described = describe_private_evaluation_artifact(
+            content,
+            expected_artifact_sha256=catalog.get("artifact_sha256"),
+        )
+        try:
+            artifact = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("private evaluation artifact is invalid") from exc
+        reveal_manifest = (
+            artifact.get("reveal_manifest")
+            if isinstance(artifact, Mapping)
+            else None
+        )
+        if (
+            not isinstance(reveal_manifest, Mapping)
+            or manifest_sha256(reveal_manifest)
+            != described.get("reveal_manifest_sha256")
+        ):
+            raise RuntimeError("private evaluation reveal manifest is invalid")
+        reveal_response = coordinator.reveal_weekly_quiz_round(
+            round_id=previous_round_id,
+            reveal_manifest=reveal_manifest,
+        )
+        publication = publish_missing_retrospectives(
+            coordinator=coordinator,
+            round_id=previous_round_id,
+        )
+        outcome = {
+            "status": "complete",
+            "previous_round_id": previous_round_id,
+            "successor_round_id": successor_round_id,
+            "previous_closes_at": closed.get("closes_at"),
+            "evaluation_status": evaluation.get("status"),
+            "reveal_status": (
+                reveal_response.get("status")
+                if isinstance(reveal_response, Mapping)
+                else None
+            ),
+            "retrospective_status": publication.get("status"),
+            "apply": True,
+        }
+        print(
+            "foldarium.delayed_weekly_handoff "
+            + json.dumps(outcome, sort_keys=True),
+            flush=True,
+        )
+        return outcome
+
+    @app.function(
+        image=quiz_assembly_image,
+        cpu=8.0,
+        memory=32768,
         schedule=(
             modal.Cron(WEDNESDAY_REVEAL_CRON_UTC)
             if WEDNESDAY_REVEAL_ENABLED
@@ -2637,6 +2856,7 @@ if modal is not None:
             WednesdayRevealNotReady,
             run_wednesday_reveal,
         )
+        from foldarium_pipeline.weekly_lifecycle import delayed_retrospective_release
 
         mutation_enabled = _wednesday_publish_enabled(publish)
         coordinator = SupabaseCoordinator.from_env()
@@ -2654,6 +2874,25 @@ if modal is not None:
             raise WednesdayRevealNotReady(
                 f"weekly reveal inputs are not ready for {selected_round_id}"
             ) from exc
+
+        delayed_release = delayed_retrospective_release(round_record)
+        if (
+            delayed_release is not None
+            and delayed_release.get("activated_by_round_id") is None
+        ):
+            outcome = {
+                "status": "awaiting-next-weekly-activation",
+                "round_id": selected_round_id,
+                "closes_at": round_record.get("closes_at"),
+                "mode": "publish" if mutation_enabled else "dry-run",
+                "mutation_enabled": mutation_enabled,
+            }
+            print(
+                "foldarium.wednesday_reveal "
+                + json.dumps(outcome, sort_keys=True),
+                flush=True,
+            )
+            return outcome
 
         closes_at = round_record.get("closes_at")
         if isinstance(closes_at, str):

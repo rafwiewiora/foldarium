@@ -19,6 +19,7 @@ from foldarium_pipeline.private_evaluation import (
     _recovered_ligand_eligibility_for_legacy_items,
     build_private_evaluation_artifact,
     describe_private_evaluation_artifact,
+    materialize_delayed_preclose_weekly_evaluation,
     materialize_postclose_weekly_evaluation,
     materialize_private_preclose_evaluation,
     recover_legacy_ligand_eligibility,
@@ -287,6 +288,10 @@ class FakeCoordinator:
         self.calls.append(("weekly_quiz_reveal_inputs", round_id))
         return deepcopy(self.round_record), self.private_content
 
+    def weekly_quiz_round(self, round_id: str):
+        self.calls.append(("weekly_quiz_round", round_id))
+        return deepcopy(self.round_record)
+
     def fetch_campaign_target_packages(self, campaign_id: str, target_ids):
         self.calls.append(
             ("fetch_campaign_target_packages", campaign_id, sorted(target_ids))
@@ -331,6 +336,40 @@ class FakeCoordinator:
             "size_bytes": len(content),
             "media_type": media_type,
         }
+
+    def download_content_object(self, object_uri: str, *, expected_sha256: str):
+        self.calls.append(("download_content_object", object_uri, expected_sha256))
+        for content in self.stored_contents:
+            if hashlib.sha256(content).hexdigest() == expected_sha256:
+                return content
+        raise AssertionError("unknown stored content")
+
+    def record_prepared_weekly_evaluation(
+        self, round_id: str, report: dict, *, prepared_at=None
+    ):
+        self.calls.append(("record_prepared_weekly_evaluation", round_id))
+        self.round_record["metadata"]["retrospective_release"][
+            "prepared_evaluation"
+        ] = {
+            **{
+                field: report[field]
+                for field in (
+                    "evaluation_id",
+                    "blind_manifest_sha256",
+                    "private_index_sha256",
+                    "reveal_manifest_sha256",
+                    "item_count",
+                    "choice_count",
+                )
+            },
+            "artifact": deepcopy(report["artifact"]),
+            "prepared_at": (
+                prepared_at.isoformat()
+                if prepared_at is not None
+                else "2026-08-15T02:00:00+00:00"
+            ),
+        }
+        return deepcopy(self.round_record)
 
     def register_private_weekly_evaluation(self, descriptor):
         self.calls.append(("register_private_weekly_evaluation", descriptor["evaluation_id"]))
@@ -488,6 +527,68 @@ class PrivateEvaluationTests(unittest.TestCase):
                 coordinator=coordinator,
             )
         self.assertEqual(coordinator.calls, [])
+
+    def test_delayed_preclose_materializer_requires_round_policy(self) -> None:
+        class Coordinator:
+            @staticmethod
+            def weekly_quiz_reveal_inputs(round_id):
+                return ({"round_id": round_id, "metadata": {}}, b"private")
+
+        with tempfile.TemporaryDirectory() as temporary, self.assertRaisesRegex(
+            PrivateEvaluationError,
+            "not opted into next-weekly",
+        ):
+            materialize_delayed_preclose_weekly_evaluation(
+                "weekly-2026-08-29-beta-v2",
+                temporary,
+                coordinator=Coordinator(),
+            )
+
+    def test_delayed_preclose_materializer_records_and_reuses_private_artifact(
+        self,
+    ) -> None:
+        round_record, _private, private_content = round_fixture()
+        round_record["metadata"]["retrospective_release"] = {
+            "policy": "next-weekly-activation",
+            "original_closes_at": "2026-08-16T00:00:00Z",
+            "safety_closes_at": round_record["closes_at"],
+            "configured_at": "2026-08-15T00:00:00Z",
+        }
+        coordinator = FakeCoordinator(round_record, private_content)
+        reference_content = minimal_reference_mmcif_gz()
+
+        def reference(item):
+            return coordinate(
+                reference_content,
+                rcsb_reference_url(item["target_id"]),
+            )
+
+        outcomes = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as temporary:
+                outcomes.append(
+                    materialize_delayed_preclose_weekly_evaluation(
+                        round_record["round_id"],
+                        temporary,
+                        coordinator=coordinator,
+                        reference_resolver=reference,
+                        evaluator=lambda *args, **kwargs: overlay_evaluation_score(),
+                        now=datetime(2026, 8, 15, 2, tzinfo=timezone.utc),
+                    )
+                )
+
+        self.assertEqual(
+            outcomes[0]["status"], "materialized-private-delayed-preclose"
+        )
+        self.assertEqual(
+            outcomes[1]["status"],
+            "already-materialized-private-delayed-preclose",
+        )
+        self.assertEqual(len(coordinator.stored_contents), 1)
+        self.assertIn(
+            ("record_prepared_weekly_evaluation", round_record["round_id"]),
+            coordinator.calls,
+        )
 
     def test_postclose_materializer_catalogs_once_and_then_short_circuits(self) -> None:
         round_record, _private, private_content = round_fixture()
