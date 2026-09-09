@@ -30,7 +30,10 @@ except (ImportError, ModuleNotFoundError):
     HAS_ASSEMBLY_DEPS = False
 
 
-def pdb_fixture(shift: float) -> bytes:
+def pdb_fixture_with_ligand_elements(
+    shift: float,
+    ligand_elements: list[str],
+) -> bytes:
     lines: list[str] = []
     serial = 0
     for residue in range(1, 7):
@@ -41,16 +44,23 @@ def pdb_fixture(shift: float) -> bytes:
                 f"ATOM  {serial:5d} {name:<4s} ALA A{residue:4d}    "
                 f"{x:8.3f}{0.0:8.3f}{0.0:8.3f}  1.00 50.00          {element:>2s}"
             )
-    for atom_index in range(15):
+    element_counts: dict[str, int] = {}
+    for atom_index, element in enumerate(ligand_elements):
         serial += 1
+        element_counts[element] = element_counts.get(element, 0) + 1
+        atom_name = f"{element}{element_counts[element]}"
         # Covalent-like spacing keeps RDKit connectivity inference stable; the
         # old 0.2 A synthetic spacing created an impossible all-to-all graph.
         x = shift + 10.0 + atom_index * 1.5
         lines.append(
-            f"HETATM{serial:5d} C{atom_index + 1:<3d} LIG B{1:4d}    "
-            f"{x:8.3f}{2.0:8.3f}{0.0:8.3f}  1.00 70.00           C"
+            f"HETATM{serial:5d} {atom_name:<4s} LIG B{1:4d}    "
+            f"{x:8.3f}{2.0:8.3f}{0.0:8.3f}  1.00 70.00          {element:>2s}"
         )
     return ("\n".join(lines) + "\nEND\n").encode()
+
+
+def pdb_fixture(shift: float) -> bytes:
+    return pdb_fixture_with_ligand_elements(shift, ["C"] * 15)
 
 
 def target(target_id: str = "2026-08-08_00000001") -> dict:
@@ -806,6 +816,57 @@ class PairwisePoseDistanceTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class WeeklyQuizAssemblyTests(unittest.TestCase):
+    def test_stages_explicit_h_smiles_against_predicted_heavy_coordinates(self) -> None:
+        from rdkit import Chem
+
+        ligand_smiles = r"[H]/N=C(/NCCC[C@@H](C(=O)O)N)\NP(=O)(O)O"
+        source = Chem.MolFromSmiles(ligand_smiles)
+        ligand_elements = [
+            atom.GetSymbol()
+            for atom in source.GetAtoms()
+            if atom.GetAtomicNum() != 1
+        ]
+        target_payload = target("9Q3Z")
+        target_payload["entities"][1]["smiles"] = ligand_smiles
+        target_payload["metadata"]["selected_ligand"] = {
+            "component_id": "ARG",
+            "heavy_atoms": 17,
+        }
+        openfold_content = pdb_fixture_with_ligand_elements(0.0, ligand_elements)
+        boltz_content = pdb_fixture_with_ligand_elements(20.0, ligand_elements)
+        openfold, openfold_uri = run_row(
+            "openfold3",
+            openfold_content,
+            target_payload=target_payload,
+        )
+        boltz, boltz_uri = run_row(
+            "boltz2",
+            boltz_content,
+            target_payload=target_payload,
+        )
+        downloads = {
+            openfold_uri: openfold_content,
+            boltz_uri: boltz_content,
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = stage_weekly_quiz(
+                [openfold, boltz],
+                temporary,
+                round_id="preview-weekly-explicit-h",
+                campaign_id="wwpdb-2026-09-05",
+                downloader=lambda uri, **_: downloads[uri],
+            )
+
+        item = stage["items"][0]
+        mapping = item["clustering"]["ligand_atom_mapping"]
+        self.assertEqual(item["ligand"]["heavy_atoms"], 16)
+        self.assertEqual(item["ligand_eligibility"]["heavy_atoms"], 17)
+        self.assertEqual(mapping["heavy_atom_count"], 16)
+        self.assertEqual(mapping["removed_explicit_hydrogen_count"], 1)
+        self.assertEqual(mapping["selected_ligand_metadata_heavy_atom_count"], 17)
+        self.assertFalse(mapping["metadata_heavy_atom_count_matches_normalized"])
+
     def test_filters_ineligible_historical_ligand_before_download_or_scoring(self) -> None:
         valid_target = target("2026-08-08_valid")
         invalid_target = target("2026-08-08_disconnected")

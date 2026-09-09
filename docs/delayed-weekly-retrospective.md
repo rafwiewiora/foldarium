@@ -19,7 +19,8 @@ player-name provenance.
    artifact. The public reveal remains blocked even if the safety close passes.
 3. The next production Weekly activation spawns the handoff for the exact
    predecessor and successor IDs.
-4. The handoff shortens the predecessor's close to the activation time,
+4. The handoff shortens the predecessor's close to the activation time, or
+   preserves the earlier safety close when activation was delayed. It then
    promotes the prepared artifact into the post-close private catalog, reveals
    the round, snapshots final votes, and publishes its retrospective.
 5. If any post-close step fails, the handoff is idempotent and can be rerun with
@@ -29,10 +30,17 @@ The safety close prevents indefinite voting if Saturday activation never
 occurs. It is not permission to reveal: delayed rounds without a recorded
 successor remain fail-closed.
 
+An operator may explicitly extend an unrevealed delayed round for up to seven
+more days. This keeps its answers private and supersedes any evaluation prepared
+for the earlier close, forcing a fresh evaluation after the extended voting
+window.
+
 ## Portable lifecycle entry points
 
 - `SupabaseCoordinator.configure_delayed_weekly_retrospective`: exact-round
   compare-and-set opt-in.
+- `SupabaseCoordinator.extend_delayed_weekly_voting_window`: exact-round
+  compare-and-set extension that cannot reveal or publish.
 - `materialize_delayed_preclose_weekly_evaluation`: private preparation without
   reveal or post-close catalog registration.
 - `SupabaseCoordinator.close_delayed_weekly_round_for_successor`: exact

@@ -51,6 +51,7 @@ function validConfig(overrides = {}) {
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
     ...overrides,
   };
 }
@@ -124,6 +125,15 @@ test('retains a deployment-controlled queryless performance beta flag', async ()
     response: validConfig({ performanceBetaEnabled: true }),
   });
   assert.equal(config.performanceBetaEnabled, true);
+});
+
+test('retains a deployment-pinned exact Weekly round', async () => {
+  const { config } = await runLoader({
+    response: validConfig({
+      exactWeeklyRoundId: 'weekly-2026-08-29-beta-v2',
+    }),
+  });
+  assert.equal(config.exactWeeklyRoundId, 'weekly-2026-08-29-beta-v2');
 });
 
 test('a disabled response strips browser credentials', async () => {
