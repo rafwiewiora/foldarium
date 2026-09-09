@@ -19,7 +19,8 @@ player-name provenance.
    artifact. The public reveal remains blocked even if the safety close passes.
 3. The next production Weekly activation spawns the handoff for the exact
    predecessor and successor IDs.
-4. The handoff shortens the predecessor's close to the activation time,
+4. The handoff shortens the predecessor's close to the activation time, or
+   preserves the earlier safety close when activation was delayed. It then
    promotes the prepared artifact into the post-close private catalog, reveals
    the round, snapshots final votes, and publishes its retrospective.
 5. If any post-close step fails, the handoff is idempotent and can be rerun with

@@ -1017,8 +1017,9 @@ class SupabaseCoordinator(SupabasePublisher):
         """Extend one open production round for an explicit next-round handoff.
 
         The compare-and-set filters make concurrent or stale operator calls fail
-        closed. The safety close is finite; the successor activation shortens it
-        to the actual handoff timestamp.
+        closed. The safety close is finite; successor activation shortens it to
+        the handoff timestamp when earlier and preserves it after a delayed
+        activation.
         """
 
         round_id = _safe_identifier(round_id, "round_id")
@@ -1260,7 +1261,12 @@ class SupabaseCoordinator(SupabasePublisher):
         *,
         activated_at: datetime | None = None,
     ) -> dict[str, Any]:
-        """Close an opted-in round only after its production successor exists."""
+        """Close an opted-in round only after its production successor exists.
+
+        A successor activated after the finite safety close preserves that
+        earlier close, so downtime cannot silently admit votes beyond the
+        configured voting window or strand an otherwise valid handoff.
+        """
 
         round_id = _safe_identifier(round_id, "round_id")
         successor_round_id = _safe_identifier(
@@ -1303,6 +1309,7 @@ class SupabaseCoordinator(SupabasePublisher):
 
         safety = timestamp(release.get("safety_closes_at"), "safety_closes_at")
         successor_opens = timestamp(successor.get("opens_at"), "successor opens_at")
+        effective_close = min(current, safety)
         if (
             row.get("environment") != "production"
             or row.get("status") != "open"
@@ -1313,7 +1320,6 @@ class SupabaseCoordinator(SupabasePublisher):
             or successor.get("status") != "open"
             or successor.get("opened_at") is None
             or successor_opens > current
-            or not current < safety
         ):
             raise SupabasePublicationError(
                 "delayed weekly handoff requires an active exact production successor"
@@ -1322,6 +1328,7 @@ class SupabaseCoordinator(SupabasePublisher):
         metadata = _json_object(row.get("metadata"), "weekly round metadata")
         release["activated_by_round_id"] = successor_round_id
         release["activated_at"] = current.isoformat()
+        release["effective_closes_at"] = effective_close.isoformat()
         metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = release
         query = urlencode(
             {
@@ -1336,7 +1343,7 @@ class SupabaseCoordinator(SupabasePublisher):
         response = self._request(
             f"/rest/v1/weekly_quiz_rounds?{query}",
             canonical_json(
-                {"closes_at": current.isoformat(), "metadata": metadata}
+                {"closes_at": effective_close.isoformat(), "metadata": metadata}
             ).encode("utf-8"),
             operation="delayed weekly retrospective handoff",
             content_type="application/json",
@@ -1354,7 +1361,8 @@ class SupabaseCoordinator(SupabasePublisher):
             or len(rows) != 1
             or not isinstance(rows[0], Mapping)
             or rows[0].get("round_id") != round_id
-            or timestamp(rows[0].get("closes_at"), "updated closes_at") != current
+            or timestamp(rows[0].get("closes_at"), "updated closes_at")
+            != effective_close
         ):
             raise SupabasePublicationError(
                 "delayed weekly retrospective handoff updated no exact round"
