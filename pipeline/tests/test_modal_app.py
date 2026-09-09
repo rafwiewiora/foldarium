@@ -1327,6 +1327,65 @@ class WeeklyLifecycleReconciliationTests(unittest.TestCase):
             report["required_migrations_before_publication"],
         )
 
+    def test_delayed_voting_extension_is_dry_run_gated_and_never_reveals(self) -> None:
+        module = self.deployment_module()
+        row = {
+            "round_id": "weekly-2026-08-29-beta-v2",
+            "closes_at": "2026-09-09T00:00:00+00:00",
+            "metadata": {
+                "retrospective_release": {
+                    "policy": "next-weekly-activation",
+                    "original_closes_at": "2026-09-02T00:00:00+00:00",
+                    "safety_closes_at": "2026-09-09T00:00:00+00:00",
+                    "configured_at": "2026-09-01T19:00:00+00:00",
+                    "prepared_evaluation": {"evaluation_id": "evaluation-1"},
+                },
+            },
+        }
+
+        class Coordinator:
+            extensions = []
+
+            @staticmethod
+            def weekly_quiz_round(round_id):
+                self.assertEqual(round_id, row["round_id"])
+                return row
+
+            @classmethod
+            def extend_delayed_weekly_voting_window(cls, round_id, **kwargs):
+                cls.extensions.append((round_id, kwargs))
+                return {**row, "closes_at": kwargs["new_safety_closes_at"]}
+
+        raw_function = module.extend_delayed_weekly_voting_window.get_raw_f()
+        with patch(
+            "foldarium_pipeline.supabase.SupabaseCoordinator.from_env",
+            return_value=Coordinator(),
+        ):
+            planned = raw_function(
+                row["round_id"],
+                row["closes_at"],
+                "2026-09-16T00:00:00+00:00",
+                False,
+            )
+            applied = raw_function(
+                row["round_id"],
+                row["closes_at"],
+                "2026-09-16T00:00:00+00:00",
+                True,
+            )
+
+        self.assertEqual(Coordinator.extensions, [(
+            row["round_id"],
+            {
+                "expected_safety_closes_at": row["closes_at"],
+                "new_safety_closes_at": "2026-09-16T00:00:00+00:00",
+            },
+        )])
+        self.assertEqual(planned["status"], "planned")
+        self.assertEqual(applied["status"], "extended")
+        self.assertTrue(planned["prepared_evaluation_will_be_superseded"])
+        self.assertFalse(applied["reveal_mutation_enabled"])
+
     def test_public_private_coordinators_use_reviewed_bucket_split(self) -> None:
         module = self.deployment_module()
         environments: list[dict[str, str]] = []

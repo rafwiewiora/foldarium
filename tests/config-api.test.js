@@ -51,6 +51,7 @@ test('returns the production browser config and derives its public structure URL
     deploymentEnvironment: 'production',
     commitSha: '1234567abcdef',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
 });
 
@@ -87,6 +88,7 @@ test('Preview never falls back to production or server-side Supabase credentials
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
   assert.doesNotMatch(JSON.stringify(config), /server-only|sb_secret|never expose|production/);
 });
@@ -106,6 +108,7 @@ test('Preview credentials default to read-only and require an explicit write opt
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
   assert.deepEqual(resolveBrowserConfig(previewEnv({
     ...staging,
@@ -120,6 +123,7 @@ test('Preview credentials default to read-only and require an explicit write opt
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
 });
 
@@ -145,6 +149,7 @@ test('performance Preview can read production round data without enabling writes
     deploymentEnvironment: 'production',
     commitSha: 'abcdef1234567',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
 });
 
@@ -160,6 +165,7 @@ test('a deployment-controlled data environment can isolate a public beta project
     deploymentEnvironment: 'preview',
     commitSha: '1234567abcdef',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
   assert.equal(resolveBrowserConfig(productionEnv({
     FOLDARIUM_WEEKLY_DATA_ENVIRONMENT: 'invalid',
@@ -173,6 +179,16 @@ test('a deployment can opt into queryless performance beta diagnostics', () => {
   assert.equal(config.performanceBetaEnabled, true);
   assert.equal(config.enabled, true);
   assert.equal(config.writable, true);
+});
+
+test('a deployment can pin one exact Weekly round without accepting unsafe IDs', () => {
+  const config = resolveBrowserConfig(productionEnv({
+    FOLDARIUM_EXACT_WEEKLY_ROUND_ID: 'weekly-2026-08-29-beta-v2',
+  }));
+  assert.equal(config.exactWeeklyRoundId, 'weekly-2026-08-29-beta-v2');
+  assert.equal(resolveBrowserConfig(productionEnv({
+    FOLDARIUM_EXACT_WEEKLY_ROUND_ID: '../private',
+  })).exactWeeklyRoundId, '');
 });
 
 test('supports a legacy browser anon key but rejects unsafe URLs', () => {

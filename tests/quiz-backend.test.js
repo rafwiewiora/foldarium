@@ -284,6 +284,34 @@ test('loads the current blind round and submits one server-validated weekly vote
   ]);
 });
 
+test('loads a deployment-pinned exact open round through the same voting backend', async () => {
+  const { client, rpcs, setRpcResult } = fakeSupabase();
+  const round = {
+    round_id: 'weekly-2026-08-29-beta-v2',
+    public_status: 'open',
+    blind_manifest: { items: [] },
+  };
+  setRpcResult('get_exact_open_weekly_quiz_round', {
+    data: [round],
+    error: null,
+  });
+  const backend = createQuizBackend({
+    client,
+    storage: memoryStorage(),
+    weeklyEnvironment: 'production',
+    exactWeeklyRoundId: round.round_id,
+  });
+
+  assert.deepEqual(await backend.getWeeklyRound(), round);
+  assert.deepEqual(rpcs, [{
+    name: 'get_exact_open_weekly_quiz_round',
+    args: {
+      p_round_id: round.round_id,
+      p_environment: 'production',
+    },
+  }]);
+});
+
 test('requires a server-created named session before a classic quiz starts', async () => {
   const { client, rpcs } = fakeSupabase();
   const storage = memoryStorage();

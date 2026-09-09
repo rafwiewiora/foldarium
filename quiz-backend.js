@@ -268,9 +268,14 @@ export function createQuizBackend({
   now = () => new Date(),
   pagePath = globalThis.location?.pathname || '/',
   weeklyEnvironment = 'production',
+  exactWeeklyRoundId = '',
 }) {
   if (!['production', 'preview', 'development'].includes(weeklyEnvironment)) {
     throw new Error('Weekly quiz deployment environment is invalid.');
+  }
+  if (exactWeeklyRoundId
+      && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(exactWeeklyRoundId)) {
+    throw new Error('Exact Weekly round identity is invalid.');
   }
   let flushing = null;
   let flushOutcome = null;
@@ -566,9 +571,17 @@ export function createQuizBackend({
       return (await leaderboardRpc('get_leaderboard')) ?? [];
     },
     async getWeeklyRound() {
-      const rows = await leaderboardRpc('get_current_weekly_quiz_round', {
-        p_environment: weeklyEnvironment,
-      });
+      const rows = await leaderboardRpc(
+        exactWeeklyRoundId
+          ? 'get_exact_open_weekly_quiz_round'
+          : 'get_current_weekly_quiz_round',
+        exactWeeklyRoundId
+          ? {
+            p_round_id: exactWeeklyRoundId,
+            p_environment: weeklyEnvironment,
+          }
+          : { p_environment: weeklyEnvironment },
+      );
       if (rows == null) return null;
       if (!Array.isArray(rows)) throw new Error('Weekly quiz round response is invalid.');
       return rows[0] ?? null;
@@ -844,6 +857,7 @@ export function initQuizBackend(config = {}, dependencies = {}) {
     ...dependencies,
     getClient,
     weeklyEnvironment,
+    exactWeeklyRoundId: config.exactWeeklyRoundId || '',
   });
   const backend = config.writable === false
     ? readOnlyBackend(writableBackend)
