@@ -1,22 +1,23 @@
 # Production handoff — 2026-08-28
 
 This note records the production state after the Weekly training-similarity
-rollout and the 2026-08-29 quiz deployment. It distinguishes shipped work from
-remaining research so a new session can resume without relying on chat history.
+rollout, the 2026-09-05 quiz deployment, and the protected continuation of
+2026-08-29 voting. It distinguishes shipped work from remaining research so a
+new session can resume without relying on chat history.
 
 ## Production state
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `abf857b397ce59491458e23727db0e0a4b507a63`.
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `6cce655a8b097f630f30a253e0c634d1f567f36c`.
+- Current public `main`: `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
 - Browser deployment commit: `7fa1eb1120385286c496665eceef4e860eda7f75`.
-- Modal deployment commit: `abf857b397ce59491458e23727db0e0a4b507a63`.
+- Modal deployment commit: `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
 - Runtime packaging and commit-attestation fix:
@@ -36,11 +37,18 @@ remaining research so a new session can resume without relying on chat history.
 - Delayed Weekly retrospective release:
   [Junction PR #55](https://github.com/JunctionBioscience/foldarium/pull/55)
   and provider-neutral [public PR #16](https://github.com/rafwiewiora/foldarium/pull/16).
+- September Weekly recovery and protected exact-round voting:
+  [Junction PR #57](https://github.com/JunctionBioscience/foldarium/pull/57),
+  [Junction PR #58](https://github.com/JunctionBioscience/foldarium/pull/58),
+  and provider-neutral [public PR #17](https://github.com/rafwiewiora/foldarium/pull/17).
 - Vercel deployment: `dpl_2nKPXvs89JA2bvSEf69cAd7vzdnH`.
 - Immutable deployment URL:
   <https://foldarium-5daogvakc-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
 - Public performance beta: <https://foldarium-performance-beta.vercel.app>.
+- Vercel-team-protected August 29 voting preview:
+  <https://foldarium-aug29-private-vote-n4iznprei-junctionbioscience.vercel.app>
+  (`dpl_2tVGoZHeck1FF4ncxAZRpGPanX4V`).
 - Modal profile digest:
   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 - Deployment was made manually from a clean detached worktree at the merged
@@ -132,17 +140,21 @@ Primary references:
 
 ### Delayed Weekly retrospective release
 
-- The current production round is explicitly opted into
-  `next-weekly-activation`. Its voting close is extended to the finite
-  2026-09-09 safety close, while public reveal and retrospective publication
-  remain blocked until the exact successor production round activates.
+- `weekly-2026-09-05-beta-v2` is the public current round. It opened at
+  2026-09-09 20:06:06 UTC with 37 blind items and closes at
+  2026-09-16 00:00:00 UTC.
+- `weekly-2026-08-29-beta-v2` remains open and unrevealed with 33 blind items.
+  Its finite safety close was explicitly extended from 2026-09-09 to
+  2026-09-16 00:00:00 UTC without running the successor handoff.
 - The scheduled retrospective job detects an opted-in open round and performs
   private pre-close preparation instead of calling the post-close evaluator.
   Existing rounds without the policy retain the deployed Wednesday behavior.
-- The 2026-08-29 round completed private evaluation for 33 items and 330 choices.
-  The artifact is stored privately, is not registered in the post-close
-  catalog, and caused no public mutation. An immediate replay reused the same
-  evaluation idempotently.
+- Extending the August voting window superseded its evaluation prepared for the
+  earlier close. The superseded descriptor remains private provenance; a fresh
+  evaluation is required after the extended window.
+- A Vercel-team-protected deployment pins the exact August round while using
+  the normal authenticated production named-session, vote-attempt, trace, and
+  `selection_kind` paths. Its temporary automation bypass was removed.
 - Successor handoff is bound to exact predecessor and successor IDs. It shortens
   the predecessor close to activation time, promotes the prepared artifact,
   reveals the round, snapshots final votes, and publishes the retrospective.
@@ -195,20 +207,33 @@ Primary references:
 - Junction PR #55 passed both required checks. The complete local pipeline suite
   passed 546 tests with 160 optional-dependency skips.
 - The reviewed Modal profile deployed commit
-  `abf857b397ce59491458e23727db0e0a4b507a63`; post-deploy verification matched
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`; post-deploy verification matched
   configuration digest
   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 - Public PR #16 passed all six checks after rerunning one GitHub API rate-limit
   failure in the Supabase CLI setup step. Its portable pipeline suite passed
   486 tests with 113 optional-dependency skips.
+- Production migration
+  `20260909203000_add_exact_open_weekly_round_lookup.sql` was applied before
+  the protected pinned client was deployed.
+- Live RPC verification confirmed September 5 is the public current round and
+  both September 5 and August 29 are open through 2026-09-16 with null reveal
+  manifests.
+- The protected August deployment reports writable production configuration,
+  exact round `weekly-2026-08-29-beta-v2`, commit
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`, 33 blind items, and no reveal.
+- Junction PR #58 passed both required checks. Public PR #17 passed all six
+  checks; locally, 590 JavaScript tests, 492 pipeline tests, and the
+  provider-neutral public-tree audit passed.
 
 ## Remaining work
 
 ### Operational follow-up
 
-- At the next production Weekly activation, verify that the exact delayed
-  predecessor handoff completes close, reveal, vote snapshot, and retrospective
-  publication before treating the lifecycle as fully shipped.
+- After the 2026-09-16 close, prepare a fresh August evaluation and explicitly
+  run the exact August 29 / September 5 handoff. Verify close, reveal, vote
+  snapshot, and retrospective publication before treating the lifecycle as
+  fully shipped.
 - Apply the immutable cache metadata backfill for the current round only after
   that reveal; the apply path intentionally refuses an open round.
 
@@ -222,14 +247,16 @@ protein familiarity and ligand-bound-system familiarity.
 
 1. Confirm production still resolves to browser commit
    `7fa1eb1120385286c496665eceef4e860eda7f75`.
-2. Confirm the Modal app still reports deployment configuration digest
+2. Confirm foldarium.org still selects `weekly-2026-09-05-beta-v2` and the
+   protected preview selects `weekly-2026-08-29-beta-v2`.
+3. Confirm both rounds remain open through 2026-09-16 00:00:00 UTC and both
+   reveal manifests remain null.
+4. Confirm the Modal app still reports deployment commit
+   `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d` and configuration digest
    `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
-3. Confirm `weekly-2026-08-29-beta-v2` remains open through its 2026-09-09
-   safety close and retains its private prepared evaluation until successor
-   activation.
-4. Treat all seven terminal failed runs as final at attempt 2/2.
-5. Confirm public `main` still contains public PR #16 at
-   `6cce655a8b097f630f30a253e0c634d1f567f36c`.
-6. Verify the exact delayed predecessor handoff at the next production Weekly
-   activation, then run the immutable cache metadata backfill after reveal.
-7. Promote apo-pocket similarity to a plan only if it becomes a priority.
+5. Treat all seven terminal failed runs as final at attempt 2/2.
+6. Confirm public `main` contains public PR #17 at
+   `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
+7. After the extended close, create a fresh August evaluation, run the exact
+   predecessor handoff, and apply immutable cache metadata only after reveal.
+8. Promote apo-pocket similarity to a plan only if it becomes a priority.
