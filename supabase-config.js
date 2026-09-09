@@ -8,6 +8,7 @@
     deploymentEnvironment: 'unknown',
     commitSha: '',
     performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
 
   window.FOLDARIUM_SUPABASE = disabled;
@@ -40,6 +41,7 @@
       deploymentEnvironment: config.deploymentEnvironment,
       commitSha: config.commitSha,
       performanceBetaEnabled: config.performanceBetaEnabled,
+      exactWeeklyRoundId: config.exactWeeklyRoundId,
     });
   } catch (error) {
     loadError = error;
@@ -56,7 +58,8 @@
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
     if (typeof value.enabled !== 'boolean' || typeof value.writable !== 'boolean') return false;
     if (typeof value.deploymentEnvironment !== 'string' || typeof value.commitSha !== 'string'
-      || typeof value.performanceBetaEnabled !== 'boolean') return false;
+      || typeof value.performanceBetaEnabled !== 'boolean'
+      || typeof value.exactWeeklyRoundId !== 'string') return false;
     if (typeof value.url !== 'string'
       || typeof value.publishableKey !== 'string'
       || typeof value.structureBaseUrl !== 'string') return false;

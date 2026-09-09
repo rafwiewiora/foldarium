@@ -1128,6 +1128,132 @@ class SupabaseCoordinator(SupabasePublisher):
         )
         return updated
 
+    def extend_delayed_weekly_voting_window(
+        self,
+        round_id: str,
+        *,
+        expected_safety_closes_at: str,
+        new_safety_closes_at: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Extend one unrevealed delayed round without publishing its answers.
+
+        A previously prepared evaluation is retained only as superseded private
+        provenance. Removing it from the active descriptor forces a fresh
+        evaluation after the longer voting window closes.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+
+        def timestamp(value: Any, field: str) -> datetime:
+            if not isinstance(value, str):
+                raise SupabasePublicationError(f"{field} must be an ISO timestamp")
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"{field} must be an ISO timestamp"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise SupabasePublicationError(f"{field} must include a timezone")
+            return parsed.astimezone(timezone.utc)
+
+        expected = timestamp(
+            expected_safety_closes_at,
+            "expected_safety_closes_at",
+        )
+        extended = timestamp(new_safety_closes_at, "new_safety_closes_at")
+        current = datetime.now(timezone.utc) if now is None else now
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise SupabasePublicationError("now must be a timezone-aware datetime")
+        current = current.astimezone(timezone.utc)
+        if not expected < extended or not current < extended <= current + timedelta(days=7):
+            raise SupabasePublicationError(
+                "delayed voting extension must be future, increasing, and at most seven days"
+            )
+
+        row = self.weekly_quiz_round(round_id)
+        metadata = _json_object(row.get("metadata"), "weekly round metadata")
+        release = delayed_retrospective_release(row)
+        if release is None:
+            raise SupabasePublicationError(
+                "weekly round is not opted into delayed retrospective release"
+            )
+        if (
+            timestamp(release.get("safety_closes_at"), "safety_closes_at")
+            == extended
+            and timestamp(row.get("closes_at"), "round closes_at") == extended
+            and release.get("previous_safety_closes_at") == expected.isoformat()
+        ):
+            return row
+        if (
+            row.get("environment") != "production"
+            or row.get("status") != "open"
+            or row.get("reveal_manifest") is not None
+            or row.get("revealed_at") is not None
+            or release.get("activated_by_round_id") is not None
+            or timestamp(release.get("safety_closes_at"), "safety_closes_at")
+            != expected
+            or timestamp(row.get("closes_at"), "round closes_at") != expected
+        ):
+            raise SupabasePublicationError(
+                "only the exact unrevealed delayed production round can be extended"
+            )
+
+        prepared = release.pop("prepared_evaluation", None)
+        if isinstance(prepared, Mapping):
+            release["superseded_prepared_evaluation"] = {
+                **deepcopy(dict(prepared)),
+                "superseded_at": current.isoformat(),
+                "reason": "voting-window-extended",
+            }
+        release["previous_safety_closes_at"] = expected.isoformat()
+        release["safety_closes_at"] = extended.isoformat()
+        release["safety_extended_at"] = current.isoformat()
+        metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = release
+        query = urlencode(
+            {
+                "round_id": f"eq.{round_id}",
+                "environment": "eq.production",
+                "status": "eq.open",
+                "closes_at": f"eq.{expected.isoformat()}",
+                "reveal_manifest": "is.null",
+                "revealed_at": "is.null",
+            }
+        )
+        response = self._request(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            canonical_json(
+                {"closes_at": extended.isoformat(), "metadata": metadata}
+            ).encode("utf-8"),
+            operation="delayed weekly voting extension",
+            content_type="application/json",
+            extra_headers={"Prefer": "return=representation"},
+            method="PATCH",
+        )
+        try:
+            rows = json.loads((response or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "delayed weekly voting extension returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], Mapping)
+            or rows[0].get("round_id") != round_id
+            or timestamp(rows[0].get("closes_at"), "updated closes_at")
+            != extended
+        ):
+            raise SupabasePublicationError(
+                "delayed weekly voting extension updated no exact round"
+            )
+        updated = deepcopy(dict(rows[0]))
+        updated["metadata"] = _json_object(
+            updated.get("metadata"), "updated weekly round metadata"
+        )
+        return updated
+
     def record_prepared_weekly_evaluation(
         self,
         round_id: str,
