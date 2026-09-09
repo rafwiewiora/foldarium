@@ -1808,6 +1808,121 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(result["closes_at"], activated.isoformat())
         self.assertEqual(len(opener.calls), 3)
 
+    def test_late_successor_preserves_the_earlier_safety_close(self) -> None:
+        safety_close = "2026-09-09T00:00:00+00:00"
+        release = {
+            "policy": "next-weekly-activation",
+            "original_closes_at": "2026-09-02T00:00:00+00:00",
+            "safety_closes_at": safety_close,
+            "configured_at": "2026-09-01T19:00:00+00:00",
+        }
+        previous = {
+            "round_id": "weekly-2026-08-29-beta-v2",
+            "campaign_id": "wwpdb-2026-08-29",
+            "environment": "production",
+            "status": "open",
+            "opens_at": "2026-08-29T03:00:00+00:00",
+            "closes_at": safety_close,
+            "reveal_manifest": None,
+            "revealed_at": None,
+            "metadata": {"retrospective_release": release},
+        }
+        successor = {
+            "round_id": "weekly-2026-09-05-beta-v2",
+            "campaign_id": "wwpdb-2026-09-05",
+            "environment": "production",
+            "status": "open",
+            "opens_at": "2026-09-09T19:45:00+00:00",
+            "closes_at": "2026-09-16T00:00:00+00:00",
+            "opened_at": "2026-09-09T19:45:00+00:00",
+            "metadata": {},
+        }
+        activated = datetime(2026, 9, 9, 19, 45, tzinfo=timezone.utc)
+
+        class LateHandoffOpener(RecordingOpener):
+            def __init__(self):
+                super().__init__()
+                self.get_count = 0
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() == "GET":  # type: ignore[attr-defined]
+                    row = previous if self.get_count == 0 else successor
+                    self.get_count += 1
+                    return FakeResponse(json.dumps([row]).encode())
+                payload = json.loads(request.data)  # type: ignore[attr-defined]
+                self.test_case.assertEqual(payload["closes_at"], safety_close)  # type: ignore[attr-defined]
+                delayed = payload["metadata"]["retrospective_release"]
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    delayed["activated_at"],
+                    activated.isoformat(),
+                )
+                self.test_case.assertEqual(  # type: ignore[attr-defined]
+                    delayed["effective_closes_at"],
+                    safety_close,
+                )
+                return FakeResponse(
+                    json.dumps(
+                        [
+                            {
+                                **previous,
+                                "metadata": payload["metadata"],
+                            }
+                        ]
+                    ).encode()
+                )
+
+        opener = LateHandoffOpener()
+        opener.test_case = self
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=opener,
+        )
+        result = coordinator.close_delayed_weekly_round_for_successor(
+            previous["round_id"],
+            successor["round_id"],
+            activated_at=activated,
+        )
+        self.assertEqual(result["closes_at"], safety_close)
+        self.assertEqual(len(opener.calls), 3)
+
+        class ClosedSuccessorOpener(RecordingOpener):
+            def __init__(self):
+                super().__init__()
+                self.get_count = 0
+
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                if request.get_method() != "GET":  # type: ignore[attr-defined]
+                    raise AssertionError("invalid successor must not update the predecessor")
+                row = (
+                    previous
+                    if self.get_count == 0
+                    else {**successor, "status": "closed"}
+                )
+                self.get_count += 1
+                return FakeResponse(json.dumps([row]).encode())
+
+        rejecting_opener = ClosedSuccessorOpener()
+        rejecting_coordinator = SupabaseCoordinator(
+            "https://project.supabase.co",
+            "service-role-key",
+            "results",
+            opener=rejecting_opener,
+        )
+        with self.assertRaisesRegex(
+            SupabasePublicationError,
+            "active exact production successor",
+        ):
+            rejecting_coordinator.close_delayed_weekly_round_for_successor(
+                previous["round_id"],
+                successor["round_id"],
+                activated_at=activated,
+            )
+        self.assertEqual(len(rejecting_opener.calls), 2)
+
     def test_current_weekly_round_is_bound_to_expected_campaign(self) -> None:
         current = {
             "round_id": "weekly-2026-08-08-v2",

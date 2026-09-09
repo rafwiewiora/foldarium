@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import subprocess
 import tempfile
 import unittest
@@ -8,13 +9,23 @@ from pathlib import Path
 
 from foldarium_pipeline.pose_scoring import (
     PoseScoringError,
+    SMINA_LIGAND_PREPARATION_VERSION,
     SMINA_SCORE_PROTOCOL_VERSION,
     SMINA_SCORE_SCHEMA_VERSION,
+    _pose_pdb_to_sdf,
     score_pose_smina,
+)
+from foldarium_pipeline.ligand_normalization import (
+    LIGAND_SMILES_HEAVY_ATOM_POLICY,
 )
 
 
+HAS_RDKIT = importlib.util.find_spec("rdkit") is not None
+
+
 class PoseScoringTests(unittest.TestCase):
+    EXPLICIT_H_SMILES = r"[H]/N=C(/NCCC[C@@H](C(=O)O)N)\NP(=O)(O)O"
+
     def fixture_paths(self, root: Path) -> tuple[Path, Path, Path]:
         binary = root / "smina"
         binary.write_bytes(b"pinned-smina-fixture")
@@ -26,6 +37,49 @@ class PoseScoringTests(unittest.TestCase):
         ligand = root / "pose.sdf"
         ligand.write_text("fixture\n$$$$\n", encoding="utf-8")
         return binary, receptor, ligand
+
+    @unittest.skipUnless(HAS_RDKIT, "RDKit is an optional scoring dependency")
+    def test_reconstructs_heavy_pose_after_deleting_stereo_explicit_h(self) -> None:
+        from rdkit import Chem
+
+        source = Chem.MolFromSmiles(self.EXPLICIT_H_SMILES)
+        heavy_atoms = [
+            atom for atom in source.GetAtoms() if atom.GetAtomicNum() != 1
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pose = root / "pose.pdb"
+            lines = []
+            for index, atom in enumerate(heavy_atoms, start=1):
+                symbol = atom.GetSymbol()
+                lines.append(
+                    f"HETATM{index:5d} {symbol + str(index):<4s} LIG X   1    "
+                    f"{float(index):8.3f}{float(index % 3):8.3f}"
+                    f"{float(index % 5):8.3f}  1.00  0.00          {symbol:>2s}"
+                )
+            pose.write_text("\n".join(lines) + "\nEND\n", encoding="utf-8")
+            output = root / "prepared.sdf"
+
+            _rdkit_version, removed_count = _pose_pdb_to_sdf(
+                pose,
+                self.EXPLICIT_H_SMILES,
+                output,
+            )
+            prepared = Chem.SDMolSupplier(str(output), removeHs=False)[0]
+
+        self.assertEqual(
+            [atom.GetAtomicNum() for atom in prepared.GetAtoms()],
+            [atom.GetAtomicNum() for atom in heavy_atoms],
+        )
+        self.assertEqual(removed_count, 1)
+        self.assertEqual(
+            SMINA_LIGAND_PREPARATION_VERSION,
+            "task-smiles-pose-coordinates-rdkit/v2",
+        )
+        self.assertEqual(
+            LIGAND_SMILES_HEAVY_ATOM_POLICY,
+            "rdkit-delete-all-atomic-number-1-preserve-order-and-connectivity/v1",
+        )
 
     def test_scores_exact_pair_with_bounded_protocol_and_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
