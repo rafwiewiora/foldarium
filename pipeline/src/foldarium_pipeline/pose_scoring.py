@@ -24,10 +24,15 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .ligand_normalization import (
+    LIGAND_SMILES_HEAVY_ATOM_POLICY,
+    LigandNormalizationError,
+    remove_all_hydrogen_atoms,
+)
 
 SMINA_SCORE_SCHEMA_VERSION = "foldarium.pose-score/v1"
 SMINA_SCORE_PROTOCOL_VERSION = "foldarium.smina-score-only/v1"
-SMINA_LIGAND_PREPARATION_VERSION = "task-smiles-pose-coordinates-rdkit/v1"
+SMINA_LIGAND_PREPARATION_VERSION = "task-smiles-pose-coordinates-rdkit/v2"
 SMINA_EXPECTED_VERSION = "2020.12.10"
 SMINA_DEFAULT_SCORING_FUNCTION = "vina"
 SMINA_ALLOWED_SCORING_FUNCTIONS = frozenset({"vina", "vinardo"})
@@ -98,7 +103,7 @@ def _pose_pdb_to_sdf(
     pose_path: Path,
     ligand_smiles: str,
     output_path: Path,
-) -> str:
+) -> tuple[str, int]:
     """Combine the task graph with the predicted heavy-atom coordinates."""
 
     if not isinstance(ligand_smiles, str) or not ligand_smiles.strip():
@@ -113,7 +118,15 @@ def _pose_pdb_to_sdf(
     template = Chem.MolFromSmiles(ligand_smiles.strip())
     if template is None:
         raise PoseScoringError("ligand_smiles could not be parsed")
-    template = Chem.RemoveHs(template)
+    try:
+        template, explicit_hydrogen_count = remove_all_hydrogen_atoms(
+            template,
+            Chem,
+        )
+    except LigandNormalizationError as exc:
+        raise PoseScoringError(
+            "ligand_smiles hydrogen removal changed heavy-atom order or connectivity"
+        ) from exc
     pose = Chem.MolFromPDBFile(
         str(pose_path),
         sanitize=False,
@@ -143,7 +156,7 @@ def _pose_pdb_to_sdf(
         writer.close()
     if not output_path.is_file() or output_path.stat().st_size < 1:
         raise PoseScoringError("ligand SDF preparation produced no output")
-    return str(rdBase.rdkitVersion)
+    return str(rdBase.rdkitVersion), explicit_hydrogen_count
 
 
 def _prepare_ligand(
@@ -162,12 +175,18 @@ def _prepare_ligand(
             "ligand pose must be SDF, MOL2, PDBQT, or PDB with ligand_smiles"
         )
     prepared = work_directory / "ligand.sdf"
-    rdkit_version = _pose_pdb_to_sdf(ligand_path, ligand_smiles or "", prepared)
+    rdkit_version, explicit_hydrogen_count = _pose_pdb_to_sdf(
+        ligand_path,
+        ligand_smiles or "",
+        prepared,
+    )
     return prepared, {
         "protocol": SMINA_LIGAND_PREPARATION_VERSION,
         "input_format": "pdb",
         "output_format": "sdf",
         "rdkit_version": rdkit_version,
+        "heavy_atom_normalization_policy": LIGAND_SMILES_HEAVY_ATOM_POLICY,
+        "removed_explicit_hydrogen_count": explicit_hydrogen_count,
         "hydrogens": "added-by-smina",
     }
 

@@ -17,6 +17,9 @@ from foldarium_pipeline.interactions import (
     _hbond_summary,
     summarize_ifp,
 )
+from foldarium_pipeline.ligand_normalization import (
+    LIGAND_SMILES_HEAVY_ATOM_POLICY,
+)
 
 
 class InteractionSummaryTests(unittest.TestCase):
@@ -78,7 +81,7 @@ class InteractionSummaryTests(unittest.TestCase):
     def test_contract_is_fixed_and_heavy_atom_aware(self) -> None:
         self.assertEqual(
             INTERACTION_POLICY,
-            "prolif-implicit-hbond-unique-protein-residue/v1",
+            "prolif-implicit-hbond-unique-protein-residue/v2",
         )
         self.assertEqual(
             PROTEIN_STANDARDIZATION_POLICY,
@@ -154,6 +157,11 @@ class InteractionSummaryTests(unittest.TestCase):
                         ],
                     },
                 ),
+                patch.object(
+                    interactions_module,
+                    "remove_all_hydrogen_atoms",
+                    return_value=(ligand, 0),
+                ),
             ):
                 summary = interactions_module.calculate_interaction_summary(
                     protein_path,
@@ -167,6 +175,11 @@ class InteractionSummaryTests(unittest.TestCase):
         self.assertEqual(summary["rdkit_version"], "2026.3.4")
         self.assertEqual(summary["policy"], INTERACTION_POLICY)
         self.assertTrue(summary["implicit_hydrogens"])
+        self.assertEqual(
+            summary["heavy_atom_normalization_policy"],
+            LIGAND_SMILES_HEAVY_ATOM_POLICY,
+        )
+        self.assertEqual(summary["removed_explicit_hydrogen_count"], 0)
         self.assertEqual(summary["geometry_checks"], "prolif-defaults")
         self.assertFalse(summary["include_water"])
         self.assertEqual(ligand.conformers[0][0].positions, [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)])
