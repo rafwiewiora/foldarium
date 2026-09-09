@@ -30,9 +30,16 @@ The safety close prevents indefinite voting if Saturday activation never
 occurs. It is not permission to reveal: delayed rounds without a recorded
 successor remain fail-closed.
 
+An operator may explicitly extend an unrevealed delayed round for up to seven
+more days. This keeps its answers private and supersedes any evaluation prepared
+for the earlier close, forcing a fresh evaluation after the extended voting
+window.
+
 ## Operator entry points
 
 - `configure_delayed_weekly_retrospective`: exact-round dry-run/apply gate.
+- `extend_delayed_weekly_voting_window`: exact-round dry-run/apply extension
+  that cannot reveal or publish.
 - `weekly_retrospective_tick`: scheduled or exact-round private preparation.
 - `delayed_weekly_retrospective_handoff`: exact predecessor/successor
   dry-run/apply gate and recovery path.

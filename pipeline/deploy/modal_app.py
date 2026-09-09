@@ -2307,6 +2307,64 @@ if modal is not None:
         return result
 
     @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=5 * 60,
+        max_containers=1,
+    )
+    def extend_delayed_weekly_voting_window(
+        round_id: str,
+        expected_safety_closes_at: str,
+        new_safety_closes_at: str,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Extend one exact delayed round while keeping its reveal private."""
+
+        from foldarium_pipeline.supabase import SupabaseCoordinator
+        from foldarium_pipeline.weekly_lifecycle import delayed_retrospective_release
+
+        if not isinstance(apply, bool):
+            raise TypeError("apply must be a boolean")
+        coordinator = SupabaseCoordinator.from_env()
+        before = coordinator.weekly_quiz_round(round_id)
+        release = delayed_retrospective_release(before)
+        if release is None:
+            raise RuntimeError("weekly round has no delayed retrospective policy")
+        updated = (
+            coordinator.extend_delayed_weekly_voting_window(
+                round_id,
+                expected_safety_closes_at=expected_safety_closes_at,
+                new_safety_closes_at=new_safety_closes_at,
+            )
+            if apply
+            else before
+        )
+        result = {
+            "status": "extended" if apply else "planned",
+            "round_id": round_id,
+            "apply": apply,
+            "previous_closes_at": before.get("closes_at"),
+            "closes_at": (
+                updated.get("closes_at")
+                if apply
+                else new_safety_closes_at
+            ),
+            "prepared_evaluation_will_be_superseded": isinstance(
+                release.get("prepared_evaluation"),
+                Mapping,
+            ),
+            "reveal_mutation_enabled": False,
+        }
+        print(
+            "foldarium.delayed_weekly_voting_extension "
+            + json.dumps(result, sort_keys=True),
+            flush=True,
+        )
+        return result
+
+    @app.function(
         image=quiz_assembly_image,
         cpu=8.0,
         memory=32768,

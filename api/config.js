@@ -35,9 +35,17 @@ export function resolveBrowserConfig(env = {}, { readOnlyProductionData = false 
   const writesEnabled = !readOnlyProductionData
     && (!names.writesEnabled || env[names.writesEnabled] === '1');
   const performanceBetaEnabled = env.FOLDARIUM_PERFORMANCE_BETA === '1';
+  const exactWeeklyRoundId = normalizedRoundId(
+    env.FOLDARIUM_EXACT_WEEKLY_ROUND_ID,
+  );
 
   if (!url || !publishableKey) {
-    return disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled);
+    return disabledConfig(
+      deploymentEnvironment,
+      commitSha,
+      performanceBetaEnabled,
+      exactWeeklyRoundId,
+    );
   }
 
   const configuredStructureUrl = env[names.structureBaseUrl];
@@ -45,7 +53,12 @@ export function resolveBrowserConfig(env = {}, { readOnlyProductionData = false 
     ? normalizedHttpsUrl(configuredStructureUrl)
     : `${url}/storage/v1/object/public/structures`;
   if (!structureBaseUrl) {
-    return disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled);
+    return disabledConfig(
+      deploymentEnvironment,
+      commitSha,
+      performanceBetaEnabled,
+      exactWeeklyRoundId,
+    );
   }
 
   return {
@@ -57,6 +70,7 @@ export function resolveBrowserConfig(env = {}, { readOnlyProductionData = false 
     deploymentEnvironment,
     commitSha,
     performanceBetaEnabled,
+    exactWeeklyRoundId,
   };
 }
 
@@ -112,7 +126,19 @@ function publicCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{7,64}$/i.test(value) ? value : '';
 }
 
-function disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled = false) {
+function normalizedRoundId(value) {
+  return typeof value === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value)
+    ? value
+    : '';
+}
+
+function disabledConfig(
+  deploymentEnvironment,
+  commitSha,
+  performanceBetaEnabled = false,
+  exactWeeklyRoundId = '',
+) {
   return {
     url: '',
     publishableKey: '',
@@ -122,6 +148,7 @@ function disabledConfig(deploymentEnvironment, commitSha, performanceBetaEnabled
     deploymentEnvironment,
     commitSha,
     performanceBetaEnabled,
+    exactWeeklyRoundId,
   };
 }
 
