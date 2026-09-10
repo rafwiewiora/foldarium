@@ -380,9 +380,9 @@ test('all-time exposes public Human pseudonyms and marks provisional rows', asyn
   const human = page.locator('#participant-filter [data-kind="human"]');
   await expect(human).toBeEnabled();
   await human.click();
-  await expect(page.locator('.ranking-table')).toContainText(maliciousName);
-  await expect(page.locator('.ranking-table')).toContainText('Provisional');
-  await expect(page.locator('.ranking-table img')).toHaveCount(0);
+  await expect(page.locator('#all-time-table')).toContainText(maliciousName);
+  await expect(page.locator('#all-time-table')).toContainText('Provisional');
+  await expect(page.locator('#all-time-table img')).toHaveCount(0);
 });
 
 test('cofolding ranks raw-pose methods and exposes weekly trends', async ({ page }) => {
@@ -405,4 +405,7 @@ test('cofolding ranks raw-pose methods and exposes weekly trends', async ({ page
   await expect(page.locator('.method-chart-top1')).toHaveCount(1);
   await expect(page.locator('.method-data summary')).toHaveText('View data table');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('.method-chart')).toBeVisible();
 });
