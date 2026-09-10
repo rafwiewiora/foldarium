@@ -9,14 +9,14 @@ new session can resume without relying on chat history.
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
+  `8937ff028b5a3445295e0086331741686b4fb573`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
+- Current public `main`: `e25e93ca77e6bdc177e8a3e853a7fd3ad29a2412`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
-- Browser deployment commit: `7fa1eb1120385286c496665eceef4e860eda7f75`.
+- Browser deployment commit: `8937ff028b5a3445295e0086331741686b4fb573`.
 - Modal deployment commit: `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
@@ -41,9 +41,12 @@ new session can resume without relying on chat history.
   [Junction PR #57](https://github.com/JunctionBioscience/foldarium/pull/57),
   [Junction PR #58](https://github.com/JunctionBioscience/foldarium/pull/58),
   and provider-neutral [public PR #17](https://github.com/rafwiewiora/foldarium/pull/17).
-- Vercel deployment: `dpl_2nKPXvs89JA2bvSEf69cAd7vzdnH`.
+- Cofolding retrospective performance:
+  [Junction PR #48](https://github.com/JunctionBioscience/foldarium/pull/48)
+  and provider-neutral [public PR #11](https://github.com/rafwiewiora/foldarium/pull/11).
+- Vercel deployment: `dpl_DNCtDzaaq1XGhoCacM9i31gdRGdT`.
 - Immutable deployment URL:
-  <https://foldarium-5daogvakc-junctionbioscience.vercel.app>.
+  <https://foldarium-buhxztm1i-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
 - Public performance beta: <https://foldarium-performance-beta.vercel.app>.
 - Vercel-team-protected August 29 voting preview:
@@ -107,10 +110,20 @@ Primary references:
 - For-fun sessions and vote attempts use the post-reveal tables and are scored
   separately from blind-week and all-time rankings. There are no seeded or fake
   production leaderboard rows.
+- The Cofolding view reports overall and week-by-week method performance for
+  revealed rounds. Oracle success means any raw pose is strictly correct; top-1
+  means the highest ligand-pLDDT raw pose is strictly correct, with stable
+  choice ID as the tie-breaker.
+- Cluster `accepted_correct` never contributes to these scientific metrics.
+  Missing ligand pLDDT excludes a target only from the top-1 denominator.
+- Revealed Archive question rows include per-method Oracle and Top-1 outcome
+  matrices. The open August 29 round remains absent until it is revealed.
 
 Primary references:
 
 - `weekly-training-similarity.js`
+- `method-performance.js`
+- `weekly_method_stats.json`
 - `weekly-retrospectives.js`
 - `app.js`
 - `tests/weekly-training-similarity.test.js`
@@ -225,6 +238,18 @@ Primary references:
 - Junction PR #58 passed both required checks. Public PR #17 passed all six
   checks; locally, 590 JavaScript tests, 492 pipeline tests, and the
   provider-neutral public-tree audit passed.
+- The cofolding statistics fixture exactly matched live revealed production
+  data for August 8, 15, and 22: 100 targets per method. Boltz-2 has 46 oracle
+  and 41 top-1 successes; OpenFold3 has 44 oracle and 31 top-1 successes.
+- Junction PR #48 passed both required checks. Local verification passed 583
+  JavaScript tests, 553 pipeline tests, 14 focused method/UI tests, and 5
+  desktop/mobile browser tests.
+- Production serves browser commit
+  `8937ff028b5a3445295e0086331741686b4fb573`. A live browser smoke confirmed
+  overall ranking, weekly chart, no desktop/mobile overflow, all 39 August 22
+  target matrices, and no unexpected browser errors.
+- Public PR #11 passed all six checks. Its provider-neutral verification passed
+  597 JavaScript tests, 492 pipeline tests, and the public-tree audit.
 
 ## Remaining work
 
@@ -246,7 +271,7 @@ protein familiarity and ligand-bound-system familiarity.
 ## Resume checklist
 
 1. Confirm production still resolves to browser commit
-   `7fa1eb1120385286c496665eceef4e860eda7f75`.
+   `8937ff028b5a3445295e0086331741686b4fb573`.
 2. Confirm foldarium.org still selects `weekly-2026-09-05-beta-v2` and the
    protected preview selects `weekly-2026-08-29-beta-v2`.
 3. Confirm both rounds remain open through 2026-09-16 00:00:00 UTC and both
@@ -255,8 +280,11 @@ protein familiarity and ligand-bound-system familiarity.
    `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d` and configuration digest
    `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 5. Treat all seven terminal failed runs as final at attempt 2/2.
-6. Confirm public `main` contains public PR #17 at
-   `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
+6. Confirm public `main` contains public PR #11 at
+   `e25e93ca77e6bdc177e8a3e853a7fd3ad29a2412`.
 7. After the extended close, create a fresh August evaluation, run the exact
-   predecessor handoff, and apply immutable cache metadata only after reveal.
-8. Promote apo-pocket similarity to a plan only if it becomes a priority.
+   predecessor handoff, add August 29 to `weekly_method_stats.json`, and apply
+   immutable cache metadata only after reveal.
+8. Regenerate and cache-bust the static method statistics after every newly
+   revealed Weekly round.
+9. Promote apo-pocket similarity to a plan only if it becomes a priority.
