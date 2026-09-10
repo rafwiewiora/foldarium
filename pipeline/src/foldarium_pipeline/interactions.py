@@ -14,10 +14,15 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .ligand_normalization import (
+    LIGAND_SMILES_HEAVY_ATOM_POLICY,
+    LigandNormalizationError,
+    remove_all_hydrogen_atoms,
+)
 
 PROLIF_VERSION = "2.2.0"
 RDKIT_VERSION = "2026.3.4"
-INTERACTION_POLICY = "prolif-implicit-hbond-unique-protein-residue/v1"
+INTERACTION_POLICY = "prolif-implicit-hbond-unique-protein-residue/v2"
 VICINITY_CUTOFF_ANGSTROM = 6.0
 PROTEIN_STANDARDIZATION_POLICY = (
     "prolif-molecule-standardizer-standard-amino-acids/v1"
@@ -221,7 +226,12 @@ def calculate_interaction_summary(
     ligand = Chem.MolFromSmiles(ligand_smiles.strip())
     if ligand is None:
         raise InteractionFingerprintError("RDKit could not parse ligand SMILES")
-    ligand = Chem.RemoveHs(ligand)
+    try:
+        ligand, explicit_hydrogen_count = remove_all_hydrogen_atoms(ligand, Chem)
+    except LigandNormalizationError as exc:
+        raise InteractionFingerprintError(
+            "ligand SMILES hydrogen removal changed heavy-atom order or connectivity"
+        ) from exc
     if ligand.GetNumAtoms() != len(coordinates):
         raise InteractionFingerprintError(
             "ligand SMILES heavy-atom count does not match predicted coordinates"
@@ -244,6 +254,8 @@ def calculate_interaction_summary(
         "protein_standardization_policy": PROTEIN_STANDARDIZATION_POLICY,
         "vicinity_cutoff_angstrom": VICINITY_CUTOFF_ANGSTROM,
         "implicit_hydrogens": True,
+        "heavy_atom_normalization_policy": LIGAND_SMILES_HEAVY_ATOM_POLICY,
+        "removed_explicit_hydrogen_count": explicit_hydrogen_count,
         "geometry_checks": "prolif-defaults",
         "include_water": False,
         "interaction_types": list(INTERACTION_TYPES),

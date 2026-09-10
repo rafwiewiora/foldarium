@@ -1,22 +1,23 @@
 # Production handoff — 2026-08-28
 
 This note records the production state after the Weekly training-similarity
-rollout and the 2026-08-29 quiz deployment. It distinguishes shipped work from
-remaining research so a new session can resume without relying on chat history.
+rollout, the 2026-09-05 quiz deployment, and the protected continuation of
+2026-08-29 voting. It distinguishes shipped work from remaining research so a
+new session can resume without relying on chat history.
 
 ## Production state
 
 - Canonical repository: `JunctionBioscience/foldarium`.
 - Deployment-state verification commit:
-  `f8a99e712ec1704a620348e9f17eddfdcca0c0ab`.
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
 - Public mirror: `rafwiewiora/foldarium`.
-- Current public `main`: `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
+- Current public `main`: `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
 - Sanitized public source sync:
   [public PR #9](https://github.com/rafwiewiora/foldarium/pull/9).
 - Local `/datasets` route parity:
   [public PR #10](https://github.com/rafwiewiora/foldarium/pull/10).
-- Browser deployment commit: `0e614ec`.
-- Modal deployment commit: `7af7b75`.
+- Browser deployment commit: `7fa1eb1120385286c496665eceef4e860eda7f75`.
+- Modal deployment commit: `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`.
 - Reviewed feature:
   [Junction PR #36](https://github.com/JunctionBioscience/foldarium/pull/36).
 - Runtime packaging and commit-attestation fix:
@@ -27,10 +28,27 @@ remaining research so a new session can resume without relying on chat history.
   [Junction PR #42](https://github.com/JunctionBioscience/foldarium/pull/42).
 - Retry-accounting and v4 assembly guard:
   [Junction PR #43](https://github.com/JunctionBioscience/foldarium/pull/43).
-- Vercel deployment: `dpl_9xUqbDWLsjiM3cndZ8t3QEXZcHvF`.
+- Mol* Grid loading performance:
+  [Junction PR #50](https://github.com/JunctionBioscience/foldarium/pull/50) and
+  [public PR #13](https://github.com/rafwiewiora/foldarium/pull/13).
+- First-Grid background construction:
+  [Junction PR #53](https://github.com/JunctionBioscience/foldarium/pull/53)
+  and [public PR #15](https://github.com/rafwiewiora/foldarium/pull/15).
+- Delayed Weekly retrospective release:
+  [Junction PR #55](https://github.com/JunctionBioscience/foldarium/pull/55)
+  and provider-neutral [public PR #16](https://github.com/rafwiewiora/foldarium/pull/16).
+- September Weekly recovery and protected exact-round voting:
+  [Junction PR #57](https://github.com/JunctionBioscience/foldarium/pull/57),
+  [Junction PR #58](https://github.com/JunctionBioscience/foldarium/pull/58),
+  and provider-neutral [public PR #17](https://github.com/rafwiewiora/foldarium/pull/17).
+- Vercel deployment: `dpl_2nKPXvs89JA2bvSEf69cAd7vzdnH`.
 - Immutable deployment URL:
-  <https://foldarium-182pldlmo-junctionbioscience.vercel.app>.
+  <https://foldarium-5daogvakc-junctionbioscience.vercel.app>.
 - Production alias: <https://www.foldarium.org>.
+- Public performance beta: <https://foldarium-performance-beta.vercel.app>.
+- Vercel-team-protected August 29 voting preview:
+  <https://foldarium-aug29-private-vote-n4iznprei-junctionbioscience.vercel.app>
+  (`dpl_2tVGoZHeck1FF4ncxAZRpGPanX4V`).
 - Modal profile digest:
   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
 - Deployment was made manually from a clean detached worktree at the merged
@@ -98,23 +116,74 @@ Primary references:
 - `tests/weekly-training-similarity.test.js`
 - `tests/weekly-molecular-review.test.js`
 
+### Mol* loading performance
+
+- Weekly prefetches the next three visible Grid asset sets with four bounded
+  concurrent transfers. Foreground loads claim matching in-flight work or use
+  the bounded prefetched-byte cache instead of starting duplicate transfers.
+- Grid cards appear progressively. The hidden canonical scene is deferred
+  while Grid is active.
+- A bounded pool reuses up to nine Mol* viewers between questions. While the
+  participant enters their name, the first nine complete molecular scenes are
+  built offscreen and adopted only when their exact question/view signature
+  matches. Any remaining preparation overlaps named-session creation. Final
+  settled camera synchronization no longer waits an additional 600 ms.
+- Public content-addressed assets from future publications receive immutable
+  cache metadata. The backfill tool remains reveal-gated and therefore has not
+  mutated the currently open production round.
+- Production enables the speedups but not the performance clock or diagnostics
+  UI. The separate public beta enables the clock and consented, bounded reports
+  through deployment configuration, so its stable URL requires no query flags.
+- Performance reports use a dedicated private table and append-only RPC. They
+  are not stored in replay traces and exclude asset URLs, IP addresses, raw user
+  agents, plugins, fonts, and other browser-fingerprint fields.
+
+### Delayed Weekly retrospective release
+
+- `weekly-2026-09-05-beta-v2` is the public current round. It opened at
+  2026-09-09 20:06:06 UTC with 37 blind items and closes at
+  2026-09-16 00:00:00 UTC.
+- `weekly-2026-08-29-beta-v2` remains open and unrevealed with 33 blind items.
+  Its finite safety close was explicitly extended from 2026-09-09 to
+  2026-09-16 00:00:00 UTC without running the successor handoff.
+- The scheduled retrospective job detects an opted-in open round and performs
+  private pre-close preparation instead of calling the post-close evaluator.
+  Existing rounds without the policy retain the deployed Wednesday behavior.
+- Extending the August voting window superseded its evaluation prepared for the
+  earlier close. The superseded descriptor remains private provenance; a fresh
+  evaluation is required after the extended window.
+- A Vercel-team-protected deployment pins the exact August round while using
+  the normal authenticated production named-session, vote-attempt, trace, and
+  `selection_kind` paths. Its temporary automation bypass was removed.
+- Successor handoff is bound to exact predecessor and successor IDs. It shortens
+  the predecessor close to activation time, promotes the prepared artifact,
+  reveals the round, snapshots final votes, and publishes the retrospective.
+  Missing or inconsistent lifecycle provenance fails closed.
+- Ballot scope, correctness, vote persistence, result aggregation, and
+  player-name disclosure semantics are unchanged.
+
 ## Verification
 
 - Required `contracts-and-adapters` and `scientific-evaluation` checks passed
   for both the feature and runtime hotfix PRs.
-- Final JavaScript suite: 523 passed, 1 optional WASM test skipped.
+- Final JavaScript suite: 571 passed, 1 optional WASM test skipped.
 - Targeted evaluation-dependent Python suite: 39 passed, 0 failed, 0 skipped.
 - All 52 overlay objects declared available in the report returned
   successfully from the public Storage bucket.
 - Production serves the v2 similarity report with 100 records, while
   non-runtime documentation remains excluded.
-- Production `/api/config` reports environment `production` and exact commit
-  `0e614ec`.
 - A production browser smoke test confirmed Xtal then Training navigation,
   successful report and overlay requests, no Training in Show all, no bottom
   annotation, and a wrapping active label with no horizontal overflow.
 - Production serves the Play-for-fun endpoint, preserves the password gate, and
   serves the requested green/blue archive action styling.
+- Production `/api/config` reports exact commit
+  `7fa1eb1120385286c496665eceef4e860eda7f75` with performance-beta mode off.
+- A read-only live smoke adopted nine prepared Grid scenes, created no
+  foreground viewer, and had no failed card. Click-to-ready was 346 ms and the
+  first card was ready at 317 ms in that run.
+- The queryless beta smoke exposed the clock and consent control, adopted nine
+  prepared scenes, created no foreground viewer, and had no failed card.
 - The 2026-08-29 production round is
   `weekly-2026-08-29-beta-v2`, promoted from
   `preview-weekly-2026-08-29-nextweekly-v4`.
@@ -132,11 +201,41 @@ Primary references:
   was closed as superseded.
 - Public PR #10 added the production-equivalent `/datasets` mapping to the
   provider-neutral local server and updated the public sync handoff.
-- Public verification passed: all six required GitHub checks, 552 JavaScript
-  tests, 471 Python tests, the public-tree boundary audit, and shared-module
-  production parity.
+- Public PR #15 passed all six required GitHub checks, 585 JavaScript tests
+  with one optional WASM skip, and the public-tree boundary audit. The
+  feature-on versus feature-off desktop/mobile viewer parity audit also passed.
+- Junction PR #55 passed both required checks. The complete local pipeline suite
+  passed 546 tests with 160 optional-dependency skips.
+- The reviewed Modal profile deployed commit
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`; post-deploy verification matched
+  configuration digest
+  `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
+- Public PR #16 passed all six checks after rerunning one GitHub API rate-limit
+  failure in the Supabase CLI setup step. Its portable pipeline suite passed
+  486 tests with 113 optional-dependency skips.
+- Production migration
+  `20260909203000_add_exact_open_weekly_round_lookup.sql` was applied before
+  the protected pinned client was deployed.
+- Live RPC verification confirmed September 5 is the public current round and
+  both September 5 and August 29 are open through 2026-09-16 with null reveal
+  manifests.
+- The protected August deployment reports writable production configuration,
+  exact round `weekly-2026-08-29-beta-v2`, commit
+  `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d`, 33 blind items, and no reveal.
+- Junction PR #58 passed both required checks. Public PR #17 passed all six
+  checks; locally, 590 JavaScript tests, 492 pipeline tests, and the
+  provider-neutral public-tree audit passed.
 
 ## Remaining work
+
+### Operational follow-up
+
+- After the 2026-09-16 close, prepare a fresh August evaluation and explicitly
+  run the exact August 29 / September 5 handoff. Verify close, reveal, vote
+  snapshot, and retrospective publication before treating the lifecycle as
+  fully shipped.
+- Apply the immutable cache metadata backfill for the current round only after
+  that reveal; the apply path intentionally refuses an open round.
 
 ### Research backlog
 
@@ -146,10 +245,18 @@ protein familiarity and ligand-bound-system familiarity.
 
 ## Resume checklist
 
-1. Confirm production still resolves to browser commit `0e614ec`.
-2. Confirm the current production round remains
-   `weekly-2026-08-29-beta-v2` with 33 items.
-3. Treat all seven terminal failed runs as final at attempt 2/2.
-4. Confirm public `main` still contains public PRs #9 and #10 at
-   `0905bebf087ee8c7012c8ad8133c02692ab8e6db`.
-5. Promote apo-pocket similarity to a plan only if it becomes a priority.
+1. Confirm production still resolves to browser commit
+   `7fa1eb1120385286c496665eceef4e860eda7f75`.
+2. Confirm foldarium.org still selects `weekly-2026-09-05-beta-v2` and the
+   protected preview selects `weekly-2026-08-29-beta-v2`.
+3. Confirm both rounds remain open through 2026-09-16 00:00:00 UTC and both
+   reveal manifests remain null.
+4. Confirm the Modal app still reports deployment commit
+   `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d` and configuration digest
+   `c69c27f87ea20e41138d9ac34db92aca5a4fc63dc2ad33f97a4051d896b06f96`.
+5. Treat all seven terminal failed runs as final at attempt 2/2.
+6. Confirm public `main` contains public PR #17 at
+   `9161fcea98e42143e7478f072d2c3ac8e4ea3e8f`.
+7. After the extended close, create a fresh August evaluation, run the exact
+   predecessor handoff, and apply immutable cache metadata only after reveal.
+8. Promote apo-pocket similarity to a plan only if it becomes a priority.

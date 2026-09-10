@@ -20,7 +20,7 @@ function previewEnv(overrides = {}) {
   };
 }
 
-function invoke(handler, method = 'GET') {
+function invoke(handler, method = 'GET', url = '/api/config') {
   const headers = {};
   let statusCode;
   let body;
@@ -37,7 +37,7 @@ function invoke(handler, method = 'GET') {
       return this;
     },
   };
-  handler({ method }, response);
+  handler({ method, url }, response);
   return { statusCode, headers, body };
 }
 
@@ -50,6 +50,8 @@ test('returns the production browser config and derives its public structure URL
     writable: true,
     deploymentEnvironment: 'production',
     commitSha: '1234567abcdef',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
 });
 
@@ -85,6 +87,8 @@ test('Preview never falls back to production or server-side Supabase credentials
     writable: false,
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
   assert.doesNotMatch(JSON.stringify(config), /server-only|sb_secret|never expose|production/);
 });
@@ -103,6 +107,8 @@ test('Preview credentials default to read-only and require an explicit write opt
     writable: false,
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
   assert.deepEqual(resolveBrowserConfig(previewEnv({
     ...staging,
@@ -116,7 +122,73 @@ test('Preview credentials default to read-only and require an explicit write opt
     writable: true,
     deploymentEnvironment: 'preview',
     commitSha: 'abcdef1234567',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
   });
+});
+
+test('performance Preview can read production round data without enabling writes', () => {
+  const env = previewEnv({
+    FOLDARIUM_PREVIEW_SUPABASE_URL: 'https://staging.supabase.co',
+    FOLDARIUM_PREVIEW_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_staging',
+    FOLDARIUM_PREVIEW_WRITES_ENABLED: '1',
+  });
+  const response = invoke(
+    createConfigHandler({ env }),
+    'GET',
+    '/api/config?performance_source=production',
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.body, {
+    url: 'https://staging.supabase.co',
+    publishableKey: 'sb_publishable_staging',
+    structureBaseUrl: 'https://staging.supabase.co/storage/v1/object/public/structures',
+    enabled: true,
+    writable: false,
+    deploymentEnvironment: 'production',
+    commitSha: 'abcdef1234567',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
+  });
+});
+
+test('a deployment-controlled data environment can isolate a public beta project', () => {
+  assert.deepEqual(resolveBrowserConfig(productionEnv({
+    FOLDARIUM_WEEKLY_DATA_ENVIRONMENT: 'preview',
+  })), {
+    url: 'https://production.supabase.co',
+    publishableKey: 'sb_publishable_production',
+    structureBaseUrl: 'https://production.supabase.co/storage/v1/object/public/structures',
+    enabled: true,
+    writable: true,
+    deploymentEnvironment: 'preview',
+    commitSha: '1234567abcdef',
+    performanceBetaEnabled: false,
+    exactWeeklyRoundId: '',
+  });
+  assert.equal(resolveBrowserConfig(productionEnv({
+    FOLDARIUM_WEEKLY_DATA_ENVIRONMENT: 'invalid',
+  })).deploymentEnvironment, 'production');
+});
+
+test('a deployment can opt into queryless performance beta diagnostics', () => {
+  const config = resolveBrowserConfig(productionEnv({
+    FOLDARIUM_PERFORMANCE_BETA: '1',
+  }));
+  assert.equal(config.performanceBetaEnabled, true);
+  assert.equal(config.enabled, true);
+  assert.equal(config.writable, true);
+});
+
+test('a deployment can pin one exact Weekly round without accepting unsafe IDs', () => {
+  const config = resolveBrowserConfig(productionEnv({
+    FOLDARIUM_EXACT_WEEKLY_ROUND_ID: 'weekly-2026-08-29-beta-v2',
+  }));
+  assert.equal(config.exactWeeklyRoundId, 'weekly-2026-08-29-beta-v2');
+  assert.equal(resolveBrowserConfig(productionEnv({
+    FOLDARIUM_EXACT_WEEKLY_ROUND_ID: '../private',
+  })).exactWeeklyRoundId, '');
 });
 
 test('supports a legacy browser anon key but rejects unsafe URLs', () => {
