@@ -3,6 +3,13 @@ import {
   sortWeeklySimilarityRows,
   weeklySimilarityRecord,
 } from './weekly-training-similarity.js';
+import {
+  aggregateMethodStats,
+  methodName,
+  methodTrend,
+  scoreMethodPoses,
+  validateMethodStats,
+} from './method-performance.js';
 
 export const OUTCOME_FILTERS = Object.freeze([
   ['pose-solved', 'Pose · human correct'],
@@ -26,8 +33,10 @@ export function archiveRoute(pathname, search = '') {
   }
   if (roundId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(roundId)) roundId = null;
   const params = new URLSearchParams(search);
+  const requestedView = params.get('view');
   return {
-    view: !roundId && params.get('view') === 'all-time' ? 'all-time' : 'archive',
+    view: !roundId && new Set(['all-time', 'cofolding']).has(requestedView)
+      ? requestedView : 'archive',
     roundId,
   };
 }
@@ -154,15 +163,21 @@ const state = {
   ranking: 'total_correct',
   participantKind: '',
   adminAllTimeAvailable: false,
+  cofoldingView: 'overall',
+  cofoldingMethod: null,
+  methodData: null,
 };
 
 function setActiveTab() {
   const archive = document.getElementById('archive-tab');
   const allTime = document.getElementById('all-time-tab');
+  const cofolding = document.getElementById('cofolding-tab');
   archive.toggleAttribute('aria-current', state.route.view === 'archive');
   allTime.toggleAttribute('aria-current', state.route.view === 'all-time');
+  cofolding.toggleAttribute('aria-current', state.route.view === 'cofolding');
   document.getElementById('archive-view').hidden = state.route.view !== 'archive';
   document.getElementById('all-time-view').hidden = state.route.view !== 'all-time';
+  document.getElementById('cofolding-view').hidden = state.route.view !== 'cofolding';
 }
 
 function roundHref(roundId) {
@@ -337,7 +352,74 @@ export function humanAnswerSummary(human) {
   return answered ? `${Number(human?.correct_count) || 0}/${answered} correct` : 'No answers';
 }
 
-function renderQuestionRow(row) {
+export function targetMethodOutcomes(blindItem, revealItem, methods = null) {
+  const revealChoices = new Map(
+    (revealItem?.choices || []).map(choice => [choice.id, choice]),
+  );
+  const posesByMethod = new Map();
+  for (const choice of blindItem?.choices || []) {
+    if (typeof choice.method !== 'string' || !choice.method || !revealChoices.has(choice.id)) {
+      continue;
+    }
+    const poses = posesByMethod.get(choice.method) || [];
+    poses.push({
+      id: choice.id,
+      correct: revealChoices.get(choice.id).correct === true,
+      confidence: choice.confidence,
+    });
+    posesByMethod.set(choice.method, poses);
+  }
+  const methodIds = methods || [...posesByMethod.keys()].sort();
+  return methodIds.map(method => {
+    const poses = posesByMethod.get(method) || [];
+    if (!poses.length) return { method, oracle_success: null, top1_success: null };
+    const score = scoreMethodPoses(poses);
+    return {
+      method,
+      oracle_success: score.oracle_success,
+      top1_success: score.top1_success,
+    };
+  });
+}
+
+function methodOutcomeCell(value, metric, method) {
+  const cell = element('td');
+  const mark = element(
+    'span',
+    value == null ? 'method-outcome missing' : `method-outcome ${value ? 'correct' : 'wrong'}`,
+    value == null ? '—' : value ? '✓' : '×',
+  );
+  const result = value == null ? 'not evaluated' : value ? 'correct' : 'wrong';
+  mark.setAttribute('aria-label', `${methodName(method)} ${metric}: ${result}`);
+  mark.title = `${methodName(method)} ${metric}: ${result}`;
+  cell.append(mark);
+  return cell;
+}
+
+function buildTargetMethodTable(row, methods) {
+  const outcomes = targetMethodOutcomes(row.blindItem, row.revealItem, methods);
+  if (!outcomes.length) return null;
+  const table = element('table', 'target-method-table');
+  const caption = element('caption', 'sr-only', 'Cofolding method raw-pose outcomes');
+  const head = element('thead');
+  const header = element('tr');
+  ['Method', 'Oracle', 'Top-1'].forEach(label => header.append(element('th', '', label)));
+  head.append(header);
+  const body = element('tbody');
+  for (const outcome of outcomes) {
+    const line = element('tr');
+    line.append(
+      element('th', '', methodName(outcome.method)),
+      methodOutcomeCell(outcome.oracle_success, 'oracle', outcome.method),
+      methodOutcomeCell(outcome.top1_success, 'top-1', outcome.method),
+    );
+    body.append(line);
+  }
+  table.append(caption, head, body);
+  return table;
+}
+
+function renderQuestionRow(row, methods) {
   const node = element('article', 'question-row');
   node.dataset.outcome = row.outcome;
   const title = element('div', 'question-title');
@@ -385,6 +467,8 @@ function renderQuestionRow(row) {
   node.append(title);
   const similarity = buildSimilarityMeta(row.similarity);
   if (similarity) node.append(similarity);
+  const methodTable = buildTargetMethodTable(row, methods);
+  if (methodTable) node.append(methodTable);
   node.append(answers);
   return node;
 }
@@ -514,6 +598,11 @@ function renderDetail() {
   const questions = element('section', 'detail-section');
   questions.append(element('h3', '', 'Question outcomes'));
   const rows = detailQuestionRows(detail);
+  const methods = [...new Set(
+    (detail.blind_manifest?.items || []).flatMap(
+      item => (item.choices || []).map(choice => choice.method).filter(Boolean),
+    ),
+  )].sort();
   const controls = element('div', 'question-controls');
   renderQuestionFilters(controls, rows);
   renderQuestionSortControls(controls, rows);
@@ -523,7 +612,7 @@ function renderDetail() {
     row => state.questionFilter === 'all' || row.outcome === state.questionFilter,
   );
   sortWeeklySimilarityRows(visibleRows, state.questionSort)
-    .forEach(row => list.append(renderQuestionRow(row)));
+    .forEach(row => list.append(renderQuestionRow(row, methods)));
   questions.append(list);
   host.append(questions);
   renderAdminDetail(host, detail, state.adminDetail);
@@ -617,6 +706,213 @@ function renderAllTime(payload) {
   }
 }
 
+function methodRate(rate, successes, total) {
+  const metric = element('span', 'metric', rate == null ? '—' : `${Math.round(rate)}%`);
+  if (total) metric.append(element('span', 'metric-detail', `${successes}/${total}`));
+  return metric;
+}
+
+function renderCofoldingOverall(methods) {
+  const table = clear(document.getElementById('cofolding-overall'));
+  const header = element('div', 'method-ranking-row header');
+  ['Rank', 'Method', 'Targets', 'Oracle', 'Top-1'].forEach(label => {
+    header.append(element('span', '', label));
+  });
+  table.append(header);
+  for (const [index, row] of methods.entries()) {
+    const line = element('div', 'method-ranking-row');
+    line.append(
+      element('span', 'rank', `#${index + 1}`),
+      element('span', 'participant', methodName(row.method)),
+      element('span', 'metric', row.targets),
+      methodRate(row.oracle_rate, row.oracle_successes, row.targets),
+      methodRate(row.top1_rate, row.top1_successes, row.top1_evaluated),
+    );
+    table.append(line);
+  }
+}
+
+function svgElement(name, attributes = {}) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  return node;
+}
+
+function formatMethodWeek(value) {
+  return formatDate(value, { month: 'short', day: 'numeric' });
+}
+
+function renderCofoldingTrend() {
+  const host = clear(document.getElementById('cofolding-weekly'));
+  const rows = methodTrend(state.methodData, state.cofoldingMethod);
+  if (!rows.length) {
+    host.append(element('p', 'empty', 'No weekly method results.'));
+    return;
+  }
+  const head = element('div', 'method-trend-head');
+  const title = element('h2', '', `${methodName(state.cofoldingMethod)} weekly success`);
+  title.id = 'method-trend-title';
+  const legend = element('div', 'method-legend');
+  for (const [label, className] of [
+    ['Oracle', 'method-swatch'],
+    ['Top-1 ligand pLDDT', 'method-swatch top1'],
+  ]) {
+    const item = element('span');
+    const swatch = element('i', className);
+    swatch.setAttribute('aria-hidden', 'true');
+    item.append(swatch, label);
+    legend.append(item);
+  }
+  head.append(title, legend);
+  host.append(head);
+
+  const compact = window.matchMedia('(max-width: 620px)').matches;
+  const width = compact ? 360 : 1000;
+  const height = compact ? 230 : 300;
+  const left = compact ? 40 : 52;
+  const right = compact ? 30 : 24;
+  const top = 18;
+  const bottom = compact ? 34 : 42;
+  const innerWidth = width - left - right;
+  const innerHeight = height - top - bottom;
+  const x = index => left + (rows.length === 1
+    ? innerWidth / 2 : (innerWidth * index) / (rows.length - 1));
+  const y = value => top + innerHeight * (1 - value / 100);
+  const chart = svgElement('svg', {
+    class: 'method-chart',
+    viewBox: `0 0 ${width} ${height}`,
+    role: 'img',
+    'aria-labelledby': 'method-trend-title method-trend-description',
+  });
+  const description = svgElement('desc', { id: 'method-trend-description' });
+  description.textContent = 'Weekly oracle and top-1 raw-pose success rates from zero to one hundred percent.';
+  chart.append(description);
+  for (const tick of [0, 25, 50, 75, 100]) {
+    chart.append(svgElement('line', {
+      class: 'method-chart-grid',
+      x1: left,
+      x2: width - right,
+      y1: y(tick),
+      y2: y(tick),
+    }));
+    const label = svgElement('text', {
+      class: 'method-chart-axis',
+      x: left - 9,
+      y: y(tick) + 4,
+      'text-anchor': 'end',
+    });
+    label.textContent = `${tick}%`;
+    chart.append(label);
+  }
+  rows.forEach((row, index) => {
+    const label = svgElement('text', {
+      class: 'method-chart-axis',
+      x: x(index),
+      y: height - 14,
+      'text-anchor': 'middle',
+    });
+    label.textContent = formatMethodWeek(row.week);
+    chart.append(label);
+  });
+  for (const [key, lineClass, pointClass, label] of [
+    ['oracle_rate', 'method-chart-oracle', 'method-point-oracle', 'Oracle'],
+    ['top1_rate', 'method-chart-top1', 'method-point-top1', 'Top-1'],
+  ]) {
+    const visible = rows
+      .map((row, index) => row[key] == null ? null : `${x(index)},${y(row[key])}`)
+      .filter(Boolean);
+    chart.append(svgElement('polyline', {
+      class: lineClass,
+      points: visible.join(' '),
+    }));
+    rows.forEach((row, index) => {
+      if (row[key] == null) return;
+      const point = svgElement('circle', {
+        class: pointClass,
+        cx: x(index),
+        cy: y(row[key]),
+        r: 4,
+      });
+      const tooltip = svgElement('title');
+      tooltip.textContent = `${formatMethodWeek(row.week)} · ${label} ${Math.round(row[key])}%`;
+      point.append(tooltip);
+      chart.append(point);
+    });
+  }
+  host.append(chart);
+
+  const details = element('details', 'method-data');
+  details.append(element('summary', '', 'View data table'));
+  const table = element('div', 'method-data-table');
+  const header = element('div', 'method-data-row header');
+  ['Week', 'Targets', 'Oracle', 'Top-1'].forEach(label => header.append(element('span', '', label)));
+  table.append(header);
+  for (const row of rows) {
+    const line = element('div', 'method-data-row');
+    line.append(
+      element('span', '', formatMethodWeek(row.week)),
+      element('span', '', row.targets),
+      element('span', '', `${Math.round(row.oracle_rate)}% · ${row.oracle_successes}/${row.targets}`),
+      element('span', '', row.top1_rate == null
+        ? '—' : `${Math.round(row.top1_rate)}% · ${row.top1_successes}/${row.top1_evaluated}`),
+    );
+    table.append(line);
+  }
+  details.append(table);
+  host.append(details);
+}
+
+function setCofoldingView(view) {
+  state.cofoldingView = view;
+  document.querySelectorAll('#cofolding-ranking-view [data-cofolding-view]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.cofoldingView === view));
+  });
+  document.getElementById('cofolding-overall').hidden = view !== 'overall';
+  document.getElementById('cofolding-weekly').hidden = view !== 'weekly';
+  document.getElementById('cofolding-method-filter').hidden = view !== 'weekly';
+  if (view === 'weekly' && state.methodData) renderCofoldingTrend();
+}
+
+function renderCofoldingMethodFilter(methods) {
+  const filter = clear(document.getElementById('cofolding-method-filter'));
+  for (const row of methods) {
+    const button = element('button', '', methodName(row.method));
+    button.type = 'button';
+    button.dataset.method = row.method;
+    button.setAttribute('aria-pressed', String(row.method === state.cofoldingMethod));
+    button.addEventListener('click', () => {
+      state.cofoldingMethod = row.method;
+      filter.querySelectorAll('[data-method]').forEach(candidate => {
+        candidate.setAttribute('aria-pressed', String(candidate === button));
+      });
+      renderCofoldingTrend();
+    });
+    filter.append(button);
+  }
+}
+
+async function loadCofolding() {
+  const status = document.getElementById('cofolding-status');
+  status.textContent = 'Loading method performance…';
+  try {
+    const response = await fetch('/weekly_method_stats.json?v=20260830');
+    if (!response.ok) throw new Error('Method performance is unavailable');
+    state.methodData = await response.json();
+    validateMethodStats(state.methodData);
+    const methods = aggregateMethodStats(state.methodData);
+    state.cofoldingMethod = methods[0]?.method || null;
+    renderCofoldingOverall(methods);
+    renderCofoldingMethodFilter(methods);
+    setCofoldingView(state.cofoldingView);
+    status.textContent = '';
+  } catch (error) {
+    state.methodData = null;
+    status.textContent = error.message;
+    clear(document.getElementById('cofolding-overall'));
+    clear(document.getElementById('cofolding-weekly'));
+  }
+}
+
 async function loadAllTime() {
   const status = document.getElementById('all-time-status');
   status.textContent = 'Loading rankings…';
@@ -635,6 +931,21 @@ async function loadAllTime() {
     status.textContent = error.message;
     clear(document.getElementById('all-time-table'));
   }
+}
+
+async function loadCurrentView() {
+  setActiveTab();
+  if (state.route.view === 'all-time') await loadAllTime();
+  else if (state.route.view === 'cofolding') {
+    if (state.methodData) setCofoldingView(state.cofoldingView);
+    else await loadCofolding();
+  } else await loadArchive();
+}
+
+function navigateToView(view, href) {
+  state.route = { view, roundId: null };
+  history.pushState(null, '', href);
+  void loadCurrentView();
 }
 
 function bindControls() {
@@ -660,15 +971,33 @@ function bindControls() {
       void loadAllTime();
     });
   });
+  document.querySelectorAll('#cofolding-ranking-view [data-cofolding-view]').forEach(button => {
+    button.addEventListener('click', () => setCofoldingView(button.dataset.cofoldingView));
+  });
+  document.querySelectorAll('.archive-tabs a[data-view]').forEach(link => {
+    link.addEventListener('click', event => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      navigateToView(link.dataset.view, link.href);
+    });
+  });
+  window.addEventListener('popstate', () => {
+    const route = archiveRoute(location.pathname, location.search);
+    if (route.roundId) {
+      location.reload();
+      return;
+    }
+    state.route = route;
+    void loadCurrentView();
+  });
   setPressed('ranking-view', '[data-ranking]', state.ranking);
   setPressed('participant-filter', '[data-kind]', state.participantKind);
+  setCofoldingView(state.cofoldingView);
 }
 
 async function startArchive() {
-  setActiveTab();
   bindControls();
-  if (state.route.view === 'all-time') await loadAllTime();
-  else await loadArchive();
+  await loadCurrentView();
 }
 
 if (typeof document !== 'undefined') void startArchive();

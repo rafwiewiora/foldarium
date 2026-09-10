@@ -122,6 +122,17 @@ a{color:inherit}
 .answer-line b{color:var(--ink);font-weight:650}
 .answer-section-label{margin-top:5px;padding-top:7px;border-top:1px solid var(--line);
   color:var(--faint);font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.target-method-table{width:min(360px,100%);margin-top:12px;border-collapse:collapse;
+  font:550 10px/1.3 var(--mono);font-variant-numeric:tabular-nums}
+.target-method-table th,.target-method-table td{padding:6px 10px;border-bottom:1px solid var(--line)}
+.target-method-table thead th{color:var(--faint);font-size:9px;text-align:center;text-transform:uppercase}
+.target-method-table thead th:first-child,.target-method-table tbody th{text-align:left}
+.target-method-table tbody th{color:var(--ink);font-weight:650}
+.target-method-table td{text-align:center}
+.method-outcome{font:750 14px/1 var(--mono)}
+.method-outcome.correct{color:var(--green)}
+.method-outcome.wrong{color:var(--red)}
+.method-outcome.missing{color:var(--faint)}
 .admin-panel{margin-top:24px;padding:18px;border:1px solid #dfc56e;background:var(--soft-amber)}
 .admin-panel h3{margin:0 0 12px;color:#6f5712;font-size:11px;letter-spacing:.07em;text-transform:uppercase}
 .admin-list{display:grid;gap:7px}
@@ -141,6 +152,35 @@ a{color:inherit}
 .ranking-row .participant{font-weight:680}
 .ranking-row .kind,.ranking-row .metric{font:500 11px/1.35 var(--mono)}
 .ranking-row .kind{color:var(--muted)}
+.method-definition{max-width:720px;margin:-8px 0 22px;color:var(--muted);font-size:13px;line-height:1.55}
+.method-ranking-row{display:grid;grid-template-columns:50px minmax(180px,1fr) repeat(3,minmax(110px,.45fr));
+  align-items:center;gap:18px;min-height:66px;padding:10px 8px;border-bottom:1px solid var(--line)}
+.method-ranking-row.header{min-height:40px;color:var(--faint);font:600 9px/1.2 var(--mono);
+  text-transform:uppercase}
+.method-ranking-row .rank{font:650 12px/1 var(--mono)}
+.method-ranking-row .participant{font-weight:680}
+.method-ranking-row .metric{font:500 11px/1.35 var(--mono);font-variant-numeric:tabular-nums}
+.metric-detail{margin-left:6px;color:var(--faint);font-size:9px}
+.method-trend{padding-top:18px;border-top:1px solid var(--ink)}
+.method-trend-head{display:flex;align-items:baseline;justify-content:space-between;gap:18px;margin-bottom:12px}
+.method-trend-head h2{margin:0;font-size:17px}
+.method-legend{display:flex;flex-wrap:wrap;gap:16px;color:var(--muted);font:500 10px/1.3 var(--mono)}
+.method-legend span{display:inline-flex;align-items:center;gap:6px}
+.method-swatch{display:inline-block;width:24px;border-top:2px solid var(--green)}
+.method-swatch.top1{border-color:var(--accent);border-top-style:dashed}
+.method-chart{display:block;width:100%;height:auto;min-height:260px}
+.method-chart-grid{stroke:var(--line);stroke-width:1}
+.method-chart-axis{fill:var(--faint);font:10px var(--mono)}
+.method-chart-oracle{fill:none;stroke:var(--green);stroke-width:2.5}
+.method-chart-top1{fill:none;stroke:var(--accent);stroke-width:2.5;stroke-dasharray:7 5}
+.method-point-oracle{fill:var(--green)}
+.method-point-top1{fill:var(--accent)}
+.method-data{margin-top:8px;color:var(--muted);font-size:12px}
+.method-data summary{width:max-content;cursor:pointer;font-weight:650}
+.method-data-table{margin-top:10px;border-top:1px solid var(--line)}
+.method-data-row{display:grid;grid-template-columns:minmax(120px,1fr) repeat(3,minmax(100px,.5fr));
+  gap:16px;padding:9px 6px;border-bottom:1px solid var(--line);font:500 10px/1.4 var(--mono)}
+.method-data-row.header{color:var(--faint);font-size:9px;font-weight:650;text-transform:uppercase}
 .provisional{display:inline-block;margin-left:7px;color:var(--amber);font:700 9px/1 var(--mono);text-transform:uppercase}
 .empty,.error{padding:28px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:13px}
 .empty.compact{padding:7px 0;border:0;font:500 11px/1.4 var(--mono)}
@@ -184,6 +224,11 @@ a{color:inherit}
   .similarity-meta{grid-template-columns:1fr}
   .ranking-table{overflow-x:auto}
   .ranking-row{min-width:640px}
+  .method-ranking-row{min-width:640px}
+  .method-trend-head{display:grid}
+  .method-chart{min-height:220px}
+  .method-data-table{overflow-x:auto}
+  .method-data-row{min-width:560px}
   .round-chooser{width:100%;max-width:none;max-height:82dvh;margin:auto 0 0;border-radius:14px 14px 0 0;
     border-bottom:0}
 }

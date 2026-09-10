@@ -7,6 +7,7 @@ import {
   archiveRoute,
   humanAnswerSummary,
   questionOutcome,
+  targetMethodOutcomes,
 } from '../weekly-retrospectives.js';
 import { quizEntryMode } from '../quiz-entry-mode.js';
 
@@ -20,6 +21,10 @@ test('archive routes resolve list, detail, and all-time without changing weekly 
   });
   assert.deepEqual(archiveRoute('/weekly/retrospectives', '?view=all-time'), {
     view: 'all-time',
+    roundId: null,
+  });
+  assert.deepEqual(archiveRoute('/weekly/retrospectives', '?view=cofolding'), {
+    view: 'cofolding',
     roundId: null,
   });
   assert.deepEqual(archiveRoute('/weekly/retrospectives/weekly-2026-08-20'), {
@@ -55,6 +60,27 @@ test('question results distinguish absent human answers from automated methods',
   assert.equal(humanAnswerSummary({ answered_count: 3, correct_count: 2 }), '2/3 correct');
 });
 
+test('target method outcomes distinguish oracle, top-1, and missing method data', () => {
+  const confidence = value => ({ metric: 'ligand_plddt', value });
+  assert.deepEqual(targetMethodOutcomes({
+    choices: [
+      { id: 'boltz-high', method: 'boltz2', confidence: confidence(90) },
+      { id: 'boltz-low', method: 'boltz2', confidence: confidence(70) },
+      { id: 'open-high', method: 'openfold3', confidence: confidence(88) },
+    ],
+  }, {
+    choices: [
+      { id: 'boltz-high', correct: false, accepted_correct: true },
+      { id: 'boltz-low', correct: true, accepted_correct: true },
+      { id: 'open-high', correct: true, accepted_correct: true },
+    ],
+  }, ['boltz2', 'openfold3', 'missing']), [
+    { method: 'boltz2', oracle_success: true, top1_success: false },
+    { method: 'openfold3', oracle_success: true, top1_success: true },
+    { method: 'missing', oracle_success: null, top1_success: null },
+  ]);
+});
+
 test('standalone archive stays Mol-star-free and renders API names with safe DOM text', async () => {
   const [html, ui, css, similarity] = await Promise.all([
     source('weekly-retrospectives.html'),
@@ -84,6 +110,15 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.match(ui, /rel = 'noopener noreferrer'/);
   assert.match(ui, /fetchWeeklyTrainingSimilarityReport\(\)\.catch\(\(\) => null\)/);
   assert.match(ui, /weekly-play-for-fun-results/);
+  assert.match(html, /id="cofolding-tab"[^>]*>Cofolding</);
+  assert.match(html, /data-cofolding-view="overall">Overall</);
+  assert.match(html, /data-cofolding-view="weekly">Weekly trends</);
+  assert.match(html, /Raw-pose method performance/);
+  assert.match(ui, /weekly_method_stats\.json/);
+  assert.match(ui, /methodTrend\(state\.methodData, state\.cofoldingMethod\)/);
+  assert.match(ui, /targetMethodOutcomes\(row\.blindItem, row\.revealItem, methods\)/);
+  assert.match(css, /\.target-method-table\{/);
+  assert.match(css, /\.method-chart-top1\{[^}]*stroke-dasharray/);
   assert.match(ui, /Blind-week players/);
   assert.match(ui, /Play for fun/);
   assert.match(ui, /`\/weekly\?retrospective_round=\$\{encodeURIComponent\(round\.round_id\)\}&play_for_fun=1`/);
