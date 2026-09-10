@@ -16,7 +16,7 @@ import json
 import os
 import re
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
@@ -25,11 +25,17 @@ from urllib.request import Request, urlopen
 
 from .contracts import canonical_json, stable_id
 from .staging import build_run_row
+from .weekly_lifecycle import (
+    NEXT_WEEKLY_RETROSPECTIVE_POLICY,
+    RETROSPECTIVE_RELEASE_METADATA_KEY,
+    delayed_retrospective_release,
+)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STORAGE_ERROR_BYTES = 16 * 1024
+IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 # Retrying a prediction is a metered state transition, not ordinary queue
 # maintenance. Keep the authorization deliberately narrower than the worker's
@@ -1000,6 +1006,499 @@ class SupabaseCoordinator(SupabasePublisher):
         row["metadata"] = _json_object(row.get("metadata"), "weekly round metadata")
         return row
 
+    def configure_delayed_weekly_retrospective(
+        self,
+        round_id: str,
+        *,
+        expected_closes_at: str,
+        safety_closes_at: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Extend one open production round for an explicit next-round handoff.
+
+        The compare-and-set filters make concurrent or stale operator calls fail
+        closed. The safety close is finite; successor activation shortens it to
+        the handoff timestamp when earlier and preserves it after a delayed
+        activation.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+
+        def timestamp(value: Any, field: str) -> datetime:
+            if not isinstance(value, str):
+                raise SupabasePublicationError(f"{field} must be an ISO timestamp")
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"{field} must be an ISO timestamp"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise SupabasePublicationError(f"{field} must include a timezone")
+            return parsed.astimezone(timezone.utc)
+
+        expected = timestamp(expected_closes_at, "expected_closes_at")
+        safety = timestamp(safety_closes_at, "safety_closes_at")
+        current = datetime.now(timezone.utc) if now is None else now
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise SupabasePublicationError("now must be a timezone-aware datetime")
+        current = current.astimezone(timezone.utc)
+        if not current < expected < safety <= expected + timedelta(days=7):
+            raise SupabasePublicationError(
+                "delayed retrospective requires a future close extension of at most seven days"
+            )
+
+        row = self.weekly_quiz_round(round_id)
+        metadata = _json_object(row.get("metadata"), "weekly round metadata")
+        existing = metadata.get(RETROSPECTIVE_RELEASE_METADATA_KEY)
+        if isinstance(existing, Mapping):
+            if (
+                existing.get("policy") == NEXT_WEEKLY_RETROSPECTIVE_POLICY
+                and timestamp(
+                    existing.get("original_closes_at"),
+                    "retrospective_release.original_closes_at",
+                )
+                == expected
+                and timestamp(row.get("closes_at"), "round closes_at") == safety
+            ):
+                return row
+            raise SupabasePublicationError(
+                "weekly round already has different retrospective release metadata"
+            )
+        if (
+            row.get("environment") != "production"
+            or row.get("status") != "open"
+            or row.get("reveal_manifest") is not None
+            or row.get("revealed_at") is not None
+            or timestamp(row.get("closes_at"), "round closes_at") != expected
+        ):
+            raise SupabasePublicationError(
+                "only the exact open unrevealed production round can be extended"
+            )
+
+        metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = {
+            "policy": NEXT_WEEKLY_RETROSPECTIVE_POLICY,
+            "original_closes_at": expected.isoformat(),
+            "safety_closes_at": safety.isoformat(),
+            "configured_at": current.isoformat(),
+        }
+        query = urlencode(
+            {
+                "round_id": f"eq.{round_id}",
+                "environment": "eq.production",
+                "status": "eq.open",
+                "closes_at": f"eq.{expected.isoformat()}",
+                "reveal_manifest": "is.null",
+                "revealed_at": "is.null",
+            }
+        )
+        body = canonical_json(
+            {
+                "closes_at": safety.isoformat(),
+                "metadata": metadata,
+            }
+        ).encode("utf-8")
+        response = self._request(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            body,
+            operation="delayed weekly retrospective configuration",
+            content_type="application/json",
+            extra_headers={"Prefer": "return=representation"},
+            method="PATCH",
+        )
+        try:
+            rows = json.loads((response or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "delayed weekly retrospective configuration returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], Mapping)
+            or rows[0].get("round_id") != round_id
+            or timestamp(rows[0].get("closes_at"), "updated closes_at") != safety
+        ):
+            raise SupabasePublicationError(
+                "delayed weekly retrospective configuration updated no exact round"
+            )
+        updated = deepcopy(dict(rows[0]))
+        updated["metadata"] = _json_object(
+            updated.get("metadata"), "updated weekly round metadata"
+        )
+        return updated
+
+    def extend_delayed_weekly_voting_window(
+        self,
+        round_id: str,
+        *,
+        expected_safety_closes_at: str,
+        new_safety_closes_at: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Extend one unrevealed delayed round without publishing its answers.
+
+        A previously prepared evaluation is retained only as superseded private
+        provenance. Removing it from the active descriptor forces a fresh
+        evaluation after the longer voting window closes.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+
+        def timestamp(value: Any, field: str) -> datetime:
+            if not isinstance(value, str):
+                raise SupabasePublicationError(f"{field} must be an ISO timestamp")
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"{field} must be an ISO timestamp"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise SupabasePublicationError(f"{field} must include a timezone")
+            return parsed.astimezone(timezone.utc)
+
+        expected = timestamp(
+            expected_safety_closes_at,
+            "expected_safety_closes_at",
+        )
+        extended = timestamp(new_safety_closes_at, "new_safety_closes_at")
+        current = datetime.now(timezone.utc) if now is None else now
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise SupabasePublicationError("now must be a timezone-aware datetime")
+        current = current.astimezone(timezone.utc)
+        if not expected < extended or not current < extended <= current + timedelta(days=7):
+            raise SupabasePublicationError(
+                "delayed voting extension must be future, increasing, and at most seven days"
+            )
+
+        row = self.weekly_quiz_round(round_id)
+        metadata = _json_object(row.get("metadata"), "weekly round metadata")
+        release = delayed_retrospective_release(row)
+        if release is None:
+            raise SupabasePublicationError(
+                "weekly round is not opted into delayed retrospective release"
+            )
+        if (
+            timestamp(release.get("safety_closes_at"), "safety_closes_at")
+            == extended
+            and timestamp(row.get("closes_at"), "round closes_at") == extended
+            and release.get("previous_safety_closes_at") == expected.isoformat()
+        ):
+            return row
+        if (
+            row.get("environment") != "production"
+            or row.get("status") != "open"
+            or row.get("reveal_manifest") is not None
+            or row.get("revealed_at") is not None
+            or release.get("activated_by_round_id") is not None
+            or timestamp(release.get("safety_closes_at"), "safety_closes_at")
+            != expected
+            or timestamp(row.get("closes_at"), "round closes_at") != expected
+        ):
+            raise SupabasePublicationError(
+                "only the exact unrevealed delayed production round can be extended"
+            )
+
+        prepared = release.pop("prepared_evaluation", None)
+        if isinstance(prepared, Mapping):
+            release["superseded_prepared_evaluation"] = {
+                **deepcopy(dict(prepared)),
+                "superseded_at": current.isoformat(),
+                "reason": "voting-window-extended",
+            }
+        release["previous_safety_closes_at"] = expected.isoformat()
+        release["safety_closes_at"] = extended.isoformat()
+        release["safety_extended_at"] = current.isoformat()
+        metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = release
+        query = urlencode(
+            {
+                "round_id": f"eq.{round_id}",
+                "environment": "eq.production",
+                "status": "eq.open",
+                "closes_at": f"eq.{expected.isoformat()}",
+                "reveal_manifest": "is.null",
+                "revealed_at": "is.null",
+            }
+        )
+        response = self._request(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            canonical_json(
+                {"closes_at": extended.isoformat(), "metadata": metadata}
+            ).encode("utf-8"),
+            operation="delayed weekly voting extension",
+            content_type="application/json",
+            extra_headers={"Prefer": "return=representation"},
+            method="PATCH",
+        )
+        try:
+            rows = json.loads((response or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "delayed weekly voting extension returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], Mapping)
+            or rows[0].get("round_id") != round_id
+            or timestamp(rows[0].get("closes_at"), "updated closes_at")
+            != extended
+        ):
+            raise SupabasePublicationError(
+                "delayed weekly voting extension updated no exact round"
+            )
+        updated = deepcopy(dict(rows[0]))
+        updated["metadata"] = _json_object(
+            updated.get("metadata"), "updated weekly round metadata"
+        )
+        return updated
+
+    def record_prepared_weekly_evaluation(
+        self,
+        round_id: str,
+        report: Mapping[str, Any],
+        *,
+        prepared_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record one private pre-close artifact for idempotent Wednesday prep."""
+
+        round_id = _safe_identifier(round_id, "round_id")
+        row = self.weekly_quiz_round(round_id)
+        release = delayed_retrospective_release(row)
+        if (
+            release is None
+            or row.get("environment") != "production"
+            or row.get("status") != "open"
+            or row.get("reveal_manifest") is not None
+            or row.get("revealed_at") is not None
+        ):
+            raise SupabasePublicationError(
+                "prepared evaluation requires an opted-in open production round"
+            )
+        artifact = _json_object(report.get("artifact"), "prepared evaluation artifact")
+        prepared = {
+            "evaluation_id": _safe_identifier(
+                report.get("evaluation_id"), "prepared evaluation_id"
+            ),
+            "blind_manifest_sha256": report.get("blind_manifest_sha256"),
+            "private_index_sha256": report.get("private_index_sha256"),
+            "reveal_manifest_sha256": report.get("reveal_manifest_sha256"),
+            "item_count": report.get("item_count"),
+            "choice_count": report.get("choice_count"),
+            "artifact": artifact,
+        }
+        for field in (
+            "blind_manifest_sha256",
+            "private_index_sha256",
+            "reveal_manifest_sha256",
+        ):
+            if (
+                not isinstance(prepared[field], str)
+                or not _SHA256.fullmatch(prepared[field])
+            ):
+                raise SupabasePublicationError(
+                    f"prepared evaluation {field} must be a lowercase SHA-256"
+                )
+        for field in ("item_count", "choice_count"):
+            value = prepared[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise SupabasePublicationError(
+                    f"prepared evaluation {field} must be a positive integer"
+                )
+        artifact_digest = artifact.get("sha256")
+        artifact_size = artifact.get("size_bytes")
+        artifact_uri = artifact.get("object_uri")
+        if (
+            not isinstance(artifact_digest, str)
+            or not _SHA256.fullmatch(artifact_digest)
+            or artifact.get("media_type") != "application/json"
+            or isinstance(artifact_size, bool)
+            or not isinstance(artifact_size, int)
+            or artifact_size < 1
+            or not isinstance(artifact_uri, str)
+            or artifact_uri
+            != (
+                f"supabase://{self.storage_bucket}/sha256/"
+                f"{artifact_digest[:2]}/{artifact_digest}"
+            )
+        ):
+            raise SupabasePublicationError("prepared evaluation artifact is invalid")
+        current = datetime.now(timezone.utc) if prepared_at is None else prepared_at
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise SupabasePublicationError("prepared_at must be timezone-aware")
+        prepared["prepared_at"] = current.astimezone(timezone.utc).isoformat()
+
+        existing = release.get("prepared_evaluation")
+        if existing is not None:
+            comparable = dict(prepared)
+            comparable["prepared_at"] = existing.get("prepared_at")
+            if existing == comparable:
+                return row
+            raise SupabasePublicationError(
+                "weekly round already has a different prepared evaluation"
+            )
+        metadata = _json_object(row.get("metadata"), "weekly round metadata")
+        release["prepared_evaluation"] = prepared
+        metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = release
+        query = urlencode(
+            {
+                "round_id": f"eq.{round_id}",
+                "environment": "eq.production",
+                "status": "eq.open",
+                "closes_at": f"eq.{row.get('closes_at')}",
+                "reveal_manifest": "is.null",
+                "revealed_at": "is.null",
+            }
+        )
+        response = self._request(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            canonical_json({"metadata": metadata}).encode("utf-8"),
+            operation="prepared weekly evaluation recording",
+            content_type="application/json",
+            extra_headers={"Prefer": "return=representation"},
+            method="PATCH",
+        )
+        try:
+            rows = json.loads((response or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "prepared weekly evaluation recording returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], Mapping)
+            or rows[0].get("round_id") != round_id
+        ):
+            raise SupabasePublicationError(
+                "prepared weekly evaluation recording updated no exact round"
+            )
+        updated = deepcopy(dict(rows[0]))
+        updated["metadata"] = _json_object(
+            updated.get("metadata"), "updated weekly round metadata"
+        )
+        return updated
+
+    def close_delayed_weekly_round_for_successor(
+        self,
+        round_id: str,
+        successor_round_id: str,
+        *,
+        activated_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Close an opted-in round only after its production successor exists.
+
+        A successor activated after the finite safety close preserves that
+        earlier close, so downtime cannot silently admit votes beyond the
+        configured voting window or strand an otherwise valid handoff.
+        """
+
+        round_id = _safe_identifier(round_id, "round_id")
+        successor_round_id = _safe_identifier(
+            successor_round_id, "successor_round_id"
+        )
+        if successor_round_id == round_id:
+            raise SupabasePublicationError("weekly successor must be a different round")
+        row = self.weekly_quiz_round(round_id)
+        successor = self.weekly_quiz_round(successor_round_id)
+        release = delayed_retrospective_release(row)
+        if release is None:
+            raise SupabasePublicationError(
+                "weekly round is not opted into next-round activation"
+            )
+        existing_successor = release.get("activated_by_round_id")
+        if existing_successor is not None:
+            if existing_successor == successor_round_id:
+                return row
+            raise SupabasePublicationError(
+                "weekly round was activated by a different successor"
+            )
+
+        current = datetime.now(timezone.utc) if activated_at is None else activated_at
+        if not isinstance(current, datetime) or current.tzinfo is None:
+            raise SupabasePublicationError("activated_at must be timezone-aware")
+        current = current.astimezone(timezone.utc)
+
+        def timestamp(value: Any, field: str) -> datetime:
+            if not isinstance(value, str):
+                raise SupabasePublicationError(f"{field} must be an ISO timestamp")
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise SupabasePublicationError(
+                    f"{field} must be an ISO timestamp"
+                ) from exc
+            if parsed.tzinfo is None:
+                raise SupabasePublicationError(f"{field} must include a timezone")
+            return parsed.astimezone(timezone.utc)
+
+        safety = timestamp(release.get("safety_closes_at"), "safety_closes_at")
+        successor_opens = timestamp(successor.get("opens_at"), "successor opens_at")
+        effective_close = min(current, safety)
+        if (
+            row.get("environment") != "production"
+            or row.get("status") != "open"
+            or row.get("reveal_manifest") is not None
+            or row.get("revealed_at") is not None
+            or timestamp(row.get("closes_at"), "round closes_at") != safety
+            or successor.get("environment") != "production"
+            or successor.get("status") != "open"
+            or successor.get("opened_at") is None
+            or successor_opens > current
+        ):
+            raise SupabasePublicationError(
+                "delayed weekly handoff requires an active exact production successor"
+            )
+
+        metadata = _json_object(row.get("metadata"), "weekly round metadata")
+        release["activated_by_round_id"] = successor_round_id
+        release["activated_at"] = current.isoformat()
+        release["effective_closes_at"] = effective_close.isoformat()
+        metadata[RETROSPECTIVE_RELEASE_METADATA_KEY] = release
+        query = urlencode(
+            {
+                "round_id": f"eq.{round_id}",
+                "environment": "eq.production",
+                "status": "eq.open",
+                "closes_at": f"eq.{safety.isoformat()}",
+                "reveal_manifest": "is.null",
+                "revealed_at": "is.null",
+            }
+        )
+        response = self._request(
+            f"/rest/v1/weekly_quiz_rounds?{query}",
+            canonical_json(
+                {"closes_at": effective_close.isoformat(), "metadata": metadata}
+            ).encode("utf-8"),
+            operation="delayed weekly retrospective handoff",
+            content_type="application/json",
+            extra_headers={"Prefer": "return=representation"},
+            method="PATCH",
+        )
+        try:
+            rows = json.loads((response or b"[]").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupabasePublicationError(
+                "delayed weekly retrospective handoff returned invalid JSON"
+            ) from exc
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or not isinstance(rows[0], Mapping)
+            or rows[0].get("round_id") != round_id
+            or timestamp(rows[0].get("closes_at"), "updated closes_at")
+            != effective_close
+        ):
+            raise SupabasePublicationError(
+                "delayed weekly retrospective handoff updated no exact round"
+            )
+        updated = deepcopy(dict(rows[0]))
+        updated["metadata"] = _json_object(
+            updated.get("metadata"), "updated weekly round metadata"
+        )
+        return updated
+
     def current_weekly_quiz_round(
         self, campaign_id: str | None = None, *, environment: str = "production"
     ) -> dict[str, Any]:
@@ -1234,13 +1733,25 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError("downloaded artifact does not match its object digest")
         return body
 
-    def store_bytes(self, content: bytes, media_type: str) -> dict[str, Any]:
+    def store_bytes(
+        self,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str | None = None,
+    ) -> dict[str, Any]:
         """Store bytes by digest without overwriting an existing object."""
 
         if not isinstance(content, bytes) or not content:
             raise SupabasePublicationError("stored content must be non-empty bytes")
         if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
             raise SupabasePublicationError("media_type must be a short string")
+        if cache_control is not None and (
+            not isinstance(cache_control, str)
+            or not cache_control
+            or len(cache_control) > 255
+        ):
+            raise SupabasePublicationError("cache_control must be a short string")
         digest = hashlib.sha256(content).hexdigest()
         object_path = self._object_path(digest)
         endpoint = (
@@ -1254,7 +1765,10 @@ class SupabaseCoordinator(SupabasePublisher):
             content,
             operation="source snapshot upload",
             content_type=media_type,
-            extra_headers={"x-upsert": "false"},
+            extra_headers={
+                "x-upsert": "false",
+                **({"Cache-Control": cache_control} if cache_control else {}),
+            },
             allow_conflict=True,
         )
         if response is None:
@@ -1264,6 +1778,61 @@ class SupabaseCoordinator(SupabasePublisher):
             "sha256": digest,
             "size_bytes": len(content),
             "media_type": media_type,
+        }
+
+    def replace_content_object(
+        self,
+        object_uri: str,
+        content: bytes,
+        media_type: str,
+        *,
+        cache_control: str,
+    ) -> dict[str, Any]:
+        """Replace exact content-addressed bytes only to update object metadata."""
+
+        if not isinstance(content, bytes) or not content:
+            raise SupabasePublicationError("stored content must be non-empty bytes")
+        if not isinstance(media_type, str) or not media_type or len(media_type) > 255:
+            raise SupabasePublicationError("media_type must be a short string")
+        if not isinstance(cache_control, str) or not cache_control or len(cache_control) > 255:
+            raise SupabasePublicationError("cache_control must be a short string")
+        parsed = urlsplit(object_uri)
+        object_path = parsed.path.lstrip("/")
+        match = re.fullmatch(r"sha256/([0-9a-f]{2})/([0-9a-f]{64})", object_path)
+        if (
+            parsed.scheme != "supabase"
+            or parsed.netloc != self.storage_bucket
+            or parsed.query
+            or parsed.fragment
+            or match is None
+            or match.group(1) != match.group(2)[:2]
+        ):
+            raise SupabasePublicationError("object_uri is not a valid object in this bucket")
+        digest = match.group(2)
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise SupabasePublicationError(
+                "replacement bytes do not match the content-addressed object digest"
+            )
+        endpoint = (
+            "/storage/v1/object/"
+            + quote(self.storage_bucket, safe="")
+            + "/"
+            + quote(object_path, safe="/")
+        )
+        self._request(
+            endpoint,
+            content,
+            operation="content metadata replacement",
+            content_type=media_type,
+            extra_headers={"Cache-Control": cache_control},
+            method="PUT",
+        )
+        return {
+            "object_uri": object_uri,
+            "sha256": digest,
+            "size_bytes": len(content),
+            "media_type": media_type,
+            "cache_control": cache_control,
         }
 
     def _storage_bucket_metadata(self, operation: str) -> dict[str, Any]:

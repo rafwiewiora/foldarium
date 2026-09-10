@@ -28,7 +28,13 @@ from .evaluation import (
     best_receptor_superposition,
     exact_complex_tm_superposition,
 )
+from .ligand_normalization import (
+    LIGAND_SMILES_HEAVY_ATOM_POLICY,
+    LigandNormalizationError,
+    remove_all_hydrogen_atoms,
+)
 from .quiz import build_blind_manifest, manifest_sha256
+from .supabase import IMMUTABLE_PUBLIC_CACHE_CONTROL
 from .weekly_selector import (
     WeeklySelectorError,
     assert_no_forbidden_content,
@@ -1471,10 +1477,15 @@ def stage_weekly_quiz(
         if any(row["task_payload"]["target"] != target for row in ordered_runs[1:]):
             raise WeeklyQuizAssemblyError(f"target {target_id} differs across method tasks")
         task_receptor_complex, expected_chain_sequences = _receptor_complex(target)
-        component_id, heavy_atom_count, ligand_chains, ligand_smiles = _selected_ligand(target)
+        (
+            component_id,
+            metadata_heavy_atom_count,
+            ligand_chains,
+            ligand_smiles,
+        ) = _selected_ligand(target)
         ligand_eligibility = _weekly_ligand_eligibility(
             component_id,
-            heavy_atom_count,
+            metadata_heavy_atom_count,
             ligand_smiles,
         )
         if not ligand_eligibility["passed"]:
@@ -1485,6 +1496,25 @@ def stage_weekly_quiz(
                 }
             )
             continue
+        source_ligand = Chem.MolFromSmiles(ligand_smiles)
+        if source_ligand is None:
+            raise WeeklyQuizAssemblyError(
+                f"target {target_id} selected ligand SMILES could not be parsed"
+            )
+        try:
+            heavy_ligand, explicit_hydrogen_count = remove_all_hydrogen_atoms(
+                source_ligand,
+                Chem,
+            )
+        except LigandNormalizationError as exc:
+            raise WeeklyQuizAssemblyError(
+                f"target {target_id} explicit-H removal changed the ligand heavy graph"
+            ) from exc
+        heavy_atom_count = heavy_ligand.GetNumAtoms()
+        if heavy_atom_count < 1:
+            raise WeeklyQuizAssemblyError(
+                f"target {target_id} selected ligand has no heavy atoms"
+            )
         for row in ordered_runs:
             expected_version = SUPPORTED_LEGACY_LIGAND_ORDER.get(row["method"])
             if row.get("method_version") != expected_version:
@@ -1516,7 +1546,17 @@ def stage_weekly_quiz(
                 raw_path.parent.mkdir(parents=True, exist_ok=True)
                 raw_path.write_bytes(content)
                 structure, model = _load_model(raw_path, gemmi)
-                ligand = _prediction_ligand(model, heavy_atom_count, ligand_chains)
+                try:
+                    ligand = _prediction_ligand(
+                        model,
+                        heavy_atom_count,
+                        ligand_chains,
+                    )
+                except WeeklyQuizAssemblyError as exc:
+                    raise WeeklyQuizAssemblyError(
+                        f"target {target_id} run {row['run_id']} sample "
+                        f"{sample['sample_id']}: {exc}"
+                    ) from exc
                 raw_choices.append(
                     {
                         "run_id": row["run_id"],
@@ -1738,6 +1778,18 @@ def stage_weekly_quiz(
             raise WeeklyQuizAssemblyError(
                 f"could not cluster target {target_id}: {exc}"
             ) from exc
+        mapping_audit["heavy_atom_normalization_policy"] = (
+            LIGAND_SMILES_HEAVY_ATOM_POLICY
+        )
+        mapping_audit["removed_explicit_hydrogen_count"] = (
+            explicit_hydrogen_count
+        )
+        mapping_audit["selected_ligand_metadata_heavy_atom_count"] = (
+            metadata_heavy_atom_count
+        )
+        mapping_audit["metadata_heavy_atom_count_matches_normalized"] = (
+            metadata_heavy_atom_count == heavy_atom_count
+        )
         identities = [
             {
                 "run_id": choice["run_id"],
@@ -2463,7 +2515,11 @@ def publish_selector_kit(
         raise WeeklyQuizAssemblyError(str(exc)) from exc
     if parsed["kit_sha256"] != kit_sha256:
         raise WeeklyQuizAssemblyError("selector kit ZIP manifest does not match descriptor")
-    stored = public_coordinator.store_bytes(zip_bytes, SELECTOR_KIT_ZIP_MEDIA_TYPE)
+    stored = public_coordinator.store_bytes(
+        zip_bytes,
+        SELECTOR_KIT_ZIP_MEDIA_TYPE,
+        cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+    )
     storage_path = _selector_storage_path(public_coordinator.storage_bucket, stored["sha256"])
     catalog_descriptor = {
         **dict(descriptor),
@@ -2752,7 +2808,11 @@ def _store_public_objects_concurrently(
     def store(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         content = request["content"]
         media_type = request["media_type"]
-        result = public_coordinator.store_bytes(content, media_type)
+        result = public_coordinator.store_bytes(
+            content,
+            media_type,
+            cache_control=IMMUTABLE_PUBLIC_CACHE_CONTROL,
+        )
         return request["key"], _validated_public_object(
             result,
             content=content,
