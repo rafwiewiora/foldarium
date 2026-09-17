@@ -14,7 +14,10 @@ deployment SDK.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import hashlib
+import tempfile
 import importlib
 import json
 import math
@@ -28,7 +31,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable, Iterator
 from typing import Any
+
+from foldarium_pipeline.weekly_intake_recovery import (
+    DEFAULT_INTAKE_REPLAY_MAX_AGE_DAYS,
+    validate_intake_replay_release_date,
+)
+from foldarium_pipeline.weekly_lifecycle_journal import (
+    DEFAULT_JOURNAL_ROOT,
+    LIFECYCLE_JOURNAL_VOLUME_NAME,
+    commit_journal_volume,
+    read_lifecycle_journal_events,
+    run_with_lifecycle_journal,
+)
 
 try:  # Modal is an optional deployment dependency, not a core dependency.
     import modal
@@ -283,6 +299,12 @@ WEEKLY_REGISTER_SELECTOR_KIT_ENV = "FOLDARIUM_WEEKLY_REGISTER_SELECTOR_KIT"
 REQUIRED_RETROSPECTIVE_MIGRATION = (
     "20260826190000_require_retrospective_vote_scope.sql"
 )
+WEEKLY_LIFECYCLE_JOURNAL_MOUNT = DEFAULT_JOURNAL_ROOT
+WEEKLY_INTAKE_REPLAY_MAX_AGE_DAYS = DEFAULT_INTAKE_REPLAY_MAX_AGE_DAYS
+_lifecycle_journal_hooks: dict[str, Callable[[], None] | None] = {
+    "commit": None,
+    "reload": None,
+}
 # Six hourly Wednesday ticks cover a delayed coordinate release without an
 # unbounded poller. Each tick receives two short infrastructure retries; a
 # scientifically incomplete item still aborts the whole atomic reveal.
@@ -674,6 +696,131 @@ def _lifecycle_deployment_report() -> dict[str, Any]:
             "cron": WEEKLY_RETROSPECTIVE_PUBLICATION_CRON_UTC,
         },
         "required_migrations_before_publication": [REQUIRED_RETROSPECTIVE_MIGRATION],
+        "lifecycle_journal": {
+            "volume": LIFECYCLE_JOURNAL_VOLUME_NAME,
+            "mount": WEEKLY_LIFECYCLE_JOURNAL_MOUNT,
+        },
+    }
+
+
+def _lifecycle_journal_commit() -> None:
+    commit_journal_volume(_lifecycle_journal_hooks.get("commit"))
+
+
+def _lifecycle_journal_reload() -> None:
+    reload = _lifecycle_journal_hooks.get("reload")
+    if reload is not None:
+        reload()
+
+
+def _lifecycle_journal_root() -> Path:
+    """Resolve the active journal directory, falling back locally when unwritable."""
+
+    configured = Path(
+        os.environ.get("FOLDARIUM_LIFECYCLE_JOURNAL_MOUNT", WEEKLY_LIFECYCLE_JOURNAL_MOUNT)
+    )
+    try:
+        configured.mkdir(parents=True, exist_ok=True)
+        probe = configured / ".foldarium_journal_write_probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return configured
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "foldarium-lifecycle-journal-local"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
+def _weekly_lifecycle_journal(operation: str):
+    """Wrap one lifecycle control function with durable started/succeeded/failed records."""
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            root = _lifecycle_journal_root()
+            return run_with_lifecycle_journal(
+                operation,
+                root,
+                lambda: fn(*args, **kwargs),
+                args=args,
+                kwargs=kwargs,
+                commit=_lifecycle_journal_commit,
+                on_journal_error=lambda message: print(message, flush=True),
+            )
+
+        return wrapper
+
+    return decorator
+
+
+@contextlib.contextmanager
+def _temporary_environ(overrides: Mapping[str, str | None]) -> Iterator[None]:
+    previous: dict[str, str | None] = {}
+    for key, value in overrides.items():
+        previous[key] = os.environ.get(key)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _invoke_weekly_hook_pipeline(
+    *,
+    submit: bool | None = None,
+    spawn_task: Callable[[str | Mapping[str, Any]], str] | None = None,
+) -> dict[str, Any]:
+    """Run the configured weekly hook and optionally submit registered GPU tasks."""
+
+    reference = os.environ.get(WEEKLY_HOOK_ENV)
+    if not reference:
+        return {
+            "status": "disabled",
+            "reason": f"{WEEKLY_HOOK_ENV} is not configured",
+        }
+    produced = _load_weekly_hook(reference)()
+    if isinstance(produced, Mapping):
+        raw_tasks = produced.get("tasks")
+        if not isinstance(raw_tasks, list):
+            raise TypeError("weekly hook mapping must contain a tasks list")
+        tasks = raw_tasks
+        report = {key: value for key, value in produced.items() if key != "tasks"}
+    else:
+        tasks = list(produced)
+        report = {}
+    if not tasks:
+        return {"status": report.pop("status", "no-work"), "count": 0, **report}
+    should_submit = (
+        os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") == "1"
+        if submit is None
+        else submit
+    )
+    if not should_submit:
+        return {
+            "status": "planned-not-submitted",
+            "count": len(tasks),
+            **report,
+        }
+    registration = report.get("registration")
+    if not isinstance(registration, Mapping) or registration.get("status") != "registered":
+        raise RuntimeError(
+            "weekly GPU submission requires an atomically registered Supabase plan"
+        )
+    if spawn_task is None:
+        raise RuntimeError("weekly GPU submission requires a Modal task spawner")
+    call_ids = [spawn_task(task) for task in tasks]
+    return {
+        "status": "submitted",
+        "count": len(call_ids),
+        "call_ids": call_ids,
+        **report,
     }
 
 
@@ -1139,6 +1286,16 @@ if modal is not None:
     boltz_cache = modal.Volume.from_name(
         "foldarium-boltz2-cache", create_if_missing=True
     )
+    weekly_lifecycle_journal_volume = modal.Volume.from_name(
+        LIFECYCLE_JOURNAL_VOLUME_NAME,
+        create_if_missing=True,
+    )
+    _lifecycle_journal_hooks["commit"] = weekly_lifecycle_journal_volume.commit
+    reload_hook = getattr(weekly_lifecycle_journal_volume, "reload", None)
+    _lifecycle_journal_hooks["reload"] = reload_hook if callable(reload_hook) else None
+    LIFECYCLE_JOURNAL_VOLUMES = {
+        WEEKLY_LIFECYCLE_JOURNAL_MOUNT: weekly_lifecycle_journal_volume,
+    }
 
     control_plane_secret = modal.Secret.from_name(
         "foldarium-control-plane",
@@ -2429,7 +2586,9 @@ if modal is not None:
         secrets=[control_plane_secret],
         timeout=15 * 60,
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("weekly_production_promotion_tick")
     def weekly_production_promotion_tick(
         release_date: str | None = None,
         open_round_override: bool | None = None,
@@ -2619,7 +2778,9 @@ if modal is not None:
             max_delay=60.0,
         ),
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("weekly_retrospective_tick")
     def weekly_retrospective_tick(
         round_id: str | None = None,
     ) -> dict[str, Any]:
@@ -2715,7 +2876,9 @@ if modal is not None:
             max_delay=60.0,
         ),
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("weekly_retrospective_publication_tick")
     def weekly_retrospective_publication_tick(
         round_id: str | None = None,
     ) -> dict[str, Any]:
@@ -2763,7 +2926,9 @@ if modal is not None:
             max_delay=60.0,
         ),
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("delayed_weekly_retrospective_handoff")
     def delayed_weekly_retrospective_handoff(
         previous_round_id: str,
         successor_round_id: str,
@@ -2888,7 +3053,9 @@ if modal is not None:
             max_delay=60.0,
         ),
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("wednesday_reveal_tick")
     def wednesday_reveal_tick(
         round_id: str | None = None,
         publish: bool | None = None,
@@ -3028,7 +3195,9 @@ if modal is not None:
         secrets=[control_plane_secret],
         timeout=30 * 60,
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("weekly_tick")
     def weekly_tick() -> dict[str, Any]:
         """Deployment-owned cron seam for a provider-neutral campaign producer.
 
@@ -3037,53 +3206,120 @@ if modal is not None:
         idempotent planning. Leaving the hook unset makes the cron a safe no-op.
         """
 
-        reference = os.environ.get(WEEKLY_HOOK_ENV)
-        if not reference:
-            outcome = {
-                "status": "disabled",
-                "reason": f"{WEEKLY_HOOK_ENV} is not configured",
-            }
-            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
-            return outcome
-        produced = _load_weekly_hook(reference)()
-        if isinstance(produced, Mapping):
-            raw_tasks = produced.get("tasks")
-            if not isinstance(raw_tasks, list):
-                raise TypeError("weekly hook mapping must contain a tasks list")
-            tasks = raw_tasks
-            report = {key: value for key, value in produced.items() if key != "tasks"}
-        else:
-            tasks = list(produced)
-            report = {}
-        if not tasks:
-            outcome = {"status": report.pop("status", "no-work"), "count": 0, **report}
-            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
-            return outcome
-        # Scheduling, registration, and GPU submission are deliberately three
-        # independent switches. A newly deployed cron can prove tomorrow's
-        # intake and cost plan without spending a single GPU second.
-        if os.environ.get("FOLDARIUM_WEEKLY_SUBMIT") != "1":
-            outcome = {
-                "status": "planned-not-submitted",
-                "count": len(tasks),
-                **report,
-            }
-            print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
-            return outcome
-        registration = report.get("registration")
-        if not isinstance(registration, Mapping) or registration.get("status") != "registered":
-            raise RuntimeError(
-                "weekly GPU submission requires an atomically registered Supabase plan"
-            )
-        call_ids = [_spawn_task(task) for task in tasks]
-        outcome = {
-            "status": "submitted",
-            "count": len(call_ids),
-            "call_ids": call_ids,
-            **report,
-        }
+        outcome = _invoke_weekly_hook_pipeline(spawn_task=_spawn_task)
         print("foldarium.weekly " + json.dumps(outcome, sort_keys=True), flush=True)
         return outcome
+
+    @app.function(
+        image=control_image,
+        cpu=0.5,
+        memory=512,
+        secrets=[control_plane_secret],
+        timeout=30 * 60,
+        max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
+    )
+    @_weekly_lifecycle_journal("weekly_intake_replay")
+    def weekly_intake_replay(release_date: str, apply: bool = False) -> dict[str, Any]:
+        """Operator recovery: replay one exact Saturday intake without opening Preview."""
+
+        if not isinstance(apply, bool):
+            raise TypeError("apply must be a boolean")
+        validated = validate_intake_replay_release_date(
+            release_date,
+            max_age_days=WEEKLY_INTAKE_REPLAY_MAX_AGE_DAYS,
+        )
+        if not os.environ.get(WEEKLY_HOOK_ENV):
+            raise RuntimeError(f"{WEEKLY_HOOK_ENV} is not configured")
+        campaign_id = f"wwpdb-{validated}"
+        overrides = {
+            "FOLDARIUM_RELEASE_DATE": validated,
+            "FOLDARIUM_WEEKLY_REGISTER": "1" if apply else "0",
+            "FOLDARIUM_WEEKLY_SUBMIT": "1" if apply else "0",
+        }
+        with _temporary_environ(overrides):
+            outcome = _invoke_weekly_hook_pipeline(
+                submit=apply,
+                spawn_task=_spawn_task if apply else None,
+            )
+        planned_task_count = int(outcome.get("count", 0))
+        response = {
+            **outcome,
+            "mode": "apply" if apply else "dry-run",
+            "release_date": validated,
+            "campaign_id": campaign_id,
+            "planned_task_count": planned_task_count,
+            "apply": apply,
+            "mutation_enabled": apply,
+            "preview_or_production_round_created": False,
+        }
+        if outcome.get("status") == "already-registered":
+            response["idempotent"] = True
+            response["note"] = (
+                "campaign already registered; no GPU tasks respawned by the hook"
+            )
+        print(
+            "foldarium.weekly_intake_replay "
+            + json.dumps(
+                {
+                    key: response[key]
+                    for key in (
+                        "mode",
+                        "release_date",
+                        "campaign_id",
+                        "status",
+                        "planned_task_count",
+                        "apply",
+                        "idempotent",
+                    )
+                    if key in response
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return response
+
+    @app.function(
+        image=control_image,
+        cpu=0.25,
+        memory=256,
+        timeout=2 * 60,
+        max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
+    )
+    def weekly_lifecycle_journal_tail(
+        operation: str | None = None,
+        correlation_id: str | None = None,
+        phase: str | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Read-only tail of durable Weekly lifecycle journal events."""
+
+        if phase is not None and phase not in {"started", "succeeded", "failed"}:
+            raise ValueError("phase must be started, succeeded, failed, or null")
+        events = read_lifecycle_journal_events(
+            _lifecycle_journal_root(),
+            operation=operation,
+            correlation_id=correlation_id,
+            phase=phase,  # type: ignore[arg-type]
+            since=since,
+            limit=limit,
+            reload=_lifecycle_journal_reload,
+        )
+        report = {
+            "mount": WEEKLY_LIFECYCLE_JOURNAL_MOUNT,
+            "volume": LIFECYCLE_JOURNAL_VOLUME_NAME,
+            "count": len(events),
+            "events": events,
+        }
+        print(
+            "foldarium.lifecycle_journal_tail "
+            + json.dumps({"count": report["count"]}, sort_keys=True),
+            flush=True,
+        )
+        return report
 
     @app.function(
         image=control_image,
@@ -3097,7 +3333,9 @@ if modal is not None:
         secrets=[control_plane_secret],
         timeout=75 * 60,
         max_containers=1,
+        volumes=LIFECYCLE_JOURNAL_VOLUMES,
     )
+    @_weekly_lifecycle_journal("nextweekly_tick")
     def nextweekly_tick(release_date: str | None = None) -> dict[str, Any]:
         """Advance one Saturday campaign into an immutable Preview round.
 

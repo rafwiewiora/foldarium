@@ -338,6 +338,49 @@ Use the read-only preflight before activation:
 modal run --env main pipeline/deploy/modal_app.py::weekly_lifecycle_preflight
 ```
 
+### Durable lifecycle journal (Modal Volume)
+
+Scheduled Weekly lifecycle control functions append one JSON file per
+`started` / `succeeded` / `failed` event to the Modal Volume
+`foldarium-weekly-lifecycle-logs`. This journal is independent of Supabase so
+operators can reconstruct recent control-plane activity during database outages.
+Arguments and outcomes are redacted and size-bounded; lifecycle exceptions are
+never masked when journal writes fail.
+
+Tail recent events (read-only):
+
+```bash
+modal run --env main pipeline/deploy/modal_app.py::weekly_lifecycle_journal_tail \
+  --limit 30
+
+modal run --env main pipeline/deploy/modal_app.py::weekly_lifecycle_journal_tail \
+  --operation weekly_tick --phase failed --limit 20
+```
+
+### Exact-date intake replay (dry-run first)
+
+Use `weekly_intake_replay` to recover one historical Saturday intake. Dry-run
+forces registration and GPU submission off and reports the exact planned task
+count with no writes. Apply requires an explicit `--apply` flag, registers the
+exact plan through the deployed hook, waits for a registration receipt, then
+spawns GPU tasks. It never creates a Preview or production quiz round; Preview
+assembly remains `nextweekly_tick(release_date)` and production promotion stays
+`weekly_production_promotion_tick`.
+
+```bash
+# Plan only — no Supabase registration or GPU spawn
+modal run --env main pipeline/deploy/modal_app.py::weekly_intake_replay \
+  --release-date 2026-09-05
+
+# Register atomically and submit GPU tasks for that exact Saturday
+modal run --env main pipeline/deploy/modal_app.py::weekly_intake_replay \
+  --release-date 2026-09-05 --apply
+```
+
+Repeated apply calls on an already-registered campaign return
+`already-registered` with `idempotent: true` and do not respawn tasks from the
+hook.
+
 Keep the laptop's default Modal profile on `foldariumtest`. The separately
 configured `molspace-production` profile is for Brian's final deployment only;
 always pass/verify a profile explicitly before any production command.
