@@ -190,6 +190,8 @@ def _validate_item_results_consistent(results: list[ProviderResult]) -> tuple[st
             raise WeeklyLlmRunnerError(f"item {index} observed model mismatch")
         if result.provider_config != reference.provider_config:
             raise WeeklyLlmRunnerError(f"item {index} provider config mismatch")
+        if result.tools_manifest != reference.tools_manifest:
+            raise WeeklyLlmRunnerError(f"item {index} tools manifest mismatch")
     return reference.observed_ids
 
 
@@ -403,7 +405,7 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
                 "prompt_profile_id": selector_prompt_profile()["prompt_profile_id"],
                 "prompt_sha256": SELECTOR_PROMPT_SHA256,
                 "input_manifest_sha256": input_manifest_sha256,
-                "tools_sha256": tools_sha256(),
+                "tools_sha256": tools_sha256(first.tools_manifest),
                 "config_sha256": config_sha256,
                 "runtime_sha256": runtime_sha256,
             },

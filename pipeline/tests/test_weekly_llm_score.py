@@ -12,6 +12,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Sequence
 from unittest import mock
 
 from foldarium_pipeline.contracts import SCHEMA_VERSION
@@ -47,7 +48,7 @@ from foldarium_pipeline.weekly_llm_evidence import (
     render_shared_frame_panels,
 )
 from foldarium_pipeline.weekly_llm_kit import WeeklyLlmKitError, build_item_workspace, extract_verified_kit
-from foldarium_pipeline.weekly_llm_provenance import build_output_manifest, digest_manifest
+from foldarium_pipeline.weekly_llm_provenance import build_output_manifest, digest_manifest, tools_sha256
 from foldarium_pipeline.weekly_llm_providers.claude import (
     ClaudeParseResult,
     ClaudeProvider,
@@ -59,6 +60,17 @@ from foldarium_pipeline.weekly_llm_providers.cursor import (
     _extract_billed_cost,
     build_cursor_user_message,
     serialize_sdk_value,
+)
+from foldarium_pipeline.weekly_llm_providers.cursor_cli import (
+    CURSOR_CLI_MODEL_ID,
+    CursorCliProviderError,
+    build_cursor_cli_command,
+    cursor_cli_tools_manifest,
+    model_display_matches_sol_high,
+    parse_cursor_cli_models_text,
+    parse_cursor_cli_stream,
+    preflight_cursor_cli_auth,
+    resolve_verified_contact_sheet_paths,
 )
 from foldarium_pipeline.weekly_llm_providers.fake import FakeProvider
 from foldarium_pipeline.weekly_llm_response import WeeklyLlmResponseError, validate_model_response
@@ -609,6 +621,633 @@ class WeeklyLlmCursorSerializationTests(unittest.TestCase):
         message = build_cursor_user_message(item_prompt_text="Evaluate item.")
         self.assertIn("ITEM REQUEST:", message)
         self.assertIn("Evaluate item.", message)
+
+
+def _sample_cursor_cli_response(*, item_id: str = "target-1") -> str:
+    return json.dumps(
+        {
+            "schema_version": "foldarium.selector-model-response/v1",
+            "item_id": item_id,
+            "clustered": {"selection_kind": "none", "confidence": 0.5, "evidence": "x"},
+            "unclustered": {"selection_kind": "none", "confidence": 0.5, "evidence": "x"},
+        }
+    )
+
+
+def _make_contact_sheet(*, root: Path, item_id: str, choice_id: str) -> str:
+    sheet_dir = root / "evidence" / item_id / choice_id
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    sheet_path = sheet_dir / "contact_sheet.png"
+    sheet_path.write_bytes(b"\x89PNG\r\n\x1a\n\x00")
+    return str(sheet_path.resolve())
+
+
+def _read_tool_call_lines(
+    path: str,
+    *,
+    started_at_ms: int | str = 1_700_000_000_000,
+    completed_at_ms: int | str | None = None,
+    success_body: dict[str, Any] | None = None,
+) -> list[str]:
+    tool_call_id = f"read-{sha256_hex(path)[:16]}"
+    if completed_at_ms is None:
+        if isinstance(started_at_ms, str):
+            completed_at_ms = str(int(started_at_ms) + 250)
+        else:
+            completed_at_ms = started_at_ms + 250
+    if success_body is None:
+        success_body = {"path": path}
+    started = {
+        "type": "tool_call",
+        "subtype": "started",
+        "session_id": "session-1",
+        "tool_call": {
+            "readToolCall": {"args": {"path": path}},
+            "hookAdditionalContexts": [],
+            "toolCallId": tool_call_id,
+            "startedAtMs": started_at_ms,
+        },
+    }
+    completed = {
+        "type": "tool_call",
+        "subtype": "completed",
+        "session_id": "session-1",
+        "tool_call": {
+            "readToolCall": {
+                "args": {"path": path},
+                "result": {"success": success_body},
+            },
+            "hookAdditionalContexts": [],
+            "toolCallId": tool_call_id,
+            "startedAtMs": started_at_ms,
+            "completedAtMs": completed_at_ms,
+        },
+    }
+    return [json.dumps(started), json.dumps(completed)]
+
+
+def _sample_cursor_cli_stream(
+    *,
+    workspace_dir: str,
+    image_paths: Sequence[str] | None = None,
+    result_json: str | None = None,
+    extra_lines: Sequence[str] | None = None,
+    include_thinking: bool = False,
+    include_assistant_shell_word: bool = False,
+) -> str:
+    init = {
+        "type": "system",
+        "subtype": "init",
+        "cwd": str(Path(workspace_dir).resolve()),
+        "session_id": "session-1",
+        "model": "GPT-5.6 Sol 1M High",
+    }
+    result = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "duration_ms": 100,
+        "result": result_json or _sample_cursor_cli_response(),
+        "session_id": "session-1",
+        "request_id": "req-1",
+        "usage": {"inputTokens": 10, "outputTokens": 5},
+    }
+    lines = [json.dumps(init)]
+    if include_thinking:
+        lines.extend(
+            [
+                json.dumps(
+                    {
+                        "type": "thinking",
+                        "subtype": "delta",
+                        "text": "internal",
+                        "session_id": "session-1",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "thinking",
+                        "subtype": "completed",
+                        "session_id": "session-1",
+                    }
+                ),
+            ]
+        )
+    if include_assistant_shell_word:
+        lines.append(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "session_id": "session-1",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The pose shell geometry near the pocket looks strained.",
+                            }
+                        ],
+                    },
+                }
+            )
+        )
+    if image_paths:
+        for path in image_paths:
+            lines.extend(_read_tool_call_lines(path))
+    if extra_lines:
+        lines.extend(extra_lines)
+    lines.append(json.dumps(result))
+    return "\n".join(lines) + "\n"
+
+
+class WeeklyLlmCursorCliTests(unittest.TestCase):
+    def test_parse_cursor_cli_models_text(self) -> None:
+        models = parse_cursor_cli_models_text(
+            "Available models\n\ngpt-5.6-sol-high - GPT-5.6 Sol 1M High\nauto - Auto\n"
+        )
+        self.assertEqual(models[0], "gpt-5.6-sol-high")
+
+    def test_build_cursor_cli_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet_a = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            sheet_b = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-b")
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.shutil.which",
+                return_value="/usr/local/bin/cursor-agent",
+            ):
+                command = build_cursor_cli_command(
+                    prompt_text="Evaluate item.",
+                    workspace_dir=temporary,
+                    image_paths=[sheet_b, sheet_a],
+                )
+        self.assertEqual(command[0], "/usr/local/bin/cursor-agent")
+        self.assertIn("-p", command)
+        self.assertEqual(command[command.index("--output-format") + 1], "stream-json")
+        self.assertEqual(command[command.index("--mode") + 1], "ask")
+        self.assertEqual(command[command.index("--model") + 1], CURSOR_CLI_MODEL_ID)
+        add_dirs = command[command.index("--add-dir") + 1 :: 2]
+        self.assertEqual(add_dirs, sorted({str(Path(sheet_a).parent), str(Path(sheet_b).parent)}))
+        prompt = command[-1]
+        policy_index = prompt.index("CONTACT SHEET TOOL POLICY")
+        images_index = prompt.index("CONTACT SHEET IMAGES")
+        self.assertLess(policy_index, images_index)
+        self.assertIn("Do not Glob", prompt)
+        self.assertIn("candidate evidence JSON", prompt)
+        self.assertIn("CONTACT SHEET IMAGES", prompt)
+        self.assertIn(f"@{sheet_a}", prompt)
+        self.assertIn(f"@{sheet_b}", prompt)
+
+    def test_parse_success_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            parsed = parse_cursor_cli_stream(
+                _sample_cursor_cli_stream(workspace_dir=temporary, image_paths=[sheet]),
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+        self.assertEqual(parsed.observed_ids, ("GPT-5.6 Sol 1M High",))
+        self.assertEqual(parsed.request_id, "req-1")
+        self.assertEqual(parsed.applied_effort, "high")
+        self.assertEqual(parsed.usage.input_tokens, 10)
+
+    def test_requires_successful_reads_for_all_sheets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet_a = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            sheet_b = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-b")
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(workspace_dir=temporary, image_paths=[sheet_a]),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet_a, sheet_b],
+                )
+
+    def test_accepts_allowlisted_reads_and_thinking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            parsed = parse_cursor_cli_stream(
+                _sample_cursor_cli_stream(
+                    workspace_dir=temporary,
+                    image_paths=[sheet],
+                    include_thinking=True,
+                ),
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+        self.assertEqual(parsed.observed_model_label, "GPT-5.6 Sol 1M High")
+        self.assertEqual(parsed.discarded_thinking_event_count, 2)
+        raw_serialized = json.dumps([dict(event) for event in parsed.raw_events])
+        self.assertNotIn("internal", raw_serialized)
+
+    def test_discards_secret_thinking_text_from_raw_events(self) -> None:
+        secret = "SECRET_THINKING_DO_NOT_PERSIST_xyz"
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            lines = [
+                json.dumps(
+                    {
+                        "type": "system",
+                        "subtype": "init",
+                        "cwd": str(Path(temporary).resolve()),
+                        "session_id": "session-1",
+                        "model": "GPT-5.6 Sol 1M High",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "thinking",
+                        "subtype": "delta",
+                        "text": secret,
+                        "session_id": "session-1",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "thinking",
+                        "subtype": "completed",
+                        "session_id": "session-1",
+                    }
+                ),
+                *_read_tool_call_lines(sheet),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": False,
+                        "duration_ms": 100,
+                        "result": _sample_cursor_cli_response(),
+                        "session_id": "session-1",
+                        "request_id": "req-1",
+                        "usage": {"inputTokens": 10, "outputTokens": 5},
+                    }
+                ),
+            ]
+            parsed = parse_cursor_cli_stream(
+                "\n".join(lines) + "\n",
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+        self.assertEqual(parsed.response["item_id"], "target-1")
+        self.assertEqual(parsed.discarded_thinking_event_count, 2)
+        raw_serialized = json.dumps([dict(event) for event in parsed.raw_events])
+        self.assertNotIn(secret, raw_serialized)
+
+    def test_allows_assistant_text_mentioning_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            parsed = parse_cursor_cli_stream(
+                _sample_cursor_cli_stream(
+                    workspace_dir=temporary,
+                    image_paths=[sheet],
+                    include_assistant_shell_word=True,
+                ),
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+        self.assertEqual(parsed.observed_ids[0], "GPT-5.6 Sol 1M High")
+
+    def test_rejects_realistic_non_read_tool_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            tool_call_id = "read-test"
+            bad_started = json.dumps(
+                {
+                    "type": "tool_call",
+                    "subtype": "started",
+                    "tool_call": {
+                        "readToolCall": {"args": {"path": sheet}},
+                        "hookAdditionalContexts": [{"kind": "extra"}],
+                        "toolCallId": tool_call_id,
+                        "startedAtMs": 100,
+                    },
+                }
+            )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=[bad_started],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+    def test_rejects_explicit_shell_event_type(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=[json.dumps({"type": "shell", "subtype": "started"})],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+    def test_rejects_unapproved_read_and_other_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            other = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-b")
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=_read_tool_call_lines(other),
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=[
+                            json.dumps(
+                                {
+                                    "type": "tool_call",
+                                    "subtype": "started",
+                                    "tool_call": {
+                                        "shellToolCall": {"args": {"command": "ls"}},
+                                        "hookAdditionalContexts": [],
+                                        "toolCallId": "shell-1",
+                                        "startedAtMs": 1,
+                                    },
+                                }
+                            )
+                        ],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        extra_lines=[
+                            json.dumps(
+                                {
+                                    "type": "tool_call",
+                                    "subtype": "started",
+                                    "call_id": "call-1",
+                                }
+                            )
+                        ],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(workspace_dir=temporary),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+            stream = _sample_cursor_cli_stream(
+                workspace_dir=temporary,
+                image_paths=[sheet],
+            ).replace(
+                str(Path(temporary).resolve()),
+                "/tmp/other-workspace",
+            )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(stream, workspace_dir=temporary, allowed_image_paths=[sheet])
+            bad_init_stream = _sample_cursor_cli_stream(
+                workspace_dir=temporary,
+                image_paths=[sheet],
+            ).replace(
+                "GPT-5.6 Sol 1M High",
+                "GPT-5.6 Sol 1M Extra High",
+            )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    bad_init_stream,
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+    def test_accepts_string_millisecond_timestamps(self) -> None:
+        started = "1789671354526"
+        completed = "1789671354776"
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            lines = [
+                json.dumps(
+                    {
+                        "type": "system",
+                        "subtype": "init",
+                        "cwd": str(Path(temporary).resolve()),
+                        "session_id": "session-1",
+                        "model": "GPT-5.6 Sol 1M High",
+                    }
+                ),
+                *_read_tool_call_lines(
+                    sheet,
+                    started_at_ms=started,
+                    completed_at_ms=completed,
+                ),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": False,
+                        "duration_ms": 100,
+                        "result": _sample_cursor_cli_response(),
+                        "session_id": "session-1",
+                        "request_id": "req-1",
+                        "usage": {"inputTokens": 10, "outputTokens": 5},
+                    }
+                ),
+            ]
+            parsed = parse_cursor_cli_stream(
+                "\n".join(lines) + "\n",
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+            completed_event = next(
+                event
+                for event in parsed.raw_events
+                if event.get("type") == "tool_call" and event.get("subtype") == "completed"
+            )
+            tool_call = completed_event["tool_call"]
+            self.assertEqual(tool_call["startedAtMs"], started)
+            self.assertEqual(tool_call["completedAtMs"], completed)
+            self.assertIsInstance(tool_call["startedAtMs"], str)
+
+    def test_accepts_pathless_nonempty_read_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            lines = [
+                json.dumps(
+                    {
+                        "type": "system",
+                        "subtype": "init",
+                        "cwd": str(Path(temporary).resolve()),
+                        "session_id": "session-1",
+                        "model": "GPT-5.6 Sol 1M High",
+                    }
+                ),
+                *_read_tool_call_lines(
+                    sheet,
+                    success_body={"mimeType": "image/png", "bytes": 128},
+                ),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "is_error": False,
+                        "duration_ms": 100,
+                        "result": _sample_cursor_cli_response(),
+                        "session_id": "session-1",
+                        "request_id": "req-1",
+                        "usage": {"inputTokens": 10, "outputTokens": 5},
+                    }
+                ),
+            ]
+            parsed = parse_cursor_cli_stream(
+                "\n".join(lines) + "\n",
+                workspace_dir=temporary,
+                allowed_image_paths=[sheet],
+            )
+        self.assertEqual(parsed.response["item_id"], "target-1")
+
+    def test_rejects_read_success_wrong_or_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            other = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-b")
+            for success_body in ({}, {"path": other}, {"error": "failed"}):
+                lines = [
+                    json.dumps(
+                        {
+                            "type": "system",
+                            "subtype": "init",
+                            "cwd": str(Path(temporary).resolve()),
+                            "session_id": "session-1",
+                            "model": "GPT-5.6 Sol 1M High",
+                        }
+                    ),
+                    *_read_tool_call_lines(sheet, success_body=success_body),
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "is_error": False,
+                            "duration_ms": 100,
+                            "result": _sample_cursor_cli_response(),
+                            "session_id": "session-1",
+                            "request_id": "req-1",
+                            "usage": {"inputTokens": 10, "outputTokens": 5},
+                        }
+                    ),
+                ]
+                with self.assertRaises(CursorCliProviderError):
+                    parse_cursor_cli_stream(
+                        "\n".join(lines) + "\n",
+                        workspace_dir=temporary,
+                        allowed_image_paths=[sheet],
+                    )
+
+    def test_rejects_glob_tool_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            glob_started = json.dumps(
+                {
+                    "type": "tool_call",
+                    "subtype": "started",
+                    "tool_call": {
+                        "globToolCall": {"args": {"pattern": "**/*"}},
+                        "hookAdditionalContexts": [],
+                        "toolCallId": "glob-1",
+                        "startedAtMs": "1789671354526",
+                    },
+                }
+            )
+            with self.assertRaises(CursorCliProviderError):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=[glob_started],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+    def test_rejects_invalid_tool_call_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            for bad_started in (1.5, True, "-1", "", "12.34", "1e3", "abc"):
+                tool_call_id = "read-bad-ts"
+                bad_line = json.dumps(
+                    {
+                        "type": "tool_call",
+                        "subtype": "started",
+                        "tool_call": {
+                            "readToolCall": {"args": {"path": sheet}},
+                            "hookAdditionalContexts": [],
+                            "toolCallId": tool_call_id,
+                            "startedAtMs": bad_started,
+                        },
+                    }
+                )
+                with self.assertRaises(CursorCliProviderError):
+                    parse_cursor_cli_stream(
+                        _sample_cursor_cli_stream(
+                            workspace_dir=temporary,
+                            image_paths=[sheet],
+                            extra_lines=[bad_line],
+                        ),
+                        workspace_dir=temporary,
+                        allowed_image_paths=[sheet],
+                    )
+
+    def test_resolve_verified_contact_sheet_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            resolved = resolve_verified_contact_sheet_paths([sheet])
+            self.assertEqual(resolved, (sheet,))
+            with self.assertRaises(CursorCliProviderError):
+                resolve_verified_contact_sheet_paths(
+                    [str(Path(temporary) / "evidence" / "target-1" / "choice-a" / "other.png")]
+                )
+
+    def test_tools_manifest_digest(self) -> None:
+        manifest = cursor_cli_tools_manifest(engine_version="2026.08.25-test")
+        digest = tools_sha256(manifest)
+        self.assertNotEqual(digest, tools_sha256())
+        self.assertEqual(tools_sha256(), tools_sha256(None))
+
+    def test_preflight_cursor_cli_auth(self) -> None:
+        with mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+            return_value="2026.08.25-test",
+        ), mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.cursor_cli.shutil.which",
+            return_value="/usr/local/bin/cursor-agent",
+        ), mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.cursor_cli.subprocess.run",
+            side_effect=[
+                mock.Mock(returncode=0, stdout='{"isAuthenticated":true}', stderr=""),
+                mock.Mock(
+                    returncode=0,
+                    stdout="gpt-5.6-sol-high - GPT-5.6 Sol 1M High\n",
+                    stderr="",
+                ),
+            ],
+        ):
+            status = preflight_cursor_cli_auth()
+        self.assertTrue(status["logged_in"])
+        self.assertEqual(status["model_id"], CURSOR_CLI_MODEL_ID)
+
+    def test_model_display_matches_sol_high(self) -> None:
+        self.assertTrue(model_display_matches_sol_high("GPT-5.6 Sol 1M High"))
+        self.assertFalse(model_display_matches_sol_high("GPT-5.6 Sol 1M High Fast"))
+        self.assertFalse(model_display_matches_sol_high("GPT-5.6 Sol 1M Extra High"))
+        self.assertFalse(model_display_matches_sol_high("auto"))
 
 
 class WeeklyLlmContractTests(unittest.TestCase):

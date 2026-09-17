@@ -19,6 +19,11 @@ from foldarium_pipeline.weekly_llm_providers.cursor import (
     list_cursor_models,
     preflight_cursor_api_key,
 )
+from foldarium_pipeline.weekly_llm_providers.cursor_cli import (
+    CursorCliProvider,
+    list_cursor_cli_model_ids,
+    preflight_cursor_cli_auth,
+)
 from foldarium_pipeline.weekly_llm_providers.fake import FakeProvider
 from foldarium_pipeline.weekly_llm_runner import RunnerOptions, run_weekly_llm_score
 from foldarium_pipeline.weekly_selector import canonical_json
@@ -39,6 +44,12 @@ def _build_provider(args: argparse.Namespace):
     if args.provider == "cursor":
         return (
             CursorProvider(dry_run=args.dry_run_provider),
+            "cursor",
+            args.display_name or "GPT-5.6 Sol",
+        )
+    if args.provider == "cursor-cli":
+        return (
+            CursorCliProvider(dry_run=args.dry_run_provider),
             "cursor",
             args.display_name or "GPT-5.6 Sol",
         )
@@ -90,6 +101,18 @@ def _cmd_preflight_claude(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_preflight_cursor_cli(_args: argparse.Namespace) -> int:
+    status = preflight_cursor_cli_auth()
+    print(canonical_json({"ok": True, "provider": "cursor-cli", **status}))
+    return 0
+
+
+def _cmd_list_cursor_cli_models(_args: argparse.Namespace) -> int:
+    models = list_cursor_cli_model_ids()
+    print(canonical_json({"ok": True, "models": models}))
+    return 0
+
+
 def _cmd_preflight_cursor(_args: argparse.Namespace) -> int:
     preflight_cursor_api_key()
     print(canonical_json({"ok": True, "provider": "cursor", "api_key_present": True}))
@@ -136,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--output-dir", type=Path, required=True)
     run_parser.add_argument(
         "--provider",
-        choices=("fake", "claude", "cursor"),
+        choices=("fake", "claude", "cursor", "cursor-cli"),
         default="fake",
         help="scoring provider adapter",
     )
@@ -180,6 +203,18 @@ def main(argv: list[str] | None = None) -> int:
         help="verify Claude CLI subscription auth without scoring",
     )
     preflight_claude_parser.set_defaults(handler=_cmd_preflight_claude)
+
+    preflight_cursor_cli_parser = subparsers.add_parser(
+        "preflight-cursor-cli",
+        help="verify cursor-agent CLI login, version, and gpt-5.6-sol-high availability",
+    )
+    preflight_cursor_cli_parser.set_defaults(handler=_cmd_preflight_cursor_cli)
+
+    list_cli_models_parser = subparsers.add_parser(
+        "list-cursor-cli-models",
+        help="list cursor-agent CLI model ids for this account",
+    )
+    list_cli_models_parser.set_defaults(handler=_cmd_list_cursor_cli_models)
 
     preflight_cursor_parser = subparsers.add_parser(
         "preflight-cursor",

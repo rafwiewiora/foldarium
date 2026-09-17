@@ -312,7 +312,9 @@ runner is artifact-only and performs no network submission.
 ```bash
 python pipeline/scripts/weekly_llm_score.py preflight-claude
 python pipeline/scripts/weekly_llm_score.py preflight-cursor
+python pipeline/scripts/weekly_llm_score.py preflight-cursor-cli
 python pipeline/scripts/weekly_llm_score.py list-cursor-models
+python pipeline/scripts/weekly_llm_score.py list-cursor-cli-models
 
 python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --output-dir /secure/run/out \
@@ -331,7 +333,24 @@ python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --provider cursor \
   --network-allowlist /secure/reviewed/provider-allowlist.json \
   --assert-provider-egress-enforced
+
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/out \
+  --provider cursor-cli \
+  --network-allowlist /secure/reviewed/provider-allowlist.json \
+  --assert-provider-egress-enforced
 ```
+
+When `CURSOR_API_KEY` is unavailable but `cursor-agent` CLI login is present,
+use `--provider cursor-cli` as the audited fallback. Preflight with
+`preflight-cursor-cli` (executable version, authenticated `cursor-agent status`,
+and exact model id `gpt-5.6-sol-high` in `cursor-agent models`). The CLI path
+runs Ask mode with sandbox enabled in the verified item workspace, aborts on any
+unapproved tool/MCP/shell/web event, and records an honest tools manifest for
+allowlisted `readToolCall` access to hash-verified generated
+`evidence/<item_id>/<choice_id>/contact_sheet.png` files referenced as
+`@/absolute/path` prompts (not direct multimodal attachment). Every supplied
+contact sheet must be read successfully during the run.
 
 Optional submission uses `FOLDARIUM_SELECTOR_BENCHMARK_URL` and
 `FOLDARIUM_SELECTOR_BENCHMARK_TOKEN` environment variables only. Retries must
