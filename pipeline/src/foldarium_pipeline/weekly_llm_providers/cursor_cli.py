@@ -15,7 +15,11 @@ from .cursor import build_cursor_user_message
 from ..weekly_llm_config import cursor_cli_provider_config
 from ..weekly_llm_contract import sha256_hex
 from ..weekly_llm_provenance import canonical_private_json
-from ..weekly_selector_prompt import SELECTOR_SYSTEM_PROMPT
+from ..weekly_selector import canonical_json
+from ..weekly_selector_prompt import (
+    SELECTOR_MODEL_RESPONSE_SCHEMA,
+    SELECTOR_SYSTEM_PROMPT,
+)
 
 CURSOR_CLI_EXECUTABLE = "cursor-agent"
 CURSOR_CLI_MODEL_ID = "gpt-5.6-sol-high"
@@ -216,7 +220,8 @@ def cursor_cli_tools_manifest(*, engine_version: str) -> dict[str, Any]:
             "readToolCall events are permitted; every supplied sheet must be read successfully"
         ),
         "prompt_composition": (
-            "canonical_selector_system_prompt_plus_rendered_item_request_plus_at_path_image_refs"
+            "canonical_selector_system_prompt_plus_rendered_item_request_plus"
+            "embedded_response_schema_plus_contact_sheet_tool_policy_and_at_path_image_refs"
         ),
         "external_urls_in_runner_prompt": False,
         "reference_data_in_runner_prompt": False,
@@ -224,6 +229,14 @@ def cursor_cli_tools_manifest(*, engine_version: str) -> dict[str, Any]:
         "reasoning_trace_retained": False,
         "thinking_stream_events": "validated_then_discarded_from_private_envelope",
     }
+
+
+def _append_response_schema_section(*, base_prompt: str) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "RESPONSE SCHEMA (exact; no additional keys):\n"
+        f"{canonical_json(SELECTOR_MODEL_RESPONSE_SCHEMA)}\n"
+    )
 
 
 def _append_contact_sheet_prompt_section(*, base_prompt: str, image_paths: Sequence[str]) -> str:
@@ -250,7 +263,9 @@ def build_cursor_cli_command(
         raise CursorCliProviderError("cursor-cli prompt must include canonical selector system prompt")
     resolved_paths = resolve_verified_contact_sheet_paths(image_paths)
     full_prompt = _append_contact_sheet_prompt_section(
-        base_prompt=build_cursor_user_message(item_prompt_text=prompt_text),
+        base_prompt=_append_response_schema_section(
+            base_prompt=build_cursor_user_message(item_prompt_text=prompt_text),
+        ),
         image_paths=resolved_paths,
     )
     add_dirs = sorted({str(Path(path).parent) for path in resolved_paths})

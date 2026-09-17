@@ -82,7 +82,10 @@ from foldarium_pipeline.weekly_llm_runner import (
     submit_benchmark_execution,
 )
 from foldarium_pipeline.weekly_selector import build_selector_kit, canonical_json, verify_selector_kit_zip
-from foldarium_pipeline.weekly_selector_prompt import SELECTOR_PROMPT_SHA256
+from foldarium_pipeline.weekly_selector_prompt import (
+    SELECTOR_MODEL_RESPONSE_SCHEMA,
+    SELECTOR_PROMPT_SHA256,
+)
 
 EXECUTION_ID = "00000000-0000-4000-8000-000000000123"
 
@@ -788,9 +791,14 @@ class WeeklyLlmCursorCliTests(unittest.TestCase):
         add_dirs = command[command.index("--add-dir") + 1 :: 2]
         self.assertEqual(add_dirs, sorted({str(Path(sheet_a).parent), str(Path(sheet_b).parent)}))
         prompt = command[-1]
+        schema_header = "RESPONSE SCHEMA (exact; no additional keys):"
+        schema_index = prompt.index(schema_header)
         policy_index = prompt.index("CONTACT SHEET TOOL POLICY")
         images_index = prompt.index("CONTACT SHEET IMAGES")
+        self.assertLess(schema_index, policy_index)
         self.assertLess(policy_index, images_index)
+        self.assertIn(canonical_json(SELECTOR_MODEL_RESPONSE_SCHEMA), prompt)
+        self.assertIn("Evaluate item.", prompt)
         self.assertIn("Do not Glob", prompt)
         self.assertIn("candidate evidence JSON", prompt)
         self.assertIn("CONTACT SHEET IMAGES", prompt)
