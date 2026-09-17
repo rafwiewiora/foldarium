@@ -312,7 +312,9 @@ runner is artifact-only and performs no network submission.
 ```bash
 python pipeline/scripts/weekly_llm_score.py preflight-claude
 python pipeline/scripts/weekly_llm_score.py preflight-cursor
+python pipeline/scripts/weekly_llm_score.py preflight-cursor-cli
 python pipeline/scripts/weekly_llm_score.py list-cursor-models
+python pipeline/scripts/weekly_llm_score.py list-cursor-cli-models
 
 python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --output-dir /secure/run/out \
@@ -331,7 +333,60 @@ python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
   --provider cursor \
   --network-allowlist /secure/reviewed/provider-allowlist.json \
   --assert-provider-egress-enforced
+
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/out \
+  --provider cursor-cli \
+  --network-allowlist /secure/reviewed/provider-allowlist.json \
+  --assert-provider-egress-enforced
 ```
+
+When a live cursor-cli run aborts after one or more items, preserve the incomplete
+execution directory read-only and retry with the same execution UUID. The runner
+restores completed item checkpoints only after fail-closed validation of prompt
+bytes, candidate evidence bytes, validated responses, and provider raw envelopes;
+it never reuses benchmark or submission artifacts from the prior directory.
+
+```bash
+python pipeline/scripts/weekly_llm_score.py run weekly-selector-kit.zip \
+  --output-dir /secure/run/retry/out \
+  --provider cursor-cli \
+  --execution-id "$EXECUTION_ID" \
+  --resume-from "/secure/run/out/$EXECUTION_ID" \
+  --network-allowlist /secure/reviewed/provider-allowlist.json \
+  --assert-provider-egress-enforced
+```
+
+The resume source path is the preserved prior execution directory itself (the
+folder that contains `private/` and per-item evidence), not the parent
+`--output-dir`. Its directory name must equal `--execution-id`. The new
+`--output-dir/$EXECUTION_ID` path must be empty; the runner copies restored
+checkpoints into the new execution tree without mutating the resume source. Any
+partial per-item checkpoint set aborts the run. Items without a complete
+checkpoint are scored live.
+
+Checkpoints written before provider snapshot fields were added (for example
+incomplete runs from main at `61ac68d`) remain restorable: cursor-cli envelopes
+with neither `provider_config_snapshot` nor `tools_manifest_snapshot` take a
+legacy path that re-parses every stored stream event, re-validates all envelope
+metadata against the parse, and binds config/tools only from the current audited
+provider after success. The installed `cursor-agent --version` must exactly match
+the checkpoint `engine_version`; a CLI upgrade without re-scoring aborts legacy
+resume. Restored output raw envelopes are tagged
+`checkpoint_format: legacy-pre-snapshot-revalidated` and include fresh snapshots.
+Envelopes with exactly one snapshot field abort; new live runs continue writing
+both snapshots.
+
+When `CURSOR_API_KEY` is unavailable but `cursor-agent` CLI login is present,
+use `--provider cursor-cli` as the audited fallback. Preflight with
+`preflight-cursor-cli` (executable version, authenticated `cursor-agent status`,
+and exact model id `gpt-5.6-sol-high` in `cursor-agent models`). The CLI path
+runs Ask mode with sandbox enabled in the verified item workspace, aborts on any
+unapproved tool/MCP/shell/web event, and records an honest tools manifest for
+allowlisted `readToolCall` access to hash-verified generated
+`evidence/<item_id>/<choice_id>/contact_sheet.png` files referenced as
+`@/absolute/path` prompts (not direct multimodal attachment). Every supplied
+contact sheet must be read successfully during the run.
 
 Optional submission uses `FOLDARIUM_SELECTOR_BENCHMARK_URL` and
 `FOLDARIUM_SELECTOR_BENCHMARK_TOKEN` environment variables only. Retries must

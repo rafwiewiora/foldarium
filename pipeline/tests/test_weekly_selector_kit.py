@@ -20,6 +20,7 @@ from foldarium_pipeline.weekly_quiz import (
     publish_selector_kit,
     publish_staged_selector_kit,
     regenerate_promoted_selector_kit,
+    weekly_round_environment_from_row,
 )
 from foldarium_pipeline.weekly_selector import parse_selector_kit
 
@@ -192,10 +193,10 @@ class SelectorKitPublicationTests(unittest.TestCase):
     def test_build_staged_selector_kit_is_deterministic_and_leak_safe(self) -> None:
         stage_dir = self._write_stage()
         first_zip, first_descriptor, _targets = build_staged_selector_kit(
-            stage_dir, self.blind
+            stage_dir, self.blind, environment="production"
         )
         second_zip, second_descriptor, _targets = build_staged_selector_kit(
-            stage_dir, self.blind
+            stage_dir, self.blind, environment="production"
         )
         self.assertEqual(first_zip, second_zip)
         self.assertEqual(first_descriptor, second_descriptor)
@@ -212,11 +213,14 @@ class SelectorKitPublicationTests(unittest.TestCase):
 
     def test_publish_selector_kit_uploads_content_addressed_zip(self) -> None:
         stage_dir = self._write_stage()
-        zip_bytes, descriptor, targets = build_staged_selector_kit(stage_dir, self.blind)
+        zip_bytes, descriptor, targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="production"
+        )
         public = FakeCoordinator("quiz-public")
         private = FakeCoordinator("private")
         published = publish_selector_kit(
             round_id=self.round_id,
+            round_environment="production",
             blind_manifest_sha256=manifest_sha256(self.blind),
             zip_bytes=zip_bytes,
             descriptor=descriptor,
@@ -246,6 +250,7 @@ class SelectorKitPublicationTests(unittest.TestCase):
         published = publish_staged_selector_kit(
             stage_dir,
             self.blind,
+            environment="production",
             public_coordinator=public,
             private_coordinator=private,
             register_catalog=True,
@@ -262,6 +267,7 @@ class SelectorKitPublicationTests(unittest.TestCase):
         published = publish_staged_selector_kit(
             stage_dir,
             self.blind,
+            environment="production",
             public_coordinator=public,
             private_coordinator=private,
             register_catalog=False,
@@ -278,11 +284,14 @@ class SelectorKitPublicationTests(unittest.TestCase):
             source_items(),
         )
         stage_dir = self._write_stage()
-        zip_bytes, descriptor, targets = build_staged_selector_kit(stage_dir, self.blind)
+        zip_bytes, descriptor, targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="production"
+        )
         public = FakeCoordinator("quiz-public")
         private = FakeCoordinator("private")
         source_publication = publish_selector_kit(
             round_id=self.round_id,
+            round_environment="production",
             blind_manifest_sha256=manifest_sha256(self.blind),
             zip_bytes=zip_bytes,
             descriptor=descriptor,
@@ -299,9 +308,11 @@ class SelectorKitPublicationTests(unittest.TestCase):
             source_round={
                 "campaign_id": "weekly-2026-08-08",
                 "blind_manifest": self.blind,
+                "environment": "preview",
             },
             source_metadata={"selector_targets": source_publication["selector_targets"]},
             promoted_blind_manifest=promoted_blind,
+            environment="production",
             public_coordinator=public,
             private_coordinator=private,
             register_catalog=False,
@@ -312,18 +323,54 @@ class SelectorKitPublicationTests(unittest.TestCase):
         with zipfile.ZipFile(BytesIO(public.stored[zip_digest][0])) as archive:
             manifest = json.loads(archive.read("manifest.json"))
         self.assertEqual(manifest["round_id"], promoted_round_id)
+        self.assertEqual(manifest["environment"], "production")
         self.assertEqual(
             manifest["blind_manifest_sha256"],
             manifest_sha256(promoted_blind),
         )
 
+    def test_build_staged_selector_kit_honors_preview_environment(self) -> None:
+        stage_dir = self._write_stage()
+        zip_bytes, descriptor, _targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="preview"
+        )
+        kit = parse_selector_kit(zip_bytes)
+        self.assertEqual(descriptor["environment"], "preview")
+        self.assertEqual(kit["environment"], "preview")
+
+    def test_publish_selector_kit_rejects_environment_mismatch(self) -> None:
+        stage_dir = self._write_stage()
+        zip_bytes, descriptor, targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="production"
+        )
+        public = FakeCoordinator("quiz-public")
+        private = FakeCoordinator("private")
+        with self.assertRaisesRegex(
+            WeeklyQuizAssemblyError,
+            "descriptor environment does not match round environment",
+        ):
+            publish_selector_kit(
+                round_id=self.round_id,
+                round_environment="preview",
+                blind_manifest_sha256=manifest_sha256(self.blind),
+                zip_bytes=zip_bytes,
+                descriptor=descriptor,
+                public_coordinator=public,
+                private_coordinator=private,
+                selector_targets=targets,
+                register_catalog=False,
+            )
+
     def test_backfill_selector_kit_for_round_downloads_public_assets(self) -> None:
         stage_dir = self._write_stage()
-        zip_bytes, descriptor, targets = build_staged_selector_kit(stage_dir, self.blind)
+        zip_bytes, descriptor, targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="production"
+        )
         public = FakeCoordinator("quiz-public")
         private = FakeCoordinator("private")
         publication = publish_selector_kit(
             round_id=self.round_id,
+            round_environment="production",
             blind_manifest_sha256=manifest_sha256(self.blind),
             zip_bytes=zip_bytes,
             descriptor=descriptor,
@@ -338,6 +385,7 @@ class SelectorKitPublicationTests(unittest.TestCase):
 
         round_row = {
             "round_id": self.round_id,
+            "environment": "production",
             "blind_manifest": self.blind,
             "metadata": {"selector_targets": publication["selector_targets"]},
         }
@@ -387,6 +435,7 @@ class SelectorKitPublicationTests(unittest.TestCase):
         backfilled = backfill_selector_kit_for_round(
             {
                 "round_id": self.round_id,
+                "environment": "production",
                 "campaign_id": "weekly-2026-08-08",
                 "blind_manifest": self.blind,
                 "metadata": {},
@@ -410,7 +459,43 @@ class SelectorKitPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(
             WeeklyQuizAssemblyError, "normalized selector target"
         ):
-            build_staged_selector_kit(stage_dir, self.blind)
+            build_staged_selector_kit(
+                stage_dir, self.blind, environment="production"
+            )
+
+    def test_backfill_uses_preview_environment_from_round_row(self) -> None:
+        stage_dir = self._write_stage()
+        _zip_bytes, _descriptor, targets = build_staged_selector_kit(
+            stage_dir, self.blind, environment="preview"
+        )
+        public = FakeCoordinator("quiz-public")
+        private = FakeCoordinator("private")
+        for choice in self.blind["items"][0]["choices"]:
+            for uri_key in ("pose_uri", "protein_uri", "pocket_uri"):
+                public.seed_public_asset(choice[uri_key], asset_bytes(choice[uri_key]))
+        round_row = {
+            "round_id": self.round_id,
+            "environment": "preview",
+            "blind_manifest": self.blind,
+            "metadata": {
+                "selector_targets": private.store_bytes(
+                    (json.dumps(dict(targets)) + "\n").encode("utf-8"),
+                    "application/json",
+                )
+            },
+        }
+        self.assertEqual(weekly_round_environment_from_row(round_row), "preview")
+        backfilled = backfill_selector_kit_for_round(
+            round_row,
+            public_coordinator=public,
+            private_coordinator=private,
+            register_catalog=True,
+        )
+        self.assertEqual(
+            private.registered[0]["descriptor"]["environment"],
+            "preview",
+        )
+        self.assertEqual(backfilled["descriptor"]["environment"], "preview")
 
 
 if __name__ == "__main__":

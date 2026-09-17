@@ -13,6 +13,11 @@
   leaderboard entries.
 - Provider-neutral intake-conflict handling, one-retry authorization, and
   actionable output-validation subtypes.
+- Audited Cursor CLI Sol selection with exact response-schema prompting,
+  allowlisted image reads, fail-closed stream validation, and resumable
+  hash-verified item checkpoints.
+- Provider-neutral selector-kit environment propagation and descriptor/ZIP
+  binding checks across build, publish, promotion, and backfill paths.
 - Local-server routing for the Play-for-fun results endpoint and the legacy
   `/datasets` entry path.
 
@@ -20,8 +25,10 @@
 
 The public mirror does not include credentials, hosted runtime values, private
 artifacts, access-gate configuration, provider-specific deployment profiles, or
-spend-producing schedules. Production HTML shells may therefore differ while
-shared browser modules remain parity-checkable.
+spend-producing schedules. It also excludes pre-reveal LLM ballots, private
+audit envelopes, Modal volumes, and lifecycle operator logs. Production HTML
+shells may therefore differ while shared browser modules remain
+parity-checkable.
 
 ## Verification
 
@@ -32,7 +39,9 @@ Before merging this sync:
    overlays, reports, worker diagnostics, Supabase coordination, and Weekly
    intake.
 3. Run `npm run parity:production -- --origin https://www.foldarium.org`.
-4. Confirm `docs/feature-backlog.md` and this handoff match the merged feature
+4. Run `npm run audit:public` and confirm no provider-host deployment or
+   private-operation paths entered the mirror.
+5. Confirm `docs/feature-backlog.md` and this handoff match the merged feature
    state.
 
 ## Remaining work

@@ -21,8 +21,10 @@ def canonical_tools_manifest() -> list[str]:
     return []
 
 
-def tools_sha256() -> str:
-    return sha256_hex(canonical_tools_manifest())
+def tools_sha256(manifest: Any | None = None) -> str:
+    if manifest is None:
+        manifest = canonical_tools_manifest()
+    return sha256_hex(manifest)
 
 
 def build_output_manifest(*, items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
