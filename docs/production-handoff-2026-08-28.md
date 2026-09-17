@@ -155,10 +155,15 @@ Primary references:
 
 - `weekly-2026-09-05-beta-v2` is the public current round. It opened at
   2026-09-09 20:06:06 UTC with 37 blind items and closes at
-  2026-09-16 00:00:00 UTC.
+  2026-09-23 00:00:00 UTC after an exact compare-and-set reopening on
+  2026-09-17.
 - `weekly-2026-08-29-beta-v2` remains open and unrevealed with 33 blind items.
   Its finite safety close was explicitly extended from 2026-09-09 to
-  2026-09-16 00:00:00 UTC without running the successor handoff.
+  2026-09-16 and then 2026-09-23 00:00:00 UTC without running the successor
+  handoff.
+- Before the 2026-09-17 reopening, both rounds had null reveal manifests, no
+  successor activation, and no registered post-close evaluation. The reopening
+  changed only their close times; no reveal or vote data was mutated.
 - The scheduled retrospective job detects an opted-in open round and performs
   private pre-close preparation instead of calling the post-close evaluator.
   Existing rounds without the policy retain the deployed Wednesday behavior.
@@ -174,6 +179,19 @@ Primary references:
   Missing or inconsistent lifecycle provenance fails closed.
 - Ballot scope, correctness, vote persistence, result aggregation, and
   player-name disclosure semantics are unchanged.
+
+### Missed September 12 intake
+
+- Lifecycle preflight on 2026-09-17 confirmed that campaign
+  `wwpdb-2026-09-12` was never registered and neither its Preview nor production
+  round exists.
+- Downstream Preview and production schedulers could only return
+  `waiting-for-campaign`; they do not recreate a missing intake campaign.
+- A read-only replay found 345 eligible wwPDB entries and produced 80 bounded
+  prediction tasks. The round was therefore missed at intake/registration, not
+  because there were no eligible tasks. The original scheduled failure trace is
+  no longer retained, so do not infer a more specific root cause without new
+  evidence.
 
 ## Verification
 
@@ -230,7 +248,7 @@ Primary references:
   `20260909203000_add_exact_open_weekly_round_lookup.sql` was applied before
   the protected pinned client was deployed.
 - Live RPC verification confirmed September 5 is the public current round and
-  both September 5 and August 29 are open through 2026-09-16 with null reveal
+  both September 5 and August 29 are open through 2026-09-23 with null reveal
   manifests.
 - The protected August deployment reports writable production configuration,
   exact round `weekly-2026-08-29-beta-v2`, commit
@@ -255,10 +273,12 @@ Primary references:
 
 ### Operational follow-up
 
-- After the 2026-09-16 close, prepare a fresh August evaluation and explicitly
+- After the 2026-09-23 close, prepare a fresh August evaluation and explicitly
   run the exact August 29 / September 5 handoff. Verify close, reveal, vote
   snapshot, and retrospective publication before treating the lifecycle as
   fully shipped.
+- Add a guarded catch-up path for a missing Saturday campaign so later
+  Preview/production ticks do not remain permanently at `waiting-for-campaign`.
 - Apply the immutable cache metadata backfill for the current round only after
   that reveal; the apply path intentionally refuses an open round.
 
@@ -274,7 +294,7 @@ protein familiarity and ligand-bound-system familiarity.
    `8937ff028b5a3445295e0086331741686b4fb573`.
 2. Confirm foldarium.org still selects `weekly-2026-09-05-beta-v2` and the
    protected preview selects `weekly-2026-08-29-beta-v2`.
-3. Confirm both rounds remain open through 2026-09-16 00:00:00 UTC and both
+3. Confirm both rounds remain open through 2026-09-23 00:00:00 UTC and both
    reveal manifests remain null.
 4. Confirm the Modal app still reports deployment commit
    `80a19afb7f4ce9be3345ebd1c6557c6c5a44ed6d` and configuration digest
