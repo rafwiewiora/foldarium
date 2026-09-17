@@ -34,6 +34,10 @@ from pathlib import Path
 from collections.abc import Callable, Iterator
 from typing import Any
 
+_PIPELINE_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(_PIPELINE_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_SOURCE_ROOT))
+
 from foldarium_pipeline.weekly_intake_recovery import (
     DEFAULT_INTAKE_REPLAY_MAX_AGE_DAYS,
     validate_intake_replay_release_date,
