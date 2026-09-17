@@ -338,6 +338,10 @@ print(json.dumps(report, sort_keys=True))
             ),
             "cron": reviewed["FOLDARIUM_WEEKLY_RETROSPECTIVE_PUBLICATION_CRON"],
         },
+        "lifecycle_journal": {
+            "volume": "foldarium-weekly-lifecycle-logs",
+            "mount": "/var/foldarium/weekly-lifecycle-journal",
+        },
         "required_migrations_before_publication": [
             "20260826190000_require_retrospective_vote_scope.sql"
         ],
