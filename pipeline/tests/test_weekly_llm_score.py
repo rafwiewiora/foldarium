@@ -983,7 +983,10 @@ class WeeklyLlmCursorCliTests(unittest.TestCase):
     def test_rejects_explicit_shell_event_type(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
-            with self.assertRaises(CursorCliProviderError):
+            with self.assertRaisesRegex(
+                CursorCliProviderError,
+                r"forbidden cursor-agent event type: shell/started",
+            ):
                 parse_cursor_cli_stream(
                     _sample_cursor_cli_stream(
                         workspace_dir=temporary,
@@ -1531,6 +1534,108 @@ class WeeklyLlmRunnerTests(unittest.TestCase):
                         egress_enforcement_asserted=True,
                     )
                 )
+
+    def test_multi_hop_cursor_cli_resume_rewrites_user_prompt_paths(self) -> None:
+        engine_version = "legacy-cli-multi-hop-version"
+        zip_bytes, _kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            allowlist_path = Path(tmp) / "allowlist.json"
+            allowlist_path.write_text(json.dumps(["api.cursor.com"]), encoding="utf-8")
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.mkdir(parents=True)
+            (prior / "private").mkdir(parents=True, exist_ok=True)
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ), mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.preflight_cursor_cli_auth",
+                return_value={"logged_in": True},
+            ):
+                provider = CursorCliProvider()
+            for item_id in ("target-1", "target-2"):
+                _seed_legacy_cursor_cli_item_checkpoint(
+                    prior_execution_dir=prior,
+                    kit_path=kit_path,
+                    item_id=item_id,
+                    provider=provider,
+                    engine_version=engine_version,
+                )
+            score_calls: list[str] = []
+
+            def tracked_score_item(self, **kwargs):  # noqa: ANN001, ANN003
+                score_calls.append(kwargs["item_id"])
+                raise AssertionError("provider must not run for resumable checkpoints")
+
+            hop_a = Path(tmp) / "hop-a"
+            with mock.patch.object(CursorCliProvider, "score_item", tracked_score_item):
+                run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=hop_a,
+                        provider=provider,
+                        display_name="GPT-5.6 Sol",
+                        provider_name="cursor",
+                        execution_id=EXECUTION_ID,
+                        resume_from=prior,
+                        network_allowlist_path=allowlist_path,
+                        egress_enforcement_asserted=True,
+                    )
+                )
+            _strip_completed_benchmark_artifacts(hop_a / EXECUTION_ID)
+            hop_b = Path(tmp) / "hop-b"
+            with mock.patch.object(CursorCliProvider, "score_item", tracked_score_item):
+                run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=hop_b,
+                        provider=provider,
+                        display_name="GPT-5.6 Sol",
+                        provider_name="cursor",
+                        execution_id=EXECUTION_ID,
+                        resume_from=hop_a / EXECUTION_ID,
+                        network_allowlist_path=allowlist_path,
+                        egress_enforcement_asserted=True,
+                    )
+                )
+            self.assertEqual(score_calls, [])
+            raw_b = json.loads(
+                (hop_b / EXECUTION_ID / "private" / "target-1.raw.json").read_text(encoding="utf-8")
+            )
+            allowed_b = raw_b["allowed_contact_sheet_paths"]
+            user_text = next(
+                event["message"]["content"][0]["text"]
+                for event in raw_b["events"]
+                if event.get("type") == "user"
+            )
+            for path in allowed_b:
+                self.assertIn(f"@{path}", user_text)
+
+            tampered = json.loads(
+                (hop_a / EXECUTION_ID / "private" / "target-1.raw.json").read_text(encoding="utf-8")
+            )
+            for event in tampered["events"]:
+                if event.get("type") == "tool_call":
+                    read_call = event["tool_call"]["readToolCall"]
+                    read_call["args"]["path"] = "/tmp/tampered-contact-sheet.png"
+            tampered_path = hop_a / EXECUTION_ID / "private" / "target-1.raw.json"
+            tampered_path.write_text(canonical_json(tampered) + "\n", encoding="utf-8")
+            with mock.patch.object(CursorCliProvider, "score_item", tracked_score_item):
+                with self.assertRaises(WeeklyLlmRunnerError):
+                    run_weekly_llm_score(
+                        RunnerOptions(
+                            kit_path=kit_path,
+                            output_dir=Path(tmp) / "hop-c",
+                            provider=provider,
+                            display_name="GPT-5.6 Sol",
+                            provider_name="cursor",
+                            execution_id=EXECUTION_ID,
+                            resume_from=hop_a / EXECUTION_ID,
+                            network_allowlist_path=allowlist_path,
+                            egress_enforcement_asserted=True,
+                        )
+                    )
 
     def test_runner_resume_invokes_cursor_cli_restore_item_checkpoint(self) -> None:
         engine_version = "legacy-cli-integration-version"

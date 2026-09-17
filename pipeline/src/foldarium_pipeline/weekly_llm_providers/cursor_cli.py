@@ -436,7 +436,11 @@ def _validate_non_tool_stream_event(event: Mapping[str, Any]) -> None:
     if not isinstance(event_type, str):
         raise CursorCliProviderError("cursor-agent stream event type is missing")
     if event_type in _EXPLICIT_FORBIDDEN_EVENT_TYPES:
-        raise CursorCliProviderError("cursor-agent stream contained forbidden event type")
+        subtype = event.get("subtype")
+        subtype_label = subtype if isinstance(subtype, str) else ""
+        raise CursorCliProviderError(
+            f"forbidden cursor-agent event type: {event_type}/{subtype_label}"
+        )
     if event_type not in _ALLOWED_STREAM_EVENT_TYPES:
         subtype = event.get("subtype")
         subtype_label = subtype if isinstance(subtype, str) else ""
@@ -712,11 +716,38 @@ def _rewrite_contact_sheet_paths_in_event(
     return rewritten
 
 
+def _rewrite_user_event_for_resume(
+    event: Mapping[str, Any],
+    *,
+    item_prompt_text: str,
+    current_contact_sheet_paths: Sequence[str],
+) -> dict[str, Any]:
+    if event.get("type") != "user":
+        raise CursorCliProviderError("cursor-agent resume user event rewrite target is invalid")
+    expected_prompt = build_cursor_cli_expected_checkpoint_prompt(
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=current_contact_sheet_paths,
+    )
+    rewritten: dict[str, Any] = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": expected_prompt}],
+        },
+    }
+    session_id = event.get("session_id")
+    if isinstance(session_id, str) and session_id.strip():
+        rewritten["session_id"] = session_id
+    return rewritten
+
+
 def _rewrite_stream_events_for_resume(
     events: Sequence[Mapping[str, Any]],
     *,
     path_mapping: Mapping[str, str],
     current_workspace_dir: str,
+    item_prompt_text: str,
+    current_contact_sheet_paths: Sequence[str],
 ) -> list[dict[str, Any]]:
     rewritten: list[dict[str, Any]] = []
     for event in events:
@@ -725,6 +756,14 @@ def _rewrite_stream_events_for_resume(
             init_copy = dict(event_copy)
             init_copy["cwd"] = str(Path(current_workspace_dir).resolve())
             rewritten.append(init_copy)
+        elif event_copy.get("type") == "user":
+            rewritten.append(
+                _rewrite_user_event_for_resume(
+                    event_copy,
+                    item_prompt_text=item_prompt_text,
+                    current_contact_sheet_paths=current_contact_sheet_paths,
+                )
+            )
         else:
             rewritten.append(event_copy)
     return rewritten
@@ -861,10 +900,18 @@ def restore_cursor_cli_item_from_checkpoint(
         current_workspace_dir=workspace_dir,
     )
 
+    current_contact_sheet_paths = list(resolve_verified_contact_sheet_paths(image_paths))
     rewritten_events = _rewrite_stream_events_for_resume(
         event_dicts,
         path_mapping=path_mapping,
         current_workspace_dir=workspace_dir,
+        item_prompt_text=item_prompt_text,
+        current_contact_sheet_paths=current_contact_sheet_paths,
+    )
+    _validate_resume_user_event_prompt(
+        rewritten_events,
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=current_contact_sheet_paths,
     )
     parsed = parse_cursor_cli_stream(
         _events_to_stream_stdout(rewritten_events),
@@ -900,7 +947,7 @@ def restore_cursor_cli_item_from_checkpoint(
         "events": rewritten_events,
         "requested_model_id": CURSOR_CLI_MODEL_ID,
         "observed_model_label": parsed.observed_model_label,
-        "allowed_contact_sheet_paths": list(resolve_verified_contact_sheet_paths(image_paths)),
+        "allowed_contact_sheet_paths": current_contact_sheet_paths,
         "request_id": parsed.request_id,
         "session_id": parsed.session_id,
         "engine_version": resolved_engine_version,
