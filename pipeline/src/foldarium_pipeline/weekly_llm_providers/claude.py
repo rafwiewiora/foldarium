@@ -91,7 +91,9 @@ def build_claude_command(
     executable = shutil.which("claude")
     if not executable:
         raise ClaudeProviderError("claude CLI is not installed")
-    schema = json.dumps(SELECTOR_MODEL_RESPONSE_SCHEMA, separators=(",", ":"), ensure_ascii=True)
+    cli_schema = dict(SELECTOR_MODEL_RESPONSE_SCHEMA)
+    cli_schema.pop("$schema", None)
+    schema = json.dumps(cli_schema, separators=(",", ":"), ensure_ascii=True)
     return [
         executable,
         "-p",
@@ -302,7 +304,10 @@ class ClaudeProvider:
     ) -> ProviderResult:
         del item_id, image_paths
         mcp_config_path = str(Path(workspace_dir) / ".empty-mcp-config.json")
-        Path(mcp_config_path).write_text("{}", encoding="utf-8")
+        Path(mcp_config_path).write_text(
+            '{"mcpServers":{}}\n',
+            encoding="utf-8",
+        )
         command = build_claude_command(
             prompt_text=prompt_text,
             mcp_config_path=mcp_config_path,

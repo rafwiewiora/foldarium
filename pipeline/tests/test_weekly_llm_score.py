@@ -50,6 +50,7 @@ from foldarium_pipeline.weekly_llm_kit import WeeklyLlmKitError, build_item_work
 from foldarium_pipeline.weekly_llm_provenance import build_output_manifest, digest_manifest
 from foldarium_pipeline.weekly_llm_providers.claude import (
     ClaudeParseResult,
+    ClaudeProvider,
     build_claude_command,
     parse_claude_json_output,
     preflight_claude_auth,
@@ -443,6 +444,59 @@ class WeeklyLlmClaudeTests(unittest.TestCase):
         self.assertNotIn("--add-dir", command)
         self.assertIn("--setting-sources", command)
         self.assertIn("", command)
+        cli_schema = json.loads(command[command.index("--json-schema") + 1])
+        self.assertNotIn("$schema", cli_schema)
+        self.assertEqual(
+            cli_schema["title"],
+            "Foldarium blind selector model response",
+        )
+
+    def test_provider_writes_explicit_empty_mcp_server_map(self) -> None:
+        envelope = {
+            "structured_output": {
+                "schema_version": "foldarium.selector-model-response/v1",
+                "item_id": "target-1",
+                "clustered": {
+                    "selection_kind": "none",
+                    "confidence": 0.5,
+                    "evidence": "No plausible cluster.",
+                },
+                "unclustered": {
+                    "selection_kind": "none",
+                    "confidence": 0.5,
+                    "evidence": "No plausible pose.",
+                },
+            },
+            "modelUsage": {"claude-opus-test": {"inputTokens": 1, "outputTokens": 1}},
+        }
+        with tempfile.TemporaryDirectory() as temporary, mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.claude.claude_cli_version",
+            return_value="test",
+        ), mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.claude.shutil.which",
+            return_value="/usr/local/bin/claude",
+        ), mock.patch(
+            "foldarium_pipeline.weekly_llm_providers.claude.subprocess.run",
+            return_value=mock.Mock(
+                returncode=0,
+                stdout=json.dumps(envelope),
+                stderr="",
+            ),
+        ):
+            ClaudeProvider().score_item(
+                item_id="target-1",
+                prompt_text="prompt",
+                image_paths=[],
+                workspace_dir=temporary,
+            )
+            self.assertEqual(
+                json.loads(
+                    (Path(temporary) / ".empty-mcp-config.json").read_text(
+                        encoding="utf-8"
+                    )
+                ),
+                {"mcpServers": {}},
+            )
 
     def test_parse_structured_output_and_usage(self) -> None:
         parsed = parse_claude_json_output(
