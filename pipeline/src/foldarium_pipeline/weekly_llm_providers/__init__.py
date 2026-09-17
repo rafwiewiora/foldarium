@@ -33,6 +33,7 @@ class ProviderResult:
     session_id: str | None
     usage: ProviderUsage
     provider_config: Mapping[str, Any] = field(default_factory=dict)
+    tools_manifest: Mapping[str, Any] | None = None
     raw_envelope: Mapping[str, Any] = field(repr=False, default_factory=dict)
     raw_envelope_digest: str | None = None
 

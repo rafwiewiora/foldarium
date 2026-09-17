@@ -2349,16 +2349,58 @@ def _selector_assets_from_blind_manifest(
     return assets
 
 
+def _validated_weekly_environment(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or value not in WEEKLY_QUIZ_ENVIRONMENTS:
+        raise WeeklyQuizAssemblyError(
+            f"{field} must be production, preview, or development"
+        )
+    return value
+
+
+def weekly_round_environment_from_row(round_row: Mapping[str, Any]) -> str:
+    """Return the authoritative environment stored on one weekly quiz round row."""
+
+    return _validated_weekly_environment(
+        round_row.get("environment"),
+        field="weekly round environment",
+    )
+
+
+def _assert_selector_kit_environment_binding(
+    *,
+    round_environment: str,
+    descriptor: Mapping[str, Any],
+    parsed_kit: Mapping[str, Any],
+) -> None:
+    round_environment = _validated_weekly_environment(
+        round_environment,
+        field="round_environment",
+    )
+    descriptor_environment = descriptor.get("environment")
+    if descriptor_environment != round_environment:
+        raise WeeklyQuizAssemblyError(
+            "selector kit descriptor environment does not match round environment"
+        )
+    kit_environment = parsed_kit.get("environment")
+    if kit_environment != round_environment:
+        raise WeeklyQuizAssemblyError(
+            "selector kit manifest environment does not match round environment"
+        )
+
+
 def _build_selector_kit_bundle(
     *,
     round_id: str,
+    environment: str,
     blind_manifest: Mapping[str, Any],
     targets_by_item_id: Mapping[str, Mapping[str, Any]],
     assets_by_choice: Mapping[tuple[str, str], Mapping[str, bytes]],
 ) -> tuple[bytes, dict[str, Any]]:
+    environment = _validated_weekly_environment(environment, field="environment")
     try:
         return build_selector_kit(
             round_id=round_id,
+            environment=environment,
             blind_manifest=blind_manifest,
             targets_by_item_id=targets_by_item_id,
             assets_by_choice=assets_by_choice,
@@ -2371,6 +2413,7 @@ def build_staged_selector_kit(
     stage_directory: str | Path,
     blind_manifest: Mapping[str, Any],
     *,
+    environment: str,
     stage_items: Iterable[Mapping[str, Any]] | None = None,
 ) -> tuple[bytes, dict[str, Any], dict[str, dict[str, Any]]]:
     """Build a deterministic selector kit from one local weekly quiz stage."""
@@ -2391,6 +2434,7 @@ def build_staged_selector_kit(
     assets_by_choice = _selector_assets_from_stage(root, blind_manifest, stage_items)
     zip_bytes, descriptor = _build_selector_kit_bundle(
         round_id=round_id,
+        environment=environment,
         blind_manifest=blind_manifest,
         targets_by_item_id=targets_by_item_id,
         assets_by_choice=assets_by_choice,
@@ -2492,6 +2536,7 @@ def _selector_targets_for_round(
 def publish_selector_kit(
     *,
     round_id: str,
+    round_environment: str,
     blind_manifest_sha256: str,
     zip_bytes: bytes,
     descriptor: Mapping[str, Any],
@@ -2504,6 +2549,10 @@ def publish_selector_kit(
 
     if not isinstance(round_id, str) or not round_id:
         raise WeeklyQuizAssemblyError("round_id is required for selector kit publication")
+    round_environment = _validated_weekly_environment(
+        round_environment,
+        field="round_environment",
+    )
     if not re.fullmatch(r"[0-9a-f]{64}", blind_manifest_sha256):
         raise WeeklyQuizAssemblyError("blind_manifest_sha256 must be a SHA-256 hex string")
     kit_sha256 = descriptor.get("kit_sha256")
@@ -2515,6 +2564,11 @@ def publish_selector_kit(
         raise WeeklyQuizAssemblyError(str(exc)) from exc
     if parsed["kit_sha256"] != kit_sha256:
         raise WeeklyQuizAssemblyError("selector kit ZIP manifest does not match descriptor")
+    _assert_selector_kit_environment_binding(
+        round_environment=round_environment,
+        descriptor=descriptor,
+        parsed_kit=parsed,
+    )
     stored = public_coordinator.store_bytes(
         zip_bytes,
         SELECTOR_KIT_ZIP_MEDIA_TYPE,
@@ -2562,6 +2616,7 @@ def publish_staged_selector_kit(
     stage_directory: str | Path,
     blind_manifest: Mapping[str, Any],
     *,
+    environment: str,
     public_coordinator: Any,
     private_coordinator: Any,
     stage_items: Iterable[Mapping[str, Any]] | None = None,
@@ -2569,13 +2624,16 @@ def publish_staged_selector_kit(
 ) -> dict[str, Any]:
     """Build and publish one selector kit from a local weekly quiz stage."""
 
+    environment = _validated_weekly_environment(environment, field="environment")
     zip_bytes, descriptor, targets_by_item_id = build_staged_selector_kit(
         stage_directory,
         blind_manifest,
+        environment=environment,
         stage_items=stage_items,
     )
     return publish_selector_kit(
         round_id=str(blind_manifest["round_id"]),
+        round_environment=environment,
         blind_manifest_sha256=manifest_sha256(blind_manifest),
         zip_bytes=zip_bytes,
         descriptor=descriptor,
@@ -2590,6 +2648,7 @@ def publish_selector_kit_from_blind_manifest(
     blind_manifest: Mapping[str, Any],
     targets_by_item_id: Mapping[str, Mapping[str, Any]],
     *,
+    environment: str,
     asset_downloader: Callable[[str], bytes],
     public_coordinator: Any,
     private_coordinator: Any,
@@ -2600,12 +2659,14 @@ def publish_selector_kit_from_blind_manifest(
     round_id = blind_manifest.get("round_id")
     if not isinstance(round_id, str) or not round_id:
         raise WeeklyQuizAssemblyError("blind manifest round_id is required")
+    environment = _validated_weekly_environment(environment, field="environment")
     assets_by_choice = _selector_assets_from_blind_manifest(
         blind_manifest,
         downloader=asset_downloader,
     )
     zip_bytes, descriptor = _build_selector_kit_bundle(
         round_id=round_id,
+        environment=environment,
         blind_manifest=blind_manifest,
         targets_by_item_id={
             item_id: _sanitize_selector_target(raw_target)
@@ -2615,6 +2676,7 @@ def publish_selector_kit_from_blind_manifest(
     )
     return publish_selector_kit(
         round_id=round_id,
+        round_environment=environment,
         blind_manifest_sha256=manifest_sha256(blind_manifest),
         zip_bytes=zip_bytes,
         descriptor=descriptor,
@@ -2630,12 +2692,14 @@ def regenerate_promoted_selector_kit(
     source_round: Mapping[str, Any],
     source_metadata: Mapping[str, Any],
     promoted_blind_manifest: Mapping[str, Any],
+    environment: str,
     public_coordinator: Any,
     private_coordinator: Any,
     register_catalog: bool = True,
 ) -> dict[str, Any]:
     """Regenerate a promoted round's selector kit instead of reusing source ZIP bytes."""
 
+    environment = _validated_weekly_environment(environment, field="environment")
     source_with_metadata = {**dict(source_round), "metadata": dict(source_metadata)}
     targets_by_item_id = _selector_targets_for_round(
         source_with_metadata, coordinator=private_coordinator
@@ -2660,6 +2724,7 @@ def regenerate_promoted_selector_kit(
     return publish_selector_kit_from_blind_manifest(
         promoted_blind_manifest,
         filtered_targets,
+        environment=environment,
         asset_downloader=public_coordinator.download_content_object,
         public_coordinator=public_coordinator,
         private_coordinator=private_coordinator,
@@ -2682,12 +2747,14 @@ def backfill_selector_kit_for_round(
     blind_manifest = round_row.get("blind_manifest")
     if not isinstance(blind_manifest, Mapping):
         raise WeeklyQuizAssemblyError("weekly round blind_manifest is required for backfill")
+    round_environment = weekly_round_environment_from_row(round_row)
     targets_by_item_id = _selector_targets_for_round(
         round_row, coordinator=private_coordinator
     )
     return publish_selector_kit_from_blind_manifest(
         blind_manifest,
         targets_by_item_id,
+        environment=round_environment,
         asset_downloader=public_coordinator.download_content_object,
         public_coordinator=public_coordinator,
         private_coordinator=private_coordinator,
@@ -3071,6 +3138,7 @@ def publish_staged_weekly_quiz(
     selector_kit = publish_staged_selector_kit(
         root,
         blind,
+        environment=round_environment,
         public_coordinator=public_coordinator,
         private_coordinator=private_coordinator,
         stage_items=stage_items,
@@ -3213,4 +3281,5 @@ __all__ = [
     "regenerate_promoted_selector_kit",
     "select_complete_method_pairs",
     "stage_weekly_quiz",
+    "weekly_round_environment_from_row",
 ]

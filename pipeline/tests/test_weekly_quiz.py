@@ -1208,6 +1208,13 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(summary["status"], "opened")
             self.assertEqual(summary["environment"], "preview")
             self.assertEqual(private.opened["environment"], "preview")
+            self.assertEqual(len(private.registered_selector_kits), 1)
+            registered_descriptor = private.registered_selector_kits[0]["descriptor"]
+            self.assertEqual(registered_descriptor["environment"], "preview")
+            self.assertEqual(
+                summary["selector_kit"]["descriptor"]["environment"],
+                "preview",
+            )
             self.assertEqual(
                 private.opened["metadata"]["release_channel"], "beta"
             )
