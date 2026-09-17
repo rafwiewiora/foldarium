@@ -10,6 +10,7 @@ from . import ProviderResult, ProviderUsage
 from ..weekly_llm_config import fake_provider_config
 from ..weekly_llm_contract import sha256_hex
 from ..weekly_llm_provenance import canonical_private_json
+from ..weekly_selector import canonical_json
 from ..weekly_selector_prompt import SELECTOR_MODEL_RESPONSE_SCHEMA_VERSION
 
 
@@ -56,11 +57,29 @@ class FakeProvider:
         observed = item_fixture.get("observed_ids", ["fake-model-stable"])
         if not isinstance(observed, list) or len(observed) != 1:
             raise RuntimeError("fake provider observed_ids must contain exactly one model")
+        provider_snapshot = {
+            "requested_id": str(item_fixture.get("requested_id", "fake-model")),
+            "observed_ids": tuple(str(value) for value in observed),
+            "requested_effort": str(item_fixture.get("requested_effort", "default")),
+            "applied_effort": item_fixture.get("applied_effort"),
+            "effort_reporting": str(item_fixture.get("effort_reporting", "not_exposed")),
+            "engine_name": str(self._fixture.get("engine_name", "fake-provider")),
+            "engine_version": self.engine_version,
+            "run_id": item_fixture.get("run_id"),
+            "session_id": item_fixture.get("session_id"),
+            "input_tokens": int(item_fixture.get("input_tokens", 100)),
+            "output_tokens": int(item_fixture.get("output_tokens", 50)),
+            "reasoning_tokens": item_fixture.get("reasoning_tokens"),
+            "cost_usd": float(item_fixture.get("cost_usd", 0)),
+            "duration_ms": int(item_fixture.get("duration_ms", 100)),
+        }
         envelope = {
             "fixture": True,
             "item_id": item_id,
             "prompt_bytes": len(prompt_text),
             "images": len(image_paths),
+            "provider_snapshot": provider_snapshot,
+            "response": response,
         }
         return ProviderResult(
             response=response,
@@ -81,6 +100,67 @@ class FakeProvider:
                 reasoning_tokens=item_fixture.get("reasoning_tokens"),
                 cost_usd=float(item_fixture.get("cost_usd", 0)),
                 duration_ms=int(item_fixture.get("duration_ms", 100)),
+            ),
+            provider_config=self._provider_config,
+            raw_envelope=envelope,
+            raw_envelope_digest=sha256_hex(canonical_private_json(envelope)),
+        )
+
+    def restore_item_checkpoint(
+        self,
+        *,
+        item_id: str,
+        prompt_text: str,
+        image_paths: Sequence[str],
+        workspace_dir: str,
+        validated_response: Mapping[str, Any],
+        raw_envelope: Mapping[str, Any],
+        attachment_shas_by_choice: Mapping[str, str],
+    ) -> ProviderResult:
+        del workspace_dir, attachment_shas_by_choice
+        if raw_envelope.get("fixture") is not True:
+            raise RuntimeError("fake resume raw envelope is not a fixture checkpoint")
+        if raw_envelope.get("item_id") != item_id:
+            raise RuntimeError("fake resume raw envelope item_id mismatch")
+        if raw_envelope.get("prompt_bytes") != len(prompt_text):
+            raise RuntimeError("fake resume raw envelope prompt_bytes mismatch")
+        if raw_envelope.get("images") != len(image_paths):
+            raise RuntimeError("fake resume raw envelope image count mismatch")
+        snapshot = raw_envelope.get("provider_snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise RuntimeError("fake resume raw envelope missing provider_snapshot")
+        stored_response = raw_envelope.get("response")
+        if not isinstance(stored_response, Mapping):
+            raise RuntimeError("fake resume raw envelope missing response")
+        if canonical_json(dict(stored_response)) != canonical_json(dict(validated_response)):
+            raise RuntimeError("fake resume validated response mismatch")
+        envelope = {
+            "fixture": True,
+            "item_id": item_id,
+            "prompt_bytes": len(prompt_text),
+            "images": len(image_paths),
+            "provider_snapshot": dict(snapshot),
+            "response": dict(validated_response),
+        }
+        return ProviderResult(
+            response=dict(validated_response),
+            requested_id=str(snapshot["requested_id"]),
+            observed_ids=tuple(str(value) for value in snapshot["observed_ids"]),
+            requested_effort=str(snapshot["requested_effort"]),
+            applied_effort=snapshot.get("applied_effort"),
+            effort_reporting=str(snapshot["effort_reporting"]),
+            engine_name=str(snapshot["engine_name"]),
+            engine_version=str(snapshot["engine_version"]),
+            run_id=snapshot.get("run_id"),
+            session_id=snapshot.get("session_id"),
+            usage=ProviderUsage(
+                input_tokens=int(snapshot["input_tokens"]),
+                output_tokens=int(snapshot["output_tokens"]),
+                cache_read_tokens=0,
+                cache_creation_tokens=0,
+                reasoning_tokens=snapshot.get("reasoning_tokens"),
+                cost_usd=float(snapshot["cost_usd"]),
+                duration_ms=int(snapshot["duration_ms"]),
             ),
             provider_config=self._provider_config,
             raw_envelope=envelope,

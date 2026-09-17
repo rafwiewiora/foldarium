@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -67,6 +67,7 @@ class RunnerOptions:
     egress_enforcement_asserted: bool = False
     execution_id: str | None = None
     supersedes_execution_id: str | None = None
+    resume_from: Path | None = None
     submit_url: str | None = None
     submit_token: str | None = None
     dry_run_submit: bool = True
@@ -159,6 +160,108 @@ def _prepare_execution_output_dir(base_dir: Path, execution_id: str) -> Path:
     return execution_dir
 
 
+def _attachment_shas_by_choice(image_attachments: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    shas: dict[str, str] = {}
+    for attachment in image_attachments:
+        choice_id = attachment["choice_id"]
+        if choice_id in shas:
+            raise WeeklyLlmRunnerError(f"duplicate attachment choice_id {choice_id}")
+        shas[choice_id] = str(attachment["sha256"])
+    return shas
+
+
+def _score_or_restore_item(
+    *,
+    options: RunnerOptions,
+    provider: WeeklyLlmProvider,
+    item_id: str,
+    item: Mapping[str, Any],
+    prompt_text: str,
+    prompt_bytes: bytes,
+    evidence_json_bytes: bytes,
+    image_paths: list[str],
+    image_attachments: Sequence[Mapping[str, Any]],
+    workspace_dir: str,
+    resume_root: Path | None,
+) -> ProviderResult:
+    restore = getattr(provider, "restore_item_checkpoint", None)
+    if resume_root is None:
+        return provider.score_item(
+            item_id=item_id,
+            prompt_text=prompt_text,
+            image_paths=image_paths,
+            workspace_dir=workspace_dir,
+        )
+
+    from .weekly_llm_providers.cursor_cli import CursorCliProviderError
+    from .weekly_llm_resume import (
+        WeeklyLlmResumeError,
+        assert_checkpoint_bytes_match,
+        checkpoint_presence,
+        item_checkpoint_paths,
+        load_raw_envelope_checkpoint,
+        load_validated_checkpoint_response,
+    )
+
+    checkpoint_paths = item_checkpoint_paths(resume_root, item_id)
+    presence = checkpoint_presence(checkpoint_paths)
+    if presence in {"absent", "prepared_only"}:
+        if presence == "prepared_only":
+            try:
+                assert_checkpoint_bytes_match(
+                    item_id=item_id,
+                    prompt_bytes=prompt_bytes,
+                    evidence_json_bytes=evidence_json_bytes,
+                    checkpoint_paths=checkpoint_paths,
+                )
+            except WeeklyLlmResumeError as error:
+                raise WeeklyLlmRunnerError(str(error)) from error
+        return provider.score_item(
+            item_id=item_id,
+            prompt_text=prompt_text,
+            image_paths=image_paths,
+            workspace_dir=workspace_dir,
+        )
+    if presence == "partial":
+        raise WeeklyLlmRunnerError(
+            f"resume checkpoint for item {item_id} is partial; expected complete, prepared-only, or absent"
+        )
+    try:
+        assert_checkpoint_bytes_match(
+            item_id=item_id,
+            prompt_bytes=prompt_bytes,
+            evidence_json_bytes=evidence_json_bytes,
+            checkpoint_paths=checkpoint_paths,
+        )
+        checkpoint_validated = load_validated_checkpoint_response(checkpoint_paths["validated_response"])
+        raw_envelope = load_raw_envelope_checkpoint(checkpoint_paths["raw_envelope"])
+        allowed_cluster_ids = {choice["cluster_id"] for choice in item["choices"]}
+        allowed_choice_ids = {choice["choice_id"] for choice in item["choices"]}
+        validated = validate_model_response(
+            checkpoint_validated,
+            item_id=item_id,
+            allowed_cluster_ids=allowed_cluster_ids,
+            allowed_choice_ids=allowed_choice_ids,
+        )
+        if restore is None:
+            raise WeeklyLlmRunnerError(
+                f"provider {options.provider_name!r} does not support checkpoint resume"
+            )
+        return restore(
+            item_id=item_id,
+            prompt_text=prompt_text,
+            image_paths=image_paths,
+            workspace_dir=workspace_dir,
+            validated_response=validated,
+            raw_envelope=raw_envelope,
+            attachment_shas_by_choice=_attachment_shas_by_choice(image_attachments),
+        )
+    except WeeklyLlmResumeError as error:
+        raise WeeklyLlmRunnerError(str(error)) from error
+    except CursorCliProviderError as error:
+        raise WeeklyLlmRunnerError(str(error)) from error
+
+
 def _validate_item_results_consistent(results: list[ProviderResult]) -> tuple[str, ...]:
     if not results:
         raise WeeklyLlmRunnerError("provider run produced no item results")
@@ -208,7 +311,15 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
     zip_bytes = options.kit_path.read_bytes()
     kit_zip_sha256 = sha256_hex(zip_bytes)
     execution_id = options.execution_id or str(uuid.uuid4())
+    if options.resume_from is not None:
+        from .weekly_llm_resume import WeeklyLlmResumeError, validate_resume_source
+
+        try:
+            validate_resume_source(resume_root=options.resume_from, execution_id=execution_id)
+        except WeeklyLlmResumeError as error:
+            raise WeeklyLlmRunnerError(str(error)) from error
     output_dir = _prepare_execution_output_dir(options.output_dir, execution_id)
+    resume_root = options.resume_from
     private_dir = output_dir / "private"
     private_dir.mkdir(parents=True, exist_ok=True)
     _chmod_or_raise(private_dir, 0o700)
@@ -264,11 +375,18 @@ def run_weekly_llm_score(options: RunnerOptions) -> RunnerResult:
             )
             item_workspace_dir = kit_dir / "items" / item_id
             image_paths = [attachment["path"] for attachment in workspace["image_attachments"]]
-            provider_result = options.provider.score_item(
+            provider_result = _score_or_restore_item(
+                options=options,
+                provider=options.provider,
                 item_id=item_id,
+                item=item,
                 prompt_text=prompt_text,
+                prompt_bytes=prompt_bytes,
+                evidence_json_bytes=evidence_json_bytes,
                 image_paths=image_paths,
+                image_attachments=workspace["image_attachments"],
                 workspace_dir=str(item_workspace_dir),
+                resume_root=resume_root,
             )
             item_results.append(provider_result)
             _write_private_json(private_dir / f"{item_id}.raw.json", provider_result.raw_envelope)

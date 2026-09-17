@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -61,16 +62,22 @@ from foldarium_pipeline.weekly_llm_providers.cursor import (
     build_cursor_user_message,
     serialize_sdk_value,
 )
+from foldarium_pipeline.weekly_llm_provenance import canonical_private_json
 from foldarium_pipeline.weekly_llm_providers.cursor_cli import (
     CURSOR_CLI_MODEL_ID,
+    CursorCliProvider,
     CursorCliProviderError,
+    ProviderResult,
+    ProviderUsage,
     build_cursor_cli_command,
+    build_cursor_cli_expected_checkpoint_prompt,
     cursor_cli_tools_manifest,
     model_display_matches_sol_high,
     parse_cursor_cli_models_text,
     parse_cursor_cli_stream,
     preflight_cursor_cli_auth,
     resolve_verified_contact_sheet_paths,
+    restore_cursor_cli_item_from_checkpoint,
 )
 from foldarium_pipeline.weekly_llm_providers.fake import FakeProvider
 from foldarium_pipeline.weekly_llm_response import WeeklyLlmResponseError, validate_model_response
@@ -85,9 +92,11 @@ from foldarium_pipeline.weekly_selector import build_selector_kit, canonical_jso
 from foldarium_pipeline.weekly_selector_prompt import (
     SELECTOR_MODEL_RESPONSE_SCHEMA,
     SELECTOR_PROMPT_SHA256,
+    SELECTOR_SYSTEM_PROMPT,
 )
 
 EXECUTION_ID = "00000000-0000-4000-8000-000000000123"
+_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT = "Evaluate item target-1 with canonical kit evidence."
 
 
 def pdb_line(
@@ -697,6 +706,7 @@ def _sample_cursor_cli_stream(
     extra_lines: Sequence[str] | None = None,
     include_thinking: bool = False,
     include_assistant_shell_word: bool = False,
+    provider_prompt: str | None = None,
 ) -> str:
     init = {
         "type": "system",
@@ -716,6 +726,19 @@ def _sample_cursor_cli_stream(
         "usage": {"inputTokens": 10, "outputTokens": 5},
     }
     lines = [json.dumps(init)]
+    if provider_prompt is not None:
+        lines.append(
+            json.dumps(
+                {
+                    "type": "user",
+                    "session_id": "session-1",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": provider_prompt}],
+                    },
+                }
+            )
+        )
     if include_thinking:
         lines.extend(
             [
@@ -935,6 +958,23 @@ class WeeklyLlmCursorCliTests(unittest.TestCase):
                         workspace_dir=temporary,
                         image_paths=[sheet],
                         extra_lines=[bad_started],
+                    ),
+                    workspace_dir=temporary,
+                    allowed_image_paths=[sheet],
+                )
+
+    def test_unknown_event_type_message_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sheet = _make_contact_sheet(root=Path(temporary), item_id="target-1", choice_id="choice-a")
+            with self.assertRaisesRegex(
+                CursorCliProviderError,
+                r"forbidden cursor-agent event type: telemetry/started",
+            ):
+                parse_cursor_cli_stream(
+                    _sample_cursor_cli_stream(
+                        workspace_dir=temporary,
+                        image_paths=[sheet],
+                        extra_lines=[json.dumps({"type": "telemetry", "subtype": "started"})],
                     ),
                     workspace_dir=temporary,
                     allowed_image_paths=[sheet],
@@ -1492,6 +1532,369 @@ class WeeklyLlmRunnerTests(unittest.TestCase):
                     )
                 )
 
+    def test_runner_resume_invokes_cursor_cli_restore_item_checkpoint(self) -> None:
+        engine_version = "legacy-cli-integration-version"
+        zip_bytes, kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            allowlist_path = Path(tmp) / "allowlist.json"
+            allowlist_path.write_text(json.dumps(["api.cursor.com"]), encoding="utf-8")
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.mkdir(parents=True)
+            (prior / "private").mkdir(parents=True, exist_ok=True)
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ), mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.preflight_cursor_cli_auth",
+                return_value={"logged_in": True},
+            ):
+                provider = CursorCliProvider()
+            _seed_legacy_cursor_cli_item_checkpoint(
+                prior_execution_dir=prior,
+                kit_path=kit_path,
+                item_id="target-1",
+                provider=provider,
+                engine_version=engine_version,
+            )
+            score_calls: list[str] = []
+
+            def tracked_score_item(self, **kwargs):  # noqa: ANN001, ANN003
+                score_calls.append(kwargs["item_id"])
+                return _mock_cursor_cli_score_item_result(
+                    self,
+                    item_id=kwargs["item_id"],
+                    image_paths=kwargs["image_paths"],
+                    workspace_dir=kwargs["workspace_dir"],
+                )
+
+            with mock.patch.object(CursorCliProvider, "score_item", tracked_score_item):
+                result = run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=Path(tmp) / "retry",
+                        provider=provider,
+                        display_name="GPT-5.6 Sol",
+                        provider_name="cursor",
+                        execution_id=EXECUTION_ID,
+                        resume_from=prior,
+                        network_allowlist_path=allowlist_path,
+                        egress_enforcement_asserted=True,
+                    )
+                )
+            self.assertEqual(score_calls, ["target-2"])
+            restored_raw = json.loads(
+                (result.private_dir / "target-1.raw.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                restored_raw.get("checkpoint_format"),
+                "legacy-pre-snapshot-revalidated",
+            )
+
+    def test_runner_resume_allows_supabase_descriptors_and_reveal_prompt(self) -> None:
+        engine_version = "legacy-cli-integration-version"
+        zip_bytes, kit = _build_kit_zip()
+        self.assertIn("reveal", SELECTOR_SYSTEM_PROMPT.lower())
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            allowlist_path = Path(tmp) / "allowlist.json"
+            allowlist_path.write_text(json.dumps(["api.cursor.com"]), encoding="utf-8")
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.mkdir(parents=True)
+            (prior / "private").mkdir(parents=True, exist_ok=True)
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ), mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.preflight_cursor_cli_auth",
+                return_value={"logged_in": True},
+            ):
+                provider = CursorCliProvider()
+            _seed_legacy_cursor_cli_item_checkpoint(
+                prior_execution_dir=prior,
+                kit_path=kit_path,
+                item_id="target-1",
+                provider=provider,
+                engine_version=engine_version,
+            )
+            evidence_bytes = (
+                prior / "private" / "items" / "target-1" / "candidate-evidence.json"
+            ).read_bytes()
+            self.assertIn(b"supabase://", evidence_bytes)
+
+            def tracked_score_item(self, **kwargs):  # noqa: ANN001, ANN003
+                return _mock_cursor_cli_score_item_result(
+                    self,
+                    item_id=kwargs["item_id"],
+                    image_paths=kwargs["image_paths"],
+                    workspace_dir=kwargs["workspace_dir"],
+                )
+
+            with mock.patch.object(CursorCliProvider, "score_item", tracked_score_item):
+                run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=Path(tmp) / "retry",
+                        provider=provider,
+                        display_name="GPT-5.6 Sol",
+                        provider_name="cursor",
+                        execution_id=EXECUTION_ID,
+                        resume_from=prior,
+                        network_allowlist_path=allowlist_path,
+                        egress_enforcement_asserted=True,
+                    )
+                )
+
+    def test_runner_resume_rejects_tampered_user_event_prompt(self) -> None:
+        engine_version = "legacy-cli-integration-version"
+        zip_bytes, _kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            allowlist_path = Path(tmp) / "allowlist.json"
+            allowlist_path.write_text(json.dumps(["api.cursor.com"]), encoding="utf-8")
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.mkdir(parents=True)
+            (prior / "private").mkdir(parents=True, exist_ok=True)
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ), mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.preflight_cursor_cli_auth",
+                return_value={"logged_in": True},
+            ):
+                provider = CursorCliProvider()
+            _seed_legacy_cursor_cli_item_checkpoint(
+                prior_execution_dir=prior,
+                kit_path=kit_path,
+                item_id="target-1",
+                provider=provider,
+                engine_version=engine_version,
+            )
+            raw_path = prior / "private" / "target-1.raw.json"
+            raw_envelope = json.loads(raw_path.read_text(encoding="utf-8"))
+            for event in raw_envelope["events"]:
+                if event.get("type") == "user":
+                    event["message"]["content"][0]["text"] += "\nINJECTED LEAK"
+            raw_path.write_text(canonical_json(raw_envelope) + "\n", encoding="utf-8")
+
+            with mock.patch.object(CursorCliProvider, "score_item") as mock_score:
+                with self.assertRaisesRegex(
+                    WeeklyLlmRunnerError,
+                    "expected provider input",
+                ):
+                    run_weekly_llm_score(
+                        RunnerOptions(
+                            kit_path=kit_path,
+                            output_dir=Path(tmp) / "retry",
+                            provider=provider,
+                            display_name="GPT-5.6 Sol",
+                            provider_name="cursor",
+                            execution_id=EXECUTION_ID,
+                            resume_from=prior,
+                            network_allowlist_path=allowlist_path,
+                            egress_enforcement_asserted=True,
+                        )
+                    )
+                mock_score.assert_not_called()
+
+    def test_resume_skips_scored_items(self) -> None:
+        zip_bytes, kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            fixture_path = Path(tmp) / "fixture.json"
+            fixture_path.write_text(json.dumps(_fake_fixture(kit)), encoding="utf-8")
+
+            class CountingFakeProvider(FakeProvider):
+                def __init__(self, *args, **kwargs) -> None:
+                    super().__init__(*args, **kwargs)
+                    self.score_calls: list[str] = []
+
+                def score_item(self, **kwargs):  # noqa: ANN003
+                    self.score_calls.append(kwargs["item_id"])
+                    return super().score_item(**kwargs)
+
+            output_dir = Path(tmp) / "out"
+            run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=output_dir,
+                    provider=FakeProvider(fixture_path=fixture_path),
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                )
+            )
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(output_dir / EXECUTION_ID, prior)
+            for suffix in (
+                "prompt.txt",
+                "candidate-evidence.json",
+                "validated-response.json",
+            ):
+                (prior / "private" / "items" / "target-2" / suffix).unlink()
+            (prior / "private" / "target-2.raw.json").unlink()
+            _strip_completed_benchmark_artifacts(prior)
+
+            retry_dir = Path(tmp) / "retry"
+            provider = CountingFakeProvider(fixture_path=fixture_path)
+            run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=retry_dir,
+                    provider=provider,
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                    resume_from=prior,
+                )
+            )
+            self.assertEqual(provider.score_calls, ["target-2"])
+
+    def test_resume_scores_prepared_only_item_after_provider_failure(self) -> None:
+        zip_bytes, kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            fixture_path = Path(tmp) / "fixture.json"
+            fixture_path.write_text(json.dumps(_fake_fixture(kit)), encoding="utf-8")
+
+            class CountingFakeProvider(FakeProvider):
+                def __init__(self, *args, **kwargs) -> None:
+                    super().__init__(*args, **kwargs)
+                    self.score_calls: list[str] = []
+
+                def score_item(self, **kwargs):  # noqa: ANN003
+                    self.score_calls.append(kwargs["item_id"])
+                    return super().score_item(**kwargs)
+
+            output_dir = Path(tmp) / "out"
+            run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=output_dir,
+                    provider=FakeProvider(fixture_path=fixture_path),
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                )
+            )
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(output_dir / EXECUTION_ID, prior)
+            _strip_completed_benchmark_artifacts(prior)
+            (prior / "private" / "items" / "target-2" / "validated-response.json").unlink()
+            (prior / "private" / "target-2.raw.json").unlink()
+            prior_prompt = (
+                prior / "private" / "items" / "target-2" / "prompt.txt"
+            ).read_bytes()
+            prior_evidence = (
+                prior / "private" / "items" / "target-2" / "candidate-evidence.json"
+            ).read_bytes()
+
+            provider = CountingFakeProvider(fixture_path=fixture_path)
+            result = run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=Path(tmp) / "retry",
+                    provider=provider,
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                    resume_from=prior,
+                )
+            )
+            self.assertEqual(provider.score_calls, ["target-2"])
+            retry_prompt = (
+                result.private_dir / "items" / "target-2" / "prompt.txt"
+            ).read_bytes()
+            retry_evidence = (
+                result.private_dir / "items" / "target-2" / "candidate-evidence.json"
+            ).read_bytes()
+            self.assertEqual(retry_prompt, prior_prompt)
+            self.assertEqual(retry_evidence, prior_evidence)
+            source_prompt = (
+                prior / "private" / "items" / "target-2" / "prompt.txt"
+            ).read_bytes()
+            self.assertEqual(source_prompt, prior_prompt)
+
+    def test_resume_rejects_partial_checkpoint(self) -> None:
+        zip_bytes, kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            fixture_path = Path(tmp) / "fixture.json"
+            fixture_path.write_text(json.dumps(_fake_fixture(kit)), encoding="utf-8")
+            output_dir = Path(tmp) / "out"
+            run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=output_dir,
+                    provider=FakeProvider(fixture_path=fixture_path),
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                )
+            )
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(output_dir / EXECUTION_ID, prior)
+            _strip_completed_benchmark_artifacts(prior)
+            (prior / "private" / "items" / "target-1" / "validated-response.json").unlink()
+            with self.assertRaisesRegex(WeeklyLlmRunnerError, "partial"):
+                run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=Path(tmp) / "retry",
+                        provider=FakeProvider(fixture_path=fixture_path),
+                        display_name="Fake Provider",
+                        provider_name="fake",
+                        execution_id=EXECUTION_ID,
+                        resume_from=prior,
+                    )
+                )
+
+    def test_resume_rejects_prompt_mismatch(self) -> None:
+        zip_bytes, kit = _build_kit_zip()
+        with tempfile.TemporaryDirectory() as tmp:
+            kit_path = Path(tmp) / "kit.zip"
+            kit_path.write_bytes(zip_bytes)
+            fixture_path = Path(tmp) / "fixture.json"
+            fixture_path.write_text(json.dumps(_fake_fixture(kit)), encoding="utf-8")
+            output_dir = Path(tmp) / "out"
+            run_weekly_llm_score(
+                RunnerOptions(
+                    kit_path=kit_path,
+                    output_dir=output_dir,
+                    provider=FakeProvider(fixture_path=fixture_path),
+                    display_name="Fake Provider",
+                    provider_name="fake",
+                    execution_id=EXECUTION_ID,
+                )
+            )
+            prior = Path(tmp) / "resume-source" / EXECUTION_ID
+            prior.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(output_dir / EXECUTION_ID, prior)
+            _strip_completed_benchmark_artifacts(prior)
+            prompt_path = prior / "private" / "items" / "target-1" / "prompt.txt"
+            prompt_path.write_bytes(prompt_path.read_bytes() + b"tamper")
+            with self.assertRaisesRegex(WeeklyLlmRunnerError, "prompt bytes"):
+                run_weekly_llm_score(
+                    RunnerOptions(
+                        kit_path=kit_path,
+                        output_dir=Path(tmp) / "retry",
+                        provider=FakeProvider(fixture_path=fixture_path),
+                        display_name="Fake Provider",
+                        provider_name="fake",
+                        execution_id=EXECUTION_ID,
+                        resume_from=prior,
+                    )
+                )
+
     def test_repeated_execution_id_fails_on_nonempty_child_dir(self) -> None:
         zip_bytes, kit = _build_kit_zip()
         with tempfile.TemporaryDirectory() as tmp:
@@ -1577,6 +1980,503 @@ class WeeklyLlmRunnerTests(unittest.TestCase):
             submit_benchmark_execution("https://example.test/benchmarks", "token", execution)
             second = body_holder["body"]
         self.assertEqual(first, second)
+
+
+def _build_cursor_cli_checkpoint_envelope(
+    *,
+    workspace_dir: str,
+    image_paths: Sequence[str],
+    provider: CursorCliProvider,
+    item_prompt_text: str,
+    item_id: str = "target-1",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    resolved_paths = list(resolve_verified_contact_sheet_paths(image_paths))
+    provider_prompt = build_cursor_cli_expected_checkpoint_prompt(
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=resolved_paths,
+    )
+    stream = _sample_cursor_cli_stream(
+        workspace_dir=workspace_dir,
+        image_paths=resolved_paths,
+        result_json=_sample_cursor_cli_response(item_id=item_id),
+        provider_prompt=provider_prompt,
+    )
+    parsed = parse_cursor_cli_stream(
+        stream,
+        workspace_dir=workspace_dir,
+        allowed_image_paths=resolved_paths,
+    )
+    validated = json.loads(_sample_cursor_cli_response(item_id=item_id))
+    envelope = {
+        "events": [dict(event) for event in parsed.raw_events],
+        "requested_model_id": CURSOR_CLI_MODEL_ID,
+        "observed_model_label": parsed.observed_model_label,
+        "allowed_contact_sheet_paths": resolved_paths,
+        "request_id": parsed.request_id,
+        "session_id": parsed.session_id,
+        "engine_version": parsed.engine_version or provider.engine_version,
+        "provider_config_snapshot": dict(provider._provider_config),
+        "tools_manifest_snapshot": dict(provider._tools_manifest),
+        "reasoning_trace_retained": False,
+        "discarded_thinking_event_count": parsed.discarded_thinking_event_count,
+        "usage": {
+            "input_tokens": parsed.usage.input_tokens,
+            "output_tokens": parsed.usage.output_tokens,
+            "cache_read_tokens": parsed.usage.cache_read_tokens,
+            "cache_creation_tokens": parsed.usage.cache_creation_tokens,
+            "reasoning_tokens": parsed.usage.reasoning_tokens,
+            "duration_ms": parsed.usage.duration_ms,
+        },
+    }
+    return envelope, validated
+
+
+def _mock_cursor_cli_score_item_result(
+    provider: CursorCliProvider,
+    *,
+    item_id: str,
+    image_paths: Sequence[str],
+    workspace_dir: str,
+) -> ProviderResult:
+    resolved_paths = resolve_verified_contact_sheet_paths(image_paths)
+    parsed = parse_cursor_cli_stream(
+        _sample_cursor_cli_stream(
+            workspace_dir=workspace_dir,
+            image_paths=resolved_paths,
+            result_json=_sample_cursor_cli_response(item_id=item_id),
+        ),
+        workspace_dir=workspace_dir,
+        allowed_image_paths=resolved_paths,
+    )
+    envelope = {
+        "events": [dict(event) for event in parsed.raw_events],
+        "requested_model_id": CURSOR_CLI_MODEL_ID,
+        "observed_model_label": parsed.observed_model_label,
+        "allowed_contact_sheet_paths": list(resolved_paths),
+        "request_id": parsed.request_id,
+        "session_id": parsed.session_id,
+        "engine_version": parsed.engine_version or provider.engine_version,
+        "provider_config_snapshot": dict(provider._provider_config),
+        "tools_manifest_snapshot": dict(provider._tools_manifest),
+        "reasoning_trace_retained": False,
+        "discarded_thinking_event_count": parsed.discarded_thinking_event_count,
+        "usage": {
+            "input_tokens": parsed.usage.input_tokens,
+            "output_tokens": parsed.usage.output_tokens,
+            "cache_read_tokens": parsed.usage.cache_read_tokens,
+            "cache_creation_tokens": parsed.usage.cache_creation_tokens,
+            "reasoning_tokens": parsed.usage.reasoning_tokens,
+            "duration_ms": parsed.usage.duration_ms,
+        },
+    }
+    return ProviderResult(
+        response=parsed.response,
+        requested_id=CURSOR_CLI_MODEL_ID,
+        observed_ids=parsed.observed_ids,
+        requested_effort="high",
+        applied_effort=parsed.applied_effort,
+        effort_reporting="reported" if parsed.applied_effort is not None else "not_exposed",
+        engine_name="cursor-agent",
+        engine_version=parsed.engine_version or provider.engine_version,
+        run_id=parsed.run_id,
+        session_id=parsed.session_id,
+        usage=parsed.usage,
+        provider_config=provider._provider_config,
+        tools_manifest=provider._tools_manifest,
+        raw_envelope=envelope,
+        raw_envelope_digest=sha256_hex(canonical_private_json(envelope)),
+    )
+
+
+def _seed_legacy_cursor_cli_item_checkpoint(
+    *,
+    prior_execution_dir: Path,
+    kit_path: Path,
+    item_id: str,
+    provider: CursorCliProvider,
+    engine_version: str,
+) -> None:
+    zip_bytes = kit_path.read_bytes()
+    with tempfile.TemporaryDirectory() as kit_tmp:
+        kit_dir = Path(kit_tmp)
+        manifest = extract_verified_kit(zip_bytes, output_dir=kit_dir)
+        item = next(row for row in manifest["items"] if row["item_id"] == item_id)
+        evidence_dir = prior_execution_dir / "evidence" / item_id
+        workspace = build_item_workspace(kit_dir=kit_dir, item=item, evidence_dir=evidence_dir)
+        prompt_text = render_item_prompt(item_id=item_id, item_evidence=workspace["item_evidence"])
+        prompt_bytes = prompt_text.encode("utf-8")
+        evidence_json_bytes = (canonical_json(workspace["item_evidence"]) + "\n").encode("utf-8")
+        item_private = prior_execution_dir / "private" / "items" / item_id
+        item_private.mkdir(parents=True, exist_ok=True)
+        item_private.joinpath("prompt.txt").write_bytes(prompt_bytes)
+        item_private.joinpath("candidate-evidence.json").write_bytes(evidence_json_bytes)
+        image_paths = [attachment["path"] for attachment in workspace["image_attachments"]]
+        item_workspace_dir = str(kit_dir / "items" / item_id)
+        envelope, validated = _build_legacy_cursor_cli_checkpoint_envelope(
+            workspace_dir=item_workspace_dir,
+            image_paths=image_paths,
+            provider=provider,
+            item_id=item_id,
+            item_prompt_text=prompt_text,
+            engine_version=engine_version,
+        )
+        item_private.joinpath("validated-response.json").write_bytes(
+            (canonical_json(validated) + "\n").encode("utf-8")
+        )
+        (prior_execution_dir / "private" / f"{item_id}.raw.json").write_text(
+            canonical_json(envelope) + "\n",
+            encoding="utf-8",
+        )
+
+
+def _build_legacy_cursor_cli_checkpoint_envelope(
+    *,
+    workspace_dir: str,
+    image_paths: Sequence[str],
+    provider: CursorCliProvider,
+    item_prompt_text: str,
+    item_id: str = "target-1",
+    engine_version: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    envelope, validated = _build_cursor_cli_checkpoint_envelope(
+        workspace_dir=workspace_dir,
+        image_paths=image_paths,
+        provider=provider,
+        item_prompt_text=item_prompt_text,
+        item_id=item_id,
+    )
+    legacy = {
+        key: value
+        for key, value in envelope.items()
+        if key not in {"provider_config_snapshot", "tools_manifest_snapshot"}
+    }
+    legacy["engine_version"] = engine_version or provider.engine_version
+    return legacy, validated
+
+
+def _strip_completed_benchmark_artifacts(execution_dir: Path) -> None:
+    for artifact in (
+        "benchmark.execution.json",
+        "benchmark.public.json",
+        "submission.json",
+    ):
+        path = execution_dir / artifact
+        if path.exists():
+            path.unlink()
+
+
+def _cursor_cli_item_layout(root: Path, *, item_id: str, choice_id: str) -> tuple[str, str]:
+    workspace_dir = root / "items" / item_id
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    sheet = _make_contact_sheet(root=root, item_id=item_id, choice_id=choice_id)
+    return str(workspace_dir), sheet
+
+
+class WeeklyLlmCursorCliResumeTests(unittest.TestCase):
+    def test_restore_cursor_cli_checkpoint_skips_live_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            restored = restore_cursor_cli_item_from_checkpoint(
+                item_id="target-1",
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                validated_response=validated,
+                raw_envelope=envelope,
+                provider_config=provider._provider_config,
+                tools_manifest=provider._tools_manifest,
+                attachment_shas_by_choice=attachment_shas,
+                default_engine_version=provider.engine_version,
+            )
+            self.assertEqual(restored.response["item_id"], "target-1")
+            self.assertEqual(restored.requested_id, CURSOR_CLI_MODEL_ID)
+
+    def test_restore_rejects_tampered_raw_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            envelope["events"][0]["model"] = "GPT-5.6 Sol 1M Extra High"
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaises(CursorCliProviderError):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=provider._tools_manifest,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_rejects_tampered_user_event_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            for event in envelope["events"]:
+                if event.get("type") == "user":
+                    event["message"]["content"][0]["text"] += "\nINJECTED LEAK"
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaisesRegex(CursorCliProviderError, "expected provider input"):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=provider._tools_manifest,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_rejects_validated_response_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            validated["clustered"]["confidence"] = 0.99
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaisesRegex(CursorCliProviderError, "validated checkpoint"):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=provider._tools_manifest,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_rejects_wrong_tools_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            bad_tools = dict(provider._tools_manifest)
+            bad_tools["allowed_tool"] = "shellToolCall"
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaisesRegex(CursorCliProviderError, "tools manifest"):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=bad_tools,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_legacy_snapshotless_envelope(self) -> None:
+        engine_version = "legacy-cli-version-from-main"
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_legacy_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                engine_version=engine_version,
+            )
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            restored = restore_cursor_cli_item_from_checkpoint(
+                item_id="target-1",
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                validated_response=validated,
+                raw_envelope=envelope,
+                provider_config=provider._provider_config,
+                tools_manifest=provider._tools_manifest,
+                attachment_shas_by_choice=attachment_shas,
+                default_engine_version=provider.engine_version,
+            )
+            self.assertEqual(
+                restored.raw_envelope.get("checkpoint_format"),
+                "legacy-pre-snapshot-revalidated",
+            )
+            self.assertIn("provider_config_snapshot", restored.raw_envelope)
+            self.assertNotIn("provider_config_snapshot", envelope)
+
+    def test_restore_legacy_rejects_tampered_envelope(self) -> None:
+        engine_version = "legacy-cli-version-from-main"
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_legacy_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                engine_version=engine_version,
+            )
+            envelope["usage"]["input_tokens"] = 999
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaisesRegex(CursorCliProviderError, "usage metadata"):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=provider._tools_manifest,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_rejects_partial_snapshot_envelope(self) -> None:
+        engine_version = "legacy-cli-version-from-main"
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace_dir, sheet = _cursor_cli_item_layout(
+                Path(temporary), item_id="target-1", choice_id="choice-a"
+            )
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value=engine_version,
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_legacy_cursor_cli_checkpoint_envelope(
+                workspace_dir=workspace_dir,
+                image_paths=[sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                engine_version=engine_version,
+            )
+            envelope["provider_config_snapshot"] = dict(provider._provider_config)
+            attachment_shas = {"choice-a": sha256_hex(Path(sheet).read_bytes())}
+            with self.assertRaisesRegex(CursorCliProviderError, "both provider snapshots or neither"):
+                restore_cursor_cli_item_from_checkpoint(
+                    item_id="target-1",
+                    item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                    workspace_dir=workspace_dir,
+                    image_paths=[sheet],
+                    validated_response=validated,
+                    raw_envelope=envelope,
+                    provider_config=provider._provider_config,
+                    tools_manifest=provider._tools_manifest,
+                    attachment_shas_by_choice=attachment_shas,
+                    default_engine_version=provider.engine_version,
+                )
+
+    def test_restore_maps_contact_sheets_to_new_evidence_root(self) -> None:
+        with tempfile.TemporaryDirectory() as old_root, tempfile.TemporaryDirectory() as new_root:
+            old_workspace, old_sheet = _cursor_cli_item_layout(
+                Path(old_root), item_id="target-1", choice_id="choice-a"
+            )
+            new_workspace, new_sheet = _cursor_cli_item_layout(
+                Path(new_root), item_id="target-1", choice_id="choice-a"
+            )
+            Path(new_sheet).write_bytes(Path(old_sheet).read_bytes())
+            with mock.patch(
+                "foldarium_pipeline.weekly_llm_providers.cursor_cli.cursor_cli_version",
+                return_value="test-cursor-agent-version",
+            ):
+                provider = CursorCliProvider()
+            envelope, validated = _build_cursor_cli_checkpoint_envelope(
+                workspace_dir=old_workspace,
+                image_paths=[old_sheet],
+                provider=provider,
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+            )
+            digest = sha256_hex(Path(new_sheet).read_bytes())
+            restored = restore_cursor_cli_item_from_checkpoint(
+                item_id="target-1",
+                item_prompt_text=_CURSOR_CLI_CHECKPOINT_ITEM_PROMPT,
+                workspace_dir=new_workspace,
+                image_paths=[new_sheet],
+                validated_response=validated,
+                raw_envelope=envelope,
+                provider_config=provider._provider_config,
+                tools_manifest=provider._tools_manifest,
+                attachment_shas_by_choice={"choice-a": digest},
+                default_engine_version=provider.engine_version,
+            )
+            self.assertIn(new_sheet, restored.raw_envelope["allowed_contact_sheet_paths"])
+            self.assertNotIn(old_sheet, restored.raw_envelope["allowed_contact_sheet_paths"])
 
 
 def _assert_secure_permissions(path: Path, expected_mode: int) -> None:

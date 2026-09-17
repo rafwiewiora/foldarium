@@ -15,6 +15,7 @@ from .cursor import build_cursor_user_message
 from ..weekly_llm_config import cursor_cli_provider_config
 from ..weekly_llm_contract import sha256_hex
 from ..weekly_llm_provenance import canonical_private_json
+from ..weekly_llm_resume import choice_id_from_contact_sheet_path
 from ..weekly_selector import canonical_json
 from ..weekly_selector_prompt import (
     SELECTOR_MODEL_RESPONSE_SCHEMA,
@@ -239,6 +240,34 @@ def _append_response_schema_section(*, base_prompt: str) -> str:
     )
 
 
+def _sorted_contact_sheet_path_strings(image_paths: Sequence[str]) -> tuple[str, ...]:
+    return tuple(sorted(str(Path(p).expanduser().resolve()) for p in image_paths))
+
+
+def build_cursor_cli_expected_checkpoint_prompt(
+    *,
+    item_prompt_text: str,
+    allowed_contact_sheet_paths: Sequence[str],
+) -> str:
+    if SELECTOR_SYSTEM_PROMPT.strip() not in build_cursor_user_message(item_prompt_text=item_prompt_text):
+        raise CursorCliProviderError("cursor-cli prompt must include canonical selector system prompt")
+    resolved_paths = _sorted_contact_sheet_path_strings(allowed_contact_sheet_paths)
+    return _append_contact_sheet_prompt_section(
+        base_prompt=_append_response_schema_section(
+            base_prompt=build_cursor_user_message(item_prompt_text=item_prompt_text),
+        ),
+        image_paths=resolved_paths,
+    )
+
+
+def build_cursor_cli_full_prompt(*, item_prompt_text: str, image_paths: Sequence[str]) -> str:
+    resolved_paths = resolve_verified_contact_sheet_paths(image_paths)
+    return build_cursor_cli_expected_checkpoint_prompt(
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=resolved_paths,
+    )
+
+
 def _append_contact_sheet_prompt_section(*, base_prompt: str, image_paths: Sequence[str]) -> str:
     lines = [
         "",
@@ -262,11 +291,9 @@ def build_cursor_cli_command(
     if SELECTOR_SYSTEM_PROMPT.strip() not in build_cursor_user_message(item_prompt_text=prompt_text):
         raise CursorCliProviderError("cursor-cli prompt must include canonical selector system prompt")
     resolved_paths = resolve_verified_contact_sheet_paths(image_paths)
-    full_prompt = _append_contact_sheet_prompt_section(
-        base_prompt=_append_response_schema_section(
-            base_prompt=build_cursor_user_message(item_prompt_text=prompt_text),
-        ),
-        image_paths=resolved_paths,
+    full_prompt = build_cursor_cli_expected_checkpoint_prompt(
+        item_prompt_text=prompt_text,
+        allowed_contact_sheet_paths=resolved_paths,
     )
     add_dirs = sorted({str(Path(path).parent) for path in resolved_paths})
     command = [
@@ -411,7 +438,11 @@ def _validate_non_tool_stream_event(event: Mapping[str, Any]) -> None:
     if event_type in _EXPLICIT_FORBIDDEN_EVENT_TYPES:
         raise CursorCliProviderError("cursor-agent stream contained forbidden event type")
     if event_type not in _ALLOWED_STREAM_EVENT_TYPES:
-        raise CursorCliProviderError("cursor-agent stream contained unknown event type")
+        subtype = event.get("subtype")
+        subtype_label = subtype if isinstance(subtype, str) else ""
+        raise CursorCliProviderError(
+            f"forbidden cursor-agent event type: {event_type}/{subtype_label}"
+        )
     if event_type == "system":
         if event.get("subtype") != "init":
             raise CursorCliProviderError("cursor-agent system event must be init")
@@ -581,6 +612,332 @@ def _int_or_none(value: Any) -> int | None:
     return None
 
 
+def _extract_user_message_text(event: Mapping[str, Any]) -> str:
+    if event.get("type") != "user":
+        raise CursorCliProviderError("cursor-agent resume user event type is invalid")
+    message = event.get("message")
+    if not isinstance(message, Mapping):
+        raise CursorCliProviderError("cursor-agent resume user message is missing")
+    if message.get("role") != "user":
+        raise CursorCliProviderError("cursor-agent resume user message role is invalid")
+    content = message.get("content")
+    if not isinstance(content, list) or len(content) != 1:
+        raise CursorCliProviderError("cursor-agent resume user message must contain exactly one content block")
+    block = content[0]
+    if not isinstance(block, Mapping):
+        raise CursorCliProviderError("cursor-agent resume user content block is invalid")
+    if set(block.keys()) != {"type", "text"} or block.get("type") != "text":
+        raise CursorCliProviderError("cursor-agent resume user content must be text-only")
+    text = block.get("text")
+    if not isinstance(text, str):
+        raise CursorCliProviderError("cursor-agent resume user message text is invalid")
+    return text
+
+
+def _validate_resume_user_event_prompt(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    item_prompt_text: str,
+    allowed_contact_sheet_paths: Sequence[str],
+) -> None:
+    user_events = [event for event in events if event.get("type") == "user"]
+    if len(user_events) != 1:
+        raise CursorCliProviderError("cursor-agent resume envelope must contain exactly one user event")
+    observed_prompt = _extract_user_message_text(user_events[0])
+    expected_prompt = build_cursor_cli_expected_checkpoint_prompt(
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=allowed_contact_sheet_paths,
+    )
+    if observed_prompt != expected_prompt:
+        raise CursorCliProviderError("cursor-agent resume user event prompt does not match expected provider input")
+
+
+def _validate_resume_init_cwd(*, init_cwd: str, item_id: str, current_workspace_dir: str) -> None:
+    if "://" in init_cwd:
+        raise CursorCliProviderError("cursor-agent init cwd must not contain external URLs")
+    old_path = Path(init_cwd)
+    if old_path.name != item_id:
+        raise CursorCliProviderError("cursor-agent init cwd basename must match item id")
+    current_path = Path(current_workspace_dir).resolve()
+    if current_path.name != item_id:
+        raise CursorCliProviderError("cursor-agent workspace basename must match item id")
+
+
+def _rewrite_contact_sheet_paths_in_event(
+    event: Mapping[str, Any],
+    *,
+    path_mapping: Mapping[str, str],
+) -> dict[str, Any]:
+    rewritten = dict(event)
+    if rewritten.get("type") != "tool_call":
+        if rewritten.get("type") == "system" and rewritten.get("subtype") == "init":
+            return rewritten
+        return rewritten
+    tool_call = rewritten.get("tool_call")
+    if not isinstance(tool_call, Mapping):
+        return rewritten
+    tool_copy = dict(tool_call)
+    read_call = tool_copy.get("readToolCall")
+    if isinstance(read_call, Mapping):
+        read_copy = dict(read_call)
+        args = read_copy.get("args")
+        if isinstance(args, Mapping):
+            args_copy = dict(args)
+            old_path = _resolve_tool_path(args_copy.get("path"))
+            if old_path is not None:
+                mapped = path_mapping.get(old_path)
+                if mapped is None:
+                    raise CursorCliProviderError("cursor-agent resume stream references unmapped contact sheet")
+                args_copy["path"] = mapped
+            read_copy["args"] = args_copy
+        result = read_copy.get("result")
+        if isinstance(result, Mapping):
+            result_copy = dict(result)
+            success = result_copy.get("success")
+            if isinstance(success, Mapping):
+                success_copy = dict(success)
+                if "path" in success_copy:
+                    old_success_path = _resolve_tool_path(success_copy.get("path"))
+                    if old_success_path is not None:
+                        mapped = path_mapping.get(old_success_path)
+                        if mapped is None:
+                            raise CursorCliProviderError(
+                                "cursor-agent resume stream references unmapped contact sheet success path"
+                            )
+                        success_copy["path"] = mapped
+                result_copy["success"] = success_copy
+            read_copy["result"] = result_copy
+        tool_copy["readToolCall"] = read_copy
+    rewritten["tool_call"] = tool_copy
+    return rewritten
+
+
+def _rewrite_stream_events_for_resume(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    path_mapping: Mapping[str, str],
+    current_workspace_dir: str,
+) -> list[dict[str, Any]]:
+    rewritten: list[dict[str, Any]] = []
+    for event in events:
+        event_copy = _rewrite_contact_sheet_paths_in_event(event, path_mapping=path_mapping)
+        if event_copy.get("type") == "system" and event_copy.get("subtype") == "init":
+            init_copy = dict(event_copy)
+            init_copy["cwd"] = str(Path(current_workspace_dir).resolve())
+            rewritten.append(init_copy)
+        else:
+            rewritten.append(event_copy)
+    return rewritten
+
+
+def _events_to_stream_stdout(events: Sequence[Mapping[str, Any]]) -> str:
+    return "\n".join(json.dumps(dict(event), separators=(",", ":")) for event in events) + "\n"
+
+
+_LEGACY_CHECKPOINT_FORMAT = "legacy-pre-snapshot-revalidated"
+
+
+def _snapshot_presence(raw_envelope: Mapping[str, Any]) -> tuple[bool, bool]:
+    config_snapshot = raw_envelope.get("provider_config_snapshot")
+    tools_snapshot = raw_envelope.get("tools_manifest_snapshot")
+    has_config = isinstance(config_snapshot, Mapping)
+    has_tools = isinstance(tools_snapshot, Mapping)
+    return has_config, has_tools
+
+
+def _validate_restored_envelope_metadata(
+    *,
+    raw_envelope: Mapping[str, Any],
+    parsed: CursorCliParseResult,
+    default_engine_version: str,
+    legacy_checkpoint: bool,
+) -> None:
+    envelope_requested = raw_envelope.get("requested_model_id")
+    if envelope_requested != CURSOR_CLI_MODEL_ID:
+        raise CursorCliProviderError("cursor-agent resume envelope requested_model_id mismatch")
+    if parsed.observed_model_label != raw_envelope.get("observed_model_label"):
+        raise CursorCliProviderError("cursor-agent resume observed model label mismatch")
+
+    envelope_request_id = raw_envelope.get("request_id")
+    envelope_session_id = raw_envelope.get("session_id")
+    if envelope_request_id is not None and parsed.request_id != envelope_request_id:
+        raise CursorCliProviderError("cursor-agent resume request_id mismatch")
+    if envelope_session_id is not None and parsed.session_id != envelope_session_id:
+        raise CursorCliProviderError("cursor-agent resume session_id mismatch")
+
+    envelope_engine_version = raw_envelope.get("engine_version")
+    if not isinstance(envelope_engine_version, str) or not envelope_engine_version.strip():
+        raise CursorCliProviderError("cursor-agent resume envelope engine_version is missing")
+    if legacy_checkpoint:
+        if default_engine_version != envelope_engine_version:
+            raise CursorCliProviderError(
+                "cursor-agent resume legacy checkpoint requires current engine_version to match envelope"
+            )
+    else:
+        resolved_engine_version = parsed.engine_version or default_engine_version
+        if resolved_engine_version != envelope_engine_version:
+            raise CursorCliProviderError("cursor-agent resume engine_version mismatch")
+
+    if raw_envelope.get("reasoning_trace_retained") is not False:
+        raise CursorCliProviderError("cursor-agent resume envelope reasoning_trace_retained must be false")
+
+    discarded = raw_envelope.get("discarded_thinking_event_count")
+    if discarded is not None and not isinstance(discarded, int):
+        raise CursorCliProviderError("cursor-agent resume discarded_thinking_event_count is invalid")
+
+    envelope_usage = raw_envelope.get("usage")
+    if not isinstance(envelope_usage, Mapping):
+        raise CursorCliProviderError("cursor-agent resume envelope usage is missing")
+    for field, parsed_value in (
+        ("input_tokens", parsed.usage.input_tokens),
+        ("output_tokens", parsed.usage.output_tokens),
+        ("cache_read_tokens", parsed.usage.cache_read_tokens),
+        ("cache_creation_tokens", parsed.usage.cache_creation_tokens),
+        ("reasoning_tokens", parsed.usage.reasoning_tokens),
+        ("duration_ms", parsed.usage.duration_ms),
+    ):
+        stored = envelope_usage.get(field)
+        if stored is not None and stored != parsed_value:
+            raise CursorCliProviderError("cursor-agent resume usage metadata mismatch")
+
+
+def restore_cursor_cli_item_from_checkpoint(
+    *,
+    item_id: str,
+    item_prompt_text: str,
+    workspace_dir: str,
+    image_paths: Sequence[str],
+    validated_response: Mapping[str, Any],
+    raw_envelope: Mapping[str, Any],
+    provider_config: Mapping[str, Any],
+    tools_manifest: Mapping[str, Any],
+    attachment_shas_by_choice: Mapping[str, str],
+    default_engine_version: str,
+) -> ProviderResult:
+    from ..weekly_llm_resume import map_resume_contact_sheet_paths
+
+    has_config_snapshot, has_tools_snapshot = _snapshot_presence(raw_envelope)
+    if has_config_snapshot != has_tools_snapshot:
+        raise CursorCliProviderError(
+            "cursor-agent resume envelope must include both provider snapshots or neither"
+        )
+    legacy_checkpoint = not has_config_snapshot and not has_tools_snapshot
+
+    events = raw_envelope.get("events")
+    if not isinstance(events, list) or not events:
+        raise CursorCliProviderError("cursor-agent resume envelope is missing events")
+    event_dicts = [event for event in events if isinstance(event, Mapping)]
+    if len(event_dicts) != len(events):
+        raise CursorCliProviderError("cursor-agent resume envelope events are invalid")
+
+    old_allowed = raw_envelope.get("allowed_contact_sheet_paths")
+    if not isinstance(old_allowed, list) or not old_allowed:
+        raise CursorCliProviderError("cursor-agent resume envelope missing allowed_contact_sheet_paths")
+    _validate_resume_user_event_prompt(
+        event_dicts,
+        item_prompt_text=item_prompt_text,
+        allowed_contact_sheet_paths=[str(value) for value in old_allowed],
+    )
+    path_mapping = map_resume_contact_sheet_paths(
+        item_id=item_id,
+        old_allowed_paths=[str(value) for value in old_allowed],
+        current_image_paths=image_paths,
+        attachment_shas_by_choice=attachment_shas_by_choice,
+    )
+
+    init_events = [
+        event
+        for event in event_dicts
+        if event.get("type") == "system" and event.get("subtype") == "init"
+    ]
+    if len(init_events) != 1:
+        raise CursorCliProviderError("cursor-agent resume envelope must contain exactly one init event")
+    init_cwd = init_events[0].get("cwd")
+    if not isinstance(init_cwd, str):
+        raise CursorCliProviderError("cursor-agent resume init cwd is missing")
+    _validate_resume_init_cwd(
+        init_cwd=init_cwd,
+        item_id=item_id,
+        current_workspace_dir=workspace_dir,
+    )
+
+    rewritten_events = _rewrite_stream_events_for_resume(
+        event_dicts,
+        path_mapping=path_mapping,
+        current_workspace_dir=workspace_dir,
+    )
+    parsed = parse_cursor_cli_stream(
+        _events_to_stream_stdout(rewritten_events),
+        workspace_dir=workspace_dir,
+        allowed_image_paths=image_paths,
+    )
+    if canonical_json(parsed.response) != canonical_json(dict(validated_response)):
+        raise CursorCliProviderError("cursor-agent resume parsed response does not match validated checkpoint")
+
+    _validate_restored_envelope_metadata(
+        raw_envelope=raw_envelope,
+        parsed=parsed,
+        default_engine_version=default_engine_version,
+        legacy_checkpoint=legacy_checkpoint,
+    )
+    if not legacy_checkpoint:
+        stored_config = raw_envelope.get("provider_config_snapshot")
+        assert isinstance(stored_config, Mapping)
+        if dict(stored_config) != dict(provider_config):
+            raise CursorCliProviderError("cursor-agent resume provider config mismatch")
+        stored_tools = raw_envelope.get("tools_manifest_snapshot")
+        if tools_manifest is None or not isinstance(stored_tools, Mapping):
+            raise CursorCliProviderError("cursor-agent resume tools manifest mismatch")
+        if dict(stored_tools) != dict(tools_manifest):
+            raise CursorCliProviderError("cursor-agent resume tools manifest mismatch")
+
+    resolved_engine_version = (
+        raw_envelope.get("engine_version")
+        if legacy_checkpoint
+        else (parsed.engine_version or default_engine_version)
+    )
+    restored_envelope: dict[str, Any] = {
+        "events": rewritten_events,
+        "requested_model_id": CURSOR_CLI_MODEL_ID,
+        "observed_model_label": parsed.observed_model_label,
+        "allowed_contact_sheet_paths": list(resolve_verified_contact_sheet_paths(image_paths)),
+        "request_id": parsed.request_id,
+        "session_id": parsed.session_id,
+        "engine_version": resolved_engine_version,
+        "reasoning_trace_retained": False,
+        "discarded_thinking_event_count": raw_envelope.get("discarded_thinking_event_count", 0),
+        "usage": {
+            "input_tokens": parsed.usage.input_tokens,
+            "output_tokens": parsed.usage.output_tokens,
+            "cache_read_tokens": parsed.usage.cache_read_tokens,
+            "cache_creation_tokens": parsed.usage.cache_creation_tokens,
+            "reasoning_tokens": parsed.usage.reasoning_tokens,
+            "duration_ms": parsed.usage.duration_ms,
+        },
+        "provider_config_snapshot": dict(provider_config),
+        "tools_manifest_snapshot": dict(tools_manifest) if tools_manifest is not None else None,
+    }
+    if legacy_checkpoint:
+        restored_envelope["checkpoint_format"] = _LEGACY_CHECKPOINT_FORMAT
+    return ProviderResult(
+        response=parsed.response,
+        requested_id=CURSOR_CLI_MODEL_ID,
+        observed_ids=parsed.observed_ids,
+        requested_effort="high",
+        applied_effort=parsed.applied_effort,
+        effort_reporting="reported" if parsed.applied_effort is not None else "not_exposed",
+        engine_name="cursor-agent",
+        engine_version=str(resolved_engine_version),
+        run_id=parsed.run_id,
+        session_id=parsed.session_id,
+        usage=parsed.usage,
+        provider_config=provider_config,
+        tools_manifest=tools_manifest,
+        raw_envelope=restored_envelope,
+        raw_envelope_digest=sha256_hex(canonical_private_json(restored_envelope)),
+    )
+
+
 def _provider_usage_from_event(
     result_event: Mapping[str, Any],
     usage_payload: Any,
@@ -676,6 +1033,8 @@ class CursorCliProvider:
             "request_id": parsed.request_id,
             "session_id": parsed.session_id,
             "engine_version": parsed.engine_version or self.engine_version,
+            "provider_config_snapshot": dict(self._provider_config),
+            "tools_manifest_snapshot": dict(self._tools_manifest),
             "reasoning_trace_retained": False,
             "discarded_thinking_event_count": parsed.discarded_thinking_event_count,
             "usage": {
@@ -705,6 +1064,30 @@ class CursorCliProvider:
             raw_envelope_digest=sha256_hex(canonical_private_json(envelope)),
         )
 
+    def restore_item_checkpoint(
+        self,
+        *,
+        item_id: str,
+        prompt_text: str,
+        image_paths: Sequence[str],
+        workspace_dir: str,
+        validated_response: Mapping[str, Any],
+        raw_envelope: Mapping[str, Any],
+        attachment_shas_by_choice: Mapping[str, str],
+    ) -> ProviderResult:
+        return restore_cursor_cli_item_from_checkpoint(
+            item_id=item_id,
+            item_prompt_text=prompt_text,
+            workspace_dir=workspace_dir,
+            image_paths=image_paths,
+            validated_response=validated_response,
+            raw_envelope=raw_envelope,
+            provider_config=self._provider_config,
+            tools_manifest=self._tools_manifest,
+            attachment_shas_by_choice=attachment_shas_by_choice,
+            default_engine_version=self.engine_version,
+        )
+
 
 __all__ = [
     "CONTACT_SHEET_FILENAME",
@@ -713,6 +1096,8 @@ __all__ = [
     "CursorCliProvider",
     "CursorCliProviderError",
     "build_cursor_cli_command",
+    "build_cursor_cli_expected_checkpoint_prompt",
+    "build_cursor_cli_full_prompt",
     "cursor_cli_tools_manifest",
     "cursor_cli_version",
     "list_cursor_cli_model_ids",
@@ -721,4 +1106,5 @@ __all__ = [
     "parse_cursor_cli_stream",
     "preflight_cursor_cli_auth",
     "resolve_verified_contact_sheet_paths",
+    "restore_cursor_cli_item_from_checkpoint",
 ]

@@ -72,6 +72,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             egress_enforcement_asserted=args.assert_provider_egress_enforced,
             execution_id=args.execution_id,
             supersedes_execution_id=args.supersedes_execution_id,
+            resume_from=args.resume_from,
             submit_url=submit_url,
             submit_token=submit_token,
             dry_run_submit=dry_run_submit,
@@ -176,6 +177,12 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--display-name", default=None)
     run_parser.add_argument("--execution-id", default=None)
     run_parser.add_argument("--supersedes-execution-id", default=None)
+    run_parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help="prior incomplete execution directory (contains private/ and evidence/)",
+    )
     run_parser.add_argument(
         "--network-allowlist",
         type=Path,
