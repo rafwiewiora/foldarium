@@ -43,6 +43,7 @@ def reconcile_weekly(
     preview_version: str, production_suffix: str, apply: bool = False,
     max_actions: int = 4, available_drivers: tuple[str, ...] = (),
     benchmark_policy: Mapping[str, Any] | None = None,
+    lifecycle_scope: Mapping[str, Any] | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> dict[str, Any]:
     """One bounded pass; dry-run never enqueues, claims, or calls an executor.
@@ -60,7 +61,7 @@ def reconcile_weekly(
         snapshot = store.snapshot()
         return plan_reconciliation(snapshot, now=clock(), gates=gates,
             preview_version=preview_version, production_suffix=production_suffix,
-            available_drivers=available_drivers, benchmark_policy=benchmark_policy), snapshot
+            available_drivers=available_drivers, benchmark_policy=benchmark_policy, lifecycle_scope=lifecycle_scope), snapshot
 
     initial, snapshot = plan()
     result = {**initial, "apply": apply, "executed": [], "failed_actions": snapshot.get("failed_actions", [])}

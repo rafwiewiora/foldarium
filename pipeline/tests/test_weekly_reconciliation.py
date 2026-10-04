@@ -28,8 +28,8 @@ def snapshot(*rounds, campaigns=None):
     return {'campaigns': campaigns if campaigns is not None else [{'campaign_id': 'wwpdb-2026-10-03', 'release_date': '2026-10-03', 'runs': []}], 'rounds': list(rounds)}
 
 
-def plan(state, gates=ALL, drivers=(), policy=None):
-    return plan_reconciliation(state, now=NOW, gates=gates, preview_version='v4', production_suffix='beta-v2', available_drivers=drivers, benchmark_policy=policy)
+def plan(state, gates=ALL, drivers=(), policy=None, scope=None):
+    return plan_reconciliation(state, now=NOW, gates=gates, preview_version='v4', production_suffix='beta-v2', available_drivers=drivers, benchmark_policy=policy, lifecycle_scope=scope)
 
 
 def kinds(result):
@@ -118,6 +118,50 @@ class PlannerTests(unittest.TestCase):
         a = plan(state)
         state['rounds'].reverse()
         self.assertEqual(a['actions'], plan(state)['actions'])
+
+    def test_ambiguous_legacy_production_does_not_enroll_or_repair_siblings(self):
+        rows = [round_row('prototype-' + str(i), automation_policy=None, kit=None, featured_registered=False, evaluation_ready=False) for i in range(6)]
+        rows.append(round_row('already-published', status='revealed', automation_policy=None, retrospective_published=True))
+        policy = {'schema': 'foldarium.weekly-benchmark-policy/v1', 'policy_id': 'explicit-none', 'required_methods': []}
+        result = plan(snapshot(*rows), policy=policy)
+        self.assertFalse(any(a['identity'] in {r['round_id'] for r in rows} for a in result['actions']))
+        self.assertTrue(any(x['reason'] == 'ambiguous-production-identity-needs-explicit-scope' for x in result['blocked']))
+
+    def test_explicit_scope_binds_exact_legacy_round_and_manifest(self):
+        rows = [round_row('prototype', automation_policy=None), round_row('published', status='revealed', automation_policy=None)]
+        selected = {key: rows[1][key] for key in ('campaign_id', 'environment', 'round_id', 'blind_manifest_sha256')}
+        scope = {'schema': 'foldarium.weekly-lifecycle-scope/v1', 'canonical_rounds': [selected]}
+        result = plan(snapshot(*rows), scope=scope)
+        self.assertEqual([(a['kind'], a['identity']) for a in result['actions'] if a['identity'] in {'prototype', 'published'}], [('publish_retrospective', 'published')])
+        selected['blind_manifest_sha256'] = 'c' * 64
+        result = plan(snapshot(*rows), scope=scope)
+        self.assertFalse(any(a['identity'] in {'prototype', 'published'} for a in result['actions']))
+        self.assertIn('canonical-round-binding-unavailable:production', [x['reason'] for x in result['blocked']])
+
+    def test_frozen_archival_expectations_recover_only_explicitly_enrolled_sibling(self):
+        result = plan(snapshot(round_row('archive'), round_row('prototype', automation_policy=None)))
+        self.assertTrue(any(a['kind'] == 'reveal' and a['identity'] == 'archive' for a in result['actions']))
+        self.assertFalse(any(a['identity'] == 'prototype' for a in result['actions']))
+
+    def test_explicit_preview_identity_resolves_ambiguity_without_latest_guess(self):
+        rows = [round_row('preview-v4', environment='preview', campaign_id='wwpdb-2026-10-03', closes_at='2026-10-07T00:00:00Z'), round_row('preview-v5', environment='preview', campaign_id='wwpdb-2026-10-03', closes_at='2026-10-07T00:00:00Z')]
+        self.assertNotIn('promote', kinds(plan(snapshot(*rows))))
+        scope = {'schema': 'foldarium.weekly-lifecycle-scope/v1', 'canonical_rounds': [{key: rows[0][key] for key in ('campaign_id', 'environment', 'round_id', 'blind_manifest_sha256')}]}
+        self.assertEqual(next(a for a in plan(snapshot(*rows), scope=scope)['actions'] if a['kind'] == 'promote')['parameters']['source_round_id'], 'preview-v4')
+        scope['canonical_rounds'][0]['round_id'] = 'missing-preview'
+        self.assertEqual(plan(snapshot(*rows), scope=scope)['actions'], [])
+
+    def test_drafts_retired_and_never_opened_rounds_have_no_round_actions(self):
+        rows = [round_row('draft', status='draft'), round_row('withdrawn', status='withdrawn'), round_row('failed', status='failed'), round_row('never-opened', opened_at=None)]
+        self.assertFalse(any(a['identity'] in {r['round_id'] for r in rows} for a in plan(snapshot(*rows))['actions']))
+
+    def test_scope_rejects_unknown_fields_and_duplicate_campaign_environment(self):
+        from foldarium_pipeline.weekly_reconciliation import validate_lifecycle_scope
+        selected = {key: round_row()[key] for key in ('campaign_id', 'environment', 'round_id', 'blind_manifest_sha256')}
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            validate_lifecycle_scope({'schema': 'foldarium.weekly-lifecycle-scope/v1', 'canonical_rounds': [selected, selected]})
+        with self.assertRaisesRegex(ValueError, 'fields'):
+            validate_lifecycle_scope({'schema': 'foldarium.weekly-lifecycle-scope/v1', 'canonical_rounds': [{**selected, 'guess_latest': True}]})
 
 
 class MemoryStore:

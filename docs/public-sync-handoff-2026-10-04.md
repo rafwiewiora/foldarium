@@ -1,106 +1,83 @@
-# Public mirror sync preparation — 2026-10-04
+# Public mirror follow-up — 2026-10-04
 
-This handoff supersedes the August handoff for the current source review. It is
-a source integration and observed parity record; it does not claim that the
-public branch has been merged or that gated automation has been activated.
+This updates the same-day integration handoff after public pull request 19 merged
+as public `main` commit `a515a08`. The follow-up starts from that merged source;
+previous browser, scientific display, selection, and Storage retry changes are
+retained without being reapplied.
 
-## Tested source and prepared changes
+## Verified runtime state
 
-- Baseline: public `main` commit `c774982`.
-- **Completed:** compared the portable browser, API, pipeline, and migration
-  sources with the current operational source. The public browser and Selector
-  API already honor the explicit data environment using provider-neutral
-  configuration. No duplicate configuration fix is needed.
-- **Completed:** prepared a browser warning for
-  `item.metadata.display_pocket.message`, shown alongside the existing
-  alignment warning. Warnings stay visible in retrospective review and clear
-  when navigating to an unaffected question. No choices or scoring values are
-  changed by the browser patch.
-- **Completed:** corrected the stale Play-for-fun backlog status to shipped.
-- **Completed:** prepared the read-only `?cofolding=1` retrospective API and
-  browser integration. It loads SHA-verified evaluation contexts for published,
-  revealed production rounds and derives method rankings with raw-pose RMSD
-  below 1.5 Å. The population is explicitly `published_weekly_quiz`; denominators
-  count quiz questions with method poses, with missing confidence excluded from
-  top-1 only. No participant snapshots or ballots are loaded or returned.
-- **Completed:** integrated and tested the portable full-receptor display
-  fallback for predictions with no ligand contacts. It preserves raw predicted
-  coordinates and exact scientific scoring inputs, including far-away poses.
-- **Completed:** prepared featured-question navigation with optional all-question
-  exploration. The browser retains the full manifest order for vote, trace, and
-  performance ordinals. Resume tokens preserve the selected IDs and manifest
-  digest; historical tokens resume the full round. A five-question summary
-  leaves votes revisable and does not change full-round leaderboard denominators.
-- **Completed:** integrated the portable deterministic selector, service adapter,
-  immutable private audit catalog, and narrowly projected public selection marker.
-  The default is a uniform five-question draw. Optional weighting uses bounded
-  blind cluster diversity and cross-method disagreement, without answer data.
-  The full manifest, Selector kit, and benchmark populations remain unchanged.
-- **Completed:** integrated provider-independent reconciliation planning and the
-  service-role execution loop, plus durable leases, frozen benchmark policies,
-  exact artifact/receipt binding, and atomic reveal checks in the matching SQL
-  migration. Readiness checks bind the complete evaluation identity and window.
-- **Completed:** the featured-selection and automation-outbox migrations were
-  applied to the operational database. The shared browser and worker code were
-  deployed; newly introduced automation gates remain disabled.
-- **Completed:** prepared bounded retry for immutable content-addressed Storage
-  uploads after transient transport or service failures. Every attempt preserves
-  exact bytes and rejects digest conflicts; RPCs and mutable writes do not retry.
-- **Pending:** verify the complete featured-selection and reconciliation flows
-  before enabling gated actions. Applied schema and matching browser assets do
-  not imply that inference, selection, reveal, or publication ran automatically.
-- **Completed:** the deployed cofolding endpoint was verified against three
-  published weeks, with explicit population and metric definitions.
-- **Completed:** the final shared browser parity check passed against the public
-  production origin, including featured navigation and session-resume sources.
-- **Pending:** complete public review and merge; runtime end-to-end validation
-  remains separate from matching browser assets.
+- **Completed:** five featured questions are registered for the current
+  37-question round. The marker is immutable, bound to the exact full blind
+  manifest, and verified through the public read boundary. Private selection
+  artifacts remain private. The full manifest, Selector kit, and scientific
+  benchmark population retain all 37 questions.
+- **Completed:** the browser supports the featured subset and optional full-round
+  exploration while preserving canonical question ordinals. Resume tokens keep
+  the same selection; historical sessions keep their original full scope.
+- **Completed:** the production cofolding endpoint serves three published weeks
+  with explicit population and metric definitions. Counts describe published quiz
+  questions with method poses, not unpublished prediction campaigns.
+- **Completed:** the featured-selection and automation-outbox migrations and the
+  corresponding browser and worker sources were deployed. Immutable Storage
+  upload retries were also deployed.
+- **Pending:** the new weekly assembly run has not yet completed. The scientific
+  display fallback and upload retry retain fail-closed artifact validation.
+- **Pending:** recurring reconciliation, inference, selection, reveal, and
+  publication activation. All newly introduced automation gates remain disabled;
+  registering one selection does not enable a recurring schedule.
+
+## Portable follow-up source
+
+- **Completed:** mirrored exact lifecycle scope in the provider-independent
+  planner, service loop, and tests. Each canonical identity binds campaign,
+  environment, round, and blind-manifest SHA. Ambiguous historical siblings stay
+  blocked unless explicitly scoped or already enrolled by frozen expectations.
+  The planner does not infer the preferred round from a version label.
+- **Completed:** mirrored the immutable inference-budget initialization migration
+  and its isolated PostgreSQL behavioral harness. Its service-only claim grants
+  initialization once per exact frozen execution/kit/config/budget. An executor
+  must retain and validate the existing ledger after every subsequent claim,
+  including after an ambiguous acknowledgement or complete volume loss.
+- **Pending:** operational rollout of the new budget-initialization contract and
+  any separately reviewed inference executor. This public schema is not an
+  executable provider launcher and enables no paid calls.
 
 ## Intentional exclusions
 
-Credentials, live runtime configuration, private data, pre-reveal ballots,
-operator logs, access gates, deployment SDKs and runtime profiles, and
-spend-producing schedules remain outside this mirror. Hosting-specific route
-and environment adapters are not copied into the portable server.
+Credentials, live runtime configuration, private data and artifacts, pre-reveal
+ballots, operator logs, recovery execution identifiers, access gates, deployment
+SDKs and profiles, and spend-producing schedules remain outside this mirror.
+Hosting-specific route adapters and the private canonical lifecycle scope are
+not copied. The schema and tests contain synthetic fixtures only.
 
 The operational journal, exact-date recovery helpers, deployment-specific
-reconciliation executor/tests, and unattended provider launchers serve excluded
-runtime adapters; they are not included in this preparation. Generic planning,
-registration, and artifact verification remain independently usable and tested.
-The public tree retains its local defaults, loopback development support,
-portable environment names, and pinned browser dependency. The Supabase adapter
-changes add featured-selection registration and bounded immutable upload retry,
-while preserving local execution backend defaults.
-
-The portable backend source, both new migrations, and their tests match the
-accepted operational source exactly. Browser code retains the intentional local
-configuration boundary described in `production-parity.md`. Source preparation
-alone does not certify that a scheduler is running or that migrations are live.
+reconciliation executor/tests, and unattended provider launchers remain excluded.
+The public tree preserves its local defaults, loopback development support,
+portable environment names, and pinned browser dependency. Shared planner,
+service-loop, migration, and database-harness source matches accepted operational
+source; provider launch adapters are independently maintained and reviewed.
 
 ## Verification
 
-- Baseline production parity: all seven shared browser targets and the public
-  configuration contract passed against `https://www.foldarium.org`.
-- Prepared browser changes: `npm test` passed 608 tests, with one expected skip
-  because the optional WebAssembly package was not built.
-- Portable scientific pipeline: 589 tests passed, including predicted-pocket
-  recovery, featured selection, reconciliation, artifact binding, and immutable
-  Storage upload retry tests.
-- Both isolated PostgreSQL behavioral harnesses passed: featured selection tests
-  cover immutable IDs and hashes, service-only registration, private projection,
-  and view-return RPC compatibility; reconciliation tests cover leases, bounded
-  retries, exact readiness, artifact bindings, and service-only privileges.
-- `npm run audit:public` passed for 2,390 tracked files. An additional scan of
-  all 34 changed files found no credential patterns, private workspace paths,
-  or recovery execution identifiers. No excluded operational files were copied.
-- `git diff --check` passed.
-- Final production parity: all seven shared browser targets and the public
-  configuration contract passed against `https://www.foldarium.org`. This
-  supersedes the earlier expected pre-deployment asset mismatches; it does not
-  by itself verify database or scheduled-worker state.
+- Follow-up JavaScript suite: 608 tests passed with one expected optional
+  WebAssembly skip. Production parity again passed for all seven shared browser
+  targets and the public configuration contract.
+- Follow-up portable pipeline: 595 tests passed, including six additional exact
+  lifecycle-scope regressions.
+- The new isolated PostgreSQL harness passed one-time initialization, repeated
+  claims, exact source/config/kit/budget binding, immutable authority, open voting
+  compatibility, and service-only privilege checks.
+- Public audit passed for 2,392 tracked files. The eight changed files passed
+  additional credential-pattern, private-path, and recovery-identifier checks.
+- All five newly mirrored portable source, test, and migration files match the
+  accepted operational source exactly; `git diff --check` passed.
+- Scientific evaluation recovery remains pending separately; this follow-up
+  does not claim that the next complete weekly publication has succeeded.
 
-The production database, object store, runtime deployment, and public Git source
-are independently versioned. The applied migration head is
-`20261004090000_add_weekly_automation_outbox.sql`; the optional legacy data
-release is unchanged. This source review does not certify runtime lifecycle
-health or activation of any new automation gate.
+The database, object store, runtime deployment, and public Git source are
+independently versioned. The previously applied migration head was
+`20261004090000_add_weekly_automation_outbox.sql`; the prepared budget anchor is
+`20261004170000_anchor_weekly_inference_budget.sql`. The optional legacy data
+release is unchanged. Matching source does not certify lifecycle completion or
+activation of any gate.
