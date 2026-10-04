@@ -41,7 +41,9 @@ changes. Earlier audited incomplete-reference handling remains intact.
 - Completed: public-tree audit passed for 2,431 tracked files; all 42 changed
   files passed credential and private-runtime scans. All seven shared browser
   modules and public configuration matched production.
-- Pending: pull-request CI including full database startup/reset.
+- Completed: the public pull request 22 code revision passed all six CI jobs,
+  including Supabase startup and clean migration reset, both Python environments,
+  JavaScript tests, Rust mapper tests, and repository-wide secret scanning.
 - Pending: live historical publication and recovery completion. This source
   handoff does not authorize new scopes or paid inference and does not claim
   that historical research has already been published.
