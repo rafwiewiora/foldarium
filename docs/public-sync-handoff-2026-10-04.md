@@ -35,10 +35,17 @@ reproducible analysis of previously published Foldseek evidence.
 - Completed: real PostgreSQL service-role ACL, pre-reveal, production-environment,
   and manifest-binding checks; public-tree audit of 2,442 tracked files and
   credential/private-runtime scans of all 30 changed files.
-- Pending: production browser parity and public CI, including full clean Supabase
-  migration replay and repository-wide secret scanning.
-- Pending: production feature verification and any future v5 activation. Source
-  inclusion does not claim deployment or authorize inference or experiments.
+- Completed: seven shared production browser modules and public configuration
+  match exactly; the featured-question module also matches. Retrospective source
+  differs only by the intentionally excluded deployment password gate.
+- Completed: the code revision passed all six public CI jobs, including clean
+  Supabase startup and migration reset, JavaScript, both Python environments,
+  Rust, and repository-wide secret scanning.
+- Deployed: featured API/schema and shared browser source. The historical draw
+  frozen after voting closed correctly remains ineligible; no completed featured
+  research cohort is fabricated. Production verification of a future eligible
+  published cohort and any v5 activation remain pending. This mirror does not
+  authorize inference or experiments.
 
 ## Intentional exclusions
 

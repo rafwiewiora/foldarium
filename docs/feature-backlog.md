@@ -68,8 +68,10 @@ Prepared source remains **planned** until its production flow is verified.
 - **Prepared:** every selected question counts toward completion, while verified
   unscorable references stay outside accuracy. Only completed assignments enter
   featured all-time totals; legacy full-round history remains separately visible.
-- **Verified:** accepted operational source, focused scoring and provenance
-  tests, and database permission guards. Production verification is pending.
+- **Verified:** accepted and deployed API/browser/schema, focused scoring and
+  provenance tests, database permission guards, and shared browser parity.
+  Historical post-close draws correctly remain ineligible. Verification of the
+  first eligible published cohort remains pending.
 
 ### Versioned hydrogen-aware intake
 
