@@ -221,10 +221,39 @@ def plan_reconciliation(
         productions = [r for r in rounds if r["campaign_id"] == cid and r["environment"] == "production" and r["status"] not in {"failed", "withdrawn"}]
         if not previews and not productions:
             pending = [r for r in campaign.get("runs", []) if r["status"] in {"pending", "queued"} and r.get("attempt_count", 0) == 0]
+            repairs = []
+            for run in campaign.get("runs", []):
+                dispatch = run.get("dispatch")
+                if run["status"] == "failed" and run.get("attempt_count") == 1 and run.get("max_attempts") == 2:
+                    if dispatch and dispatch["attempt_number"] == 2:
+                        repairs.append((run, dispatch, "observe" if dispatch.get("call_id") else "dispatch"))
+                    else:
+                        block(run["run_id"], "legacy-authorized-retry-needs-exact-dispatch-recovery")
+                elif run["status"] == "running" and run.get("lease_expires_at") and timestamp(run["lease_expires_at"]) <= now:
+                    if dispatch and dispatch.get("call_id") and dispatch["attempt_number"] == run.get("attempt_count"):
+                        repairs.append((run, dispatch, "worker_loss"))
+                    else:
+                        block(run["run_id"], "expired-worker-needs-exact-terminal-call-evidence")
+            for run, dispatch, phase in repairs:
+                add("reconcile_prediction_dispatch", dispatch["dispatch_id"], "predictions", campaign_id=cid,
+                    run_id=run["run_id"], attempt_number=dispatch["attempt_number"], phase=phase)
             if pending:
                 for run in pending:
-                    add("dispatch_prediction", run["run_id"], "predictions", campaign_id=cid, run_id=run["run_id"])
+                    dispatch = run.get("dispatch")
+                    if dispatch and dispatch.get("call_id"):
+                        add("reconcile_prediction_dispatch", dispatch["dispatch_id"], "predictions", campaign_id=cid,
+                            run_id=run["run_id"], attempt_number=1, phase="observe")
+                    else:
+                        original = Action("dispatch_prediction", run["run_id"], {"campaign_id": cid, "run_id": run["run_id"]}, "predictions")
+                        prior = snapshot.get("action_history", {}).get(original.key, {}).get("dispatch_receipt")
+                        if run.get("dispatch_tracking_eligible") is False and not prior:
+                            block(run["run_id"], "legacy-initial-dispatch-needs-exact-call-evidence")
+                        else:
+                            add("dispatch_prediction", run["run_id"], "predictions", campaign_id=cid, run_id=run["run_id"])
             else:
+                # Keep this desired stage present while retry handoffs run.
+                # Otherwise the outbox can mistake a temporary dependency for
+                # completed assembly and never revisit this same campaign key.
                 add("advance_preview", cid, "preview", release_date=release,
                     round_id=f"preview-weekly-{release}-nextweekly-{preview_version}")
         elif previews and not productions:

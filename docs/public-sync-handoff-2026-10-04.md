@@ -117,9 +117,29 @@ The 2,454-file public-tree audit and eight-file credential/runtime scan pass.
 Completed: the symlink-hardening follow-up is accepted in the operational source,
 and the private catalog migration has been applied. All six code-revision CI
 jobs passed, including clean Supabase startup/reset and repository-wide secrets.
-Pending: operational worker deployment verification before public merge. The public source
+Completed: the operational worker bundle and stored reconciliation schedule are
+verified deployed. The public source
 excludes the hosted failure hook and its wrapper test, private operational records,
 live profiles, credentials, logs, native artifacts, and schedules. Integrators
 must catch diagnostic failures and still publish the original scientific failure.
 Migration `20261005010000_preserve_prediction_failure_diagnostics.sql` is included
 as source; its presence alone does not claim any database is migrated.
+
+## Follow-up: durable prediction handoffs
+
+Prepared source mirrors the accepted attempt-bound dispatch library, reconciliation
+planner, lease status fields, service-only migration and portable tests. Unknown
+submission outcomes retain their original intent; exact terminal worker proof and
+an expired matching lease are required for loss disposition. Complete verified
+logs-only diagnostics permit only the existing bounded retry; native or incomplete
+evidence requires artifact recovery.
+
+Completed: 19 focused tests, 665 JavaScript tests (one optional WebAssembly skip),
+722 scientific Python tests, and 719 dependency-light tests (148 optional skips).
+Real PostgreSQL dispatch guards, the 2,459-file public-tree audit, ten-file
+credential/runtime scan and all seven production browser parity checks pass.
+Production worker cutover and migrations
+through `20261005020000` are verified; public CI remains pending. No hosted
+worker functions, SDK integration tests, profiles, schedules, operational records,
+credentials or live artifacts are included. The new migration depends on the
+private diagnostics catalog migration and does not itself integrate a launcher.

@@ -24,7 +24,7 @@ class OutputExpired(ModalTimeout):
 
 
 def node(call_id='fc-old', status='PENDING', children=None):
-    return SimpleNamespace(function_call_id=call_id, status=SimpleNamespace(name=status), children=children or [])
+    return SimpleNamespace(function_call_id=call_id, task_id='ta-fixture', status=SimpleNamespace(name=status), children=children or [])
 
 
 class DispatchObservationTests(unittest.TestCase):
