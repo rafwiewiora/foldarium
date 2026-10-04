@@ -32,10 +32,12 @@ from .evaluation import (
     released_partial_reference_override_for_item,
 )
 from .quiz import QUIZ_SCHEMA_VERSION, build_reveal_manifest, manifest_sha256
-from .selection import SELECTION_POLICY_VERSION
+from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION
+from .ligand_normalization import LIGAND_SMILES_HEAVY_ATOM_POLICY, remove_all_hydrogen_atoms
 from .weekly_quiz import (
     LEGACY_LIGAND_ORDER_POLICY,
     SUPPORTED_LEGACY_LIGAND_ORDER,
+    _weekly_ligand_eligibility,
     legacy_ligand_topology_digest,
 )
 
@@ -361,6 +363,67 @@ def _validate_legacy_clustering_ligand_binding(
         )
 
 
+def _validate_item_ligand_eligibility(
+    item: Mapping[str, Any], eligibility: Mapping[str, Any], *,
+    identity_round_id: str, item_id: str,
+) -> dict[str, Any]:
+    """Bind eligibility to the exact ligand, including audited explicit-H removal.
+
+    The v4 dependency-free intake counter counted bracket H as a heavy atom.
+    Assembly retained that source eligibility but separately recorded the exact
+    hydrogen-free graph used for all poses. Preserve both immutable records;
+    accept their differing counts only when the complete normalization, graph,
+    and per-choice audit proves why they differ. This is not a count tolerance.
+    """
+    ligand = item["ligand"]
+    source_count = eligibility.get("heavy_atoms")
+    normalized_count = ligand.get("heavy_atoms")
+    if source_count == normalized_count:
+        return _validate_private_ligand_eligibility(ligand, eligibility)
+    clustering = item.get("clustering")
+    mapping = clustering.get("ligand_atom_mapping") if isinstance(clustering, Mapping) else None
+    if (
+        not isinstance(mapping, Mapping)
+        or type(source_count) is not int
+        or type(normalized_count) is not int
+        or source_count <= normalized_count
+        or mapping.get("heavy_atom_normalization_policy") != LIGAND_SMILES_HEAVY_ATOM_POLICY
+        or mapping.get("selected_ligand_metadata_heavy_atom_count") != source_count
+        or mapping.get("metadata_heavy_atom_count_matches_normalized") is not False
+        or mapping.get("heavy_atom_count") != normalized_count
+        or type(mapping.get("removed_explicit_hydrogen_count")) is not int
+        or mapping["removed_explicit_hydrogen_count"] != source_count - normalized_count
+    ):
+        raise WednesdayRevealError("private ligand_eligibility disagrees with item ligand")
+    # Validate the untouched source policy/pass/component/SMILES digest first.
+    validated = _validate_private_ligand_eligibility(
+        {**ligand, "heavy_atoms": source_count}, eligibility,
+    )
+    if normalized_count < HEAVY_ATOM_MINIMUM:
+        raise WednesdayRevealError("normalized ligand is below the heavy-atom eligibility minimum")
+    try:
+        recomputed = _weekly_ligand_eligibility(
+            eligibility["component_id"], source_count, eligibility["smiles"],
+        )
+        from rdkit import Chem
+        source = Chem.MolFromSmiles(eligibility["smiles"])
+        if source is None:
+            raise ValueError("invalid SMILES")
+        heavy, removed = remove_all_hydrogen_atoms(source, Chem)
+    except Exception as exc:
+        raise WednesdayRevealError("could not verify the audited ligand normalization") from exc
+    if (
+        not _ligand_eligibility_records_equal(validated, recomputed)
+        or heavy.GetNumAtoms() != normalized_count
+        or removed != source_count - normalized_count
+    ):
+        raise WednesdayRevealError("ligand normalization does not explain the eligibility count")
+    _validate_legacy_clustering_ligand_binding(
+        item, validated, identity_round_id=identity_round_id, item_id=item_id,
+    )
+    return validated
+
+
 def _validated_round(
     round_record: Mapping[str, Any],
     private: Mapping[str, Any],
@@ -458,10 +521,12 @@ def _validated_round(
             if isinstance(candidate, Mapping):
                 recovered = candidate
         if isinstance(eligibility, Mapping):
-            validated_eligibility = _validate_private_ligand_eligibility(ligand, eligibility)
+            validated_eligibility = _validate_item_ligand_eligibility(
+                item, eligibility, identity_round_id=identity_round_id, item_id=item_id,
+            )
             if recovered is not None:
-                recovered_eligibility = _validate_private_ligand_eligibility(
-                    ligand, recovered
+                recovered_eligibility = _validate_item_ligand_eligibility(
+                    item, recovered, identity_round_id=identity_round_id, item_id=item_id,
                 )
                 if not _ligand_eligibility_records_equal(
                     validated_eligibility, recovered_eligibility
@@ -470,7 +535,9 @@ def _validated_round(
                         "embedded and recovered ligand_eligibility disagree"
                     )
         elif recovered is not None:
-            validated_eligibility = _validate_private_ligand_eligibility(ligand, recovered)
+            validated_eligibility = _validate_item_ligand_eligibility(
+                item, recovered, identity_round_id=identity_round_id, item_id=item_id,
+            )
             _validate_legacy_clustering_ligand_binding(
                 item,
                 validated_eligibility,

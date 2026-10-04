@@ -21,8 +21,10 @@ retained without being reapplied.
 - **Completed:** the featured-selection and automation-outbox migrations and the
   corresponding browser and worker sources were deployed. Immutable Storage
   upload retries were also deployed.
-- **Pending:** the new weekly assembly run has not yet completed. The scientific
-  display fallback and upload retry retain fail-closed artifact validation.
+- **Completed:** the new Preview assembly is registered with 39 questions and
+  390 choices, including one explicit full-receptor display warning. The
+  scientific display fallback and upload retry retain artifact validation.
+- **Pending:** full evaluation and production publication of that new assembly.
 - **Pending:** recurring reconciliation, inference, selection, reveal, and
   publication activation. All newly introduced automation gates remain disabled;
   registering one selection does not enable a recurring schedule.
@@ -39,6 +41,13 @@ retained without being reapplied.
   initialization once per exact frozen execution/kit/config/budget. An executor
   must retain and validate the existing ledger after every subsequent claim,
   including after an ambiguous acknowledgement or complete volume loss.
+- **Completed:** mirrored strict compatibility for historical explicit-hydrogen
+  eligibility metadata. The validator recomputes the normalization, binds the
+  original SMILES and policy plus complete graph/choice audits, and enforces the
+  actual heavy-atom minimum. It preserves both recorded counts and all choices;
+  it does not repair manifests or tolerate arbitrary count differences.
+- **Pending:** operational evaluation and publication recovery verification for
+  the ligand-eligibility change.
 - **Pending:** operational rollout of the new budget-initialization contract and
   any separately reviewed inference executor. This public schema is not an
   executable provider launcher and enables no paid calls.
@@ -63,15 +72,17 @@ source; provider launch adapters are independently maintained and reviewed.
 - Follow-up JavaScript suite: 608 tests passed with one expected optional
   WebAssembly skip. Production parity again passed for all seven shared browser
   targets and the public configuration contract.
-- Follow-up portable pipeline: 595 tests passed, including six additional exact
-  lifecycle-scope regressions.
+- Follow-up portable pipeline: 601 tests passed, including six additional exact
+  lifecycle-scope and six audited ligand-normalization regressions.
 - The new isolated PostgreSQL harness passed one-time initialization, repeated
   claims, exact source/config/kit/budget binding, immutable authority, open voting
   compatibility, and service-only privilege checks.
-- Public audit passed for 2,392 tracked files. The eight changed files passed
+- Public audit passed for 2,393 tracked files. The ten changed files passed
   additional credential-pattern, private-path, and recovery-identifier checks.
-- All five newly mirrored portable source, test, and migration files match the
-  accepted operational source exactly; `git diff --check` passed.
+- The five lifecycle/budget source, test, and migration files plus the new
+  ligand-normalization test match accepted operational source exactly. The
+  reveal validator retains its existing provider-neutral module description;
+  its new scientific logic is identical. `git diff --check` passed.
 - Scientific evaluation recovery remains pending separately; this follow-up
   does not claim that the next complete weekly publication has succeeded.
 

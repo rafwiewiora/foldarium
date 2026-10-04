@@ -67,8 +67,8 @@ Prepared source remains **planned** until its production flow is verified.
   with SHA verification after ambiguous success. Permanent failures and digest
   conflicts fail closed; RPCs and mutable writes do not retry.
 - **Deployed:** the immutable-upload retry fix is running in production.
-- **Pending:** the new weekly assembly run is still awaiting completion and
-  live recovery verification.
+- **Verified:** the subsequent Preview assembly completed with 39 questions and
+  390 choices. Full evaluation and production publication remain separate work.
 
 ### Durable weekly reconciliation
 
@@ -94,6 +94,20 @@ Prepared source remains **planned** until its production flow is verified.
   supplies the contract and tests, without a scheduler, deployment configuration,
   credentials, or provider launcher.
 
+### Audited explicit-hydrogen eligibility compatibility
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Goal:** evaluate preserved historical ligand metadata when the original intake
+  atom counter included explicit hydrogen and assembly recorded its removal.
+- **Prepared:** strict compatibility requires the original passed selection
+  policy, exact SMILES digest, recomputed hydrogen removal, complete graph and
+  per-choice binding audits, and at least 15 actual heavy atoms. Both original
+  and normalized counts remain unchanged; arbitrary count differences fail.
+- **Verified:** regression tests cover preserved choices and manifests, missing
+  or changed provenance, unexplained differences, and the heavy-atom minimum.
+- **Pending:** operational evaluation and publication recovery verification.
+
 ### Predicted-pocket display recovery
 
 - **Status:** planned
@@ -105,7 +119,10 @@ Prepared source remains **planned** until its production flow is verified.
   simultaneous alignment warnings and retrospective review, pass regression tests.
 - **Verified:** the shared browser source matches production. This display
   fallback does not change scoring inputs, imply correctness, or remove choices.
-- **Pending:** confirm end-to-end runtime assembly behavior in the new round.
+- **Verified:** the new Preview assembly contains 39 questions and 390 choices,
+  including one explicit full-receptor warning.
+- **Pending:** complete scientific evaluation and production publication of the
+  new assembly.
 
 ## Candidate features
 
