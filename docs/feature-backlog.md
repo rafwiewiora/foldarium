@@ -162,6 +162,20 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** the subsequent Preview assembly completed with 39 questions and
   390 choices. Full evaluation and production publication remain separate work.
 
+### Bounded inference and completed-work recovery
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** portable provider and recovery libraries require an explicit
+  pinned model/configuration, frozen job and blind kit, one-time budget grant,
+  durable ledger, serialized execution, and caller-enforced API-only isolation.
+  No schedule, hosted launcher, default budget, or automatic invocation is added.
+- **Prepared:** rate-review expiry prevents new spending while allowing exact
+  completed artifacts and successful cached responses to be recovered. Missing
+  ledgers, ambiguous paid outcomes, or changed input/configuration fail closed.
+- **Verified:** synthetic no-network tests exercise the real runner and immutable
+  artifact registration retry. Production spend remains disabled.
+
 ### Acknowledged dispatch observation
 
 - **Status:** planned
