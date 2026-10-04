@@ -34,26 +34,28 @@ Prepared source remains **planned** until its production flow is verified.
   population and metric definitions. Full unpublished prediction campaigns are
   outside this aggregate's population.
 
-## Planned
-
 ### Five featured questions per week
 
-- **Status:** planned
+- **Status:** shipped
 - **Added:** 2026-10-04
 - **Goal:** offer a small default human quiz with optional exploration of every
   question. Keep the full prediction, selector, and benchmark populations.
-- **Prepared:** the browser accepts a manifest-bound featured selection,
+- **Shipped:** the browser accepts a manifest-bound featured selection,
   preserves full question ordinals for votes and recordings, restores the same
   selection on refresh, and summarizes five saved votes without claiming a
   complete full-round ballot. Existing sessions resume with all questions.
-- **Prepared:** deterministic uniform selection of up to five questions, optional
+- **Shipped:** deterministic uniform selection of up to five questions, optional
   bounded interestingness weighting, immutable private audit artifacts, and the
   manifest-bound public database marker. The score uses blind pose-cluster
   diversity and cross-method disagreement; missing novelty data does not block
   selection. Selection never shrinks the full benchmark or Selector kit.
-- **Deployed:** database registration and browser source; selection activation
-  remains gated. The default remains uniform; scores explain the candidate pool.
-- **Pending:** validate the complete flow before enabling the new selection gate.
+- **Verified:** an immutable five-question marker is registered for the current
+  37-question round, and the public boundary exposes only its safe marker. The
+  full manifest and benchmark population remain 37 questions.
+- **Pending:** recurring selection for future weeks remains part of gated
+  reconciliation; all newly introduced automation gates are still disabled.
+
+## Planned
 
 ### Immutable artifact upload recovery
 
@@ -64,7 +66,9 @@ Prepared source remains **planned** until its production flow is verified.
 - **Prepared:** bounded retries of the same bytes at the same content address,
   with SHA verification after ambiguous success. Permanent failures and digest
   conflicts fail closed; RPCs and mutable writes do not retry.
-- **Pending:** deployment and live recovery verification.
+- **Deployed:** the immutable-upload retry fix is running in production.
+- **Verified:** the subsequent Preview assembly completed with 39 questions and
+  390 choices. Full evaluation and production publication remain separate work.
 
 ### Durable weekly reconciliation
 
@@ -77,11 +81,38 @@ Prepared source remains **planned** until its production flow is verified.
   expectations, exact artifact verification, and atomic reveal eligibility.
   Gates default off and dry runs perform no mutations. Absent benchmark policy
   blocks release; an intentionally empty policy must be explicitly configured.
+- **Prepared:** exact lifecycle scope binds one canonical round and manifest per
+  campaign/environment. Ambiguous historical siblings are not automatically
+  enrolled, repaired, or promoted by guessing from version labels.
+- **Prepared:** a service-only database initialization grant survives complete
+  inference-volume loss. The grant is immutable and can initialize a budget only
+  once; retries must preserve an existing valid ledger. No provider launcher or
+  paid inference is enabled by this schema. The initialization migration has
+  been applied, while paid inference remains disabled.
+- **Prepared:** late handoffs atomically require an absent activation marker, so
+  competing successors cannot overwrite a completed handoff even when the
+  finite safety-close timestamp remains unchanged.
 - **Deployed:** database migration and operational execution adapter, with all
   new gates disabled.
 - **Pending:** live verification and deliberate gate activation. The public tree
   supplies the contract and tests, without a scheduler, deployment configuration,
   credentials, or provider launcher.
+
+### Audited explicit-hydrogen eligibility compatibility
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Goal:** evaluate preserved historical ligand metadata when the original intake
+  atom counter included explicit hydrogen and assembly recorded its removal.
+- **Prepared:** strict compatibility requires the original passed selection
+  policy, exact SMILES digest, recomputed hydrogen removal, complete graph and
+  per-choice binding audits, and at least 15 actual heavy atoms. Both original
+  and normalized counts remain unchanged; arbitrary count differences fail.
+- **Verified:** regression tests cover preserved choices and manifests, missing
+  or changed provenance, unexplained differences, and the heavy-atom minimum.
+- **Deployed:** the compatibility fix is running in production; a private
+  evaluation retry is underway.
+- **Pending:** completed evaluation and publication recovery verification.
 
 ### Predicted-pocket display recovery
 
@@ -94,7 +125,10 @@ Prepared source remains **planned** until its production flow is verified.
   simultaneous alignment warnings and retrospective review, pass regression tests.
 - **Verified:** the shared browser source matches production. This display
   fallback does not change scoring inputs, imply correctness, or remove choices.
-- **Pending:** confirm end-to-end runtime assembly behavior in the new round.
+- **Verified:** the new Preview assembly contains 39 questions and 390 choices,
+  including one explicit full-receptor warning.
+- **Pending:** complete scientific evaluation and production publication of the
+  new assembly.
 
 ## Candidate features
 

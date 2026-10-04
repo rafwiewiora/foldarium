@@ -88,6 +88,35 @@ def validate_benchmark_policy(policy: Mapping[str, Any] | None) -> dict[str, Any
     return {"schema": policy["schema"], "policy_id": policy["policy_id"], "required_methods": normalized}
 
 
+def validate_lifecycle_scope(scope: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Bind legacy canonical identities explicitly; never infer latest by name."""
+    if scope is None:
+        return None
+    if not isinstance(scope, Mapping) or set(scope) != {"schema", "canonical_rounds"} or scope["schema"] != "foldarium.weekly-lifecycle-scope/v1":
+        raise ValueError("invalid lifecycle scope")
+    rows = scope["canonical_rounds"]
+    if not isinstance(rows, list) or len(rows) > 1000:
+        raise ValueError("invalid canonical round scope")
+    seen = set()
+    normalized = []
+    for row in rows:
+        if not isinstance(row, Mapping) or set(row) != {"campaign_id", "environment", "round_id", "blind_manifest_sha256"}:
+            raise ValueError("invalid canonical round fields")
+        if row["environment"] not in {"preview", "production"}:
+            raise ValueError("invalid canonical environment")
+        for key in ("campaign_id", "round_id"):
+            if not isinstance(row[key], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", row[key]):
+                raise ValueError("invalid canonical identity")
+        if not isinstance(row["blind_manifest_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["blind_manifest_sha256"]):
+            raise ValueError("invalid canonical manifest digest")
+        key = (row["campaign_id"], row["environment"])
+        if key in seen:
+            raise ValueError("duplicate canonical campaign/environment")
+        seen.add(key)
+        normalized.append(dict(row))
+    return {"schema": scope["schema"], "canonical_rounds": sorted(normalized, key=lambda r: (r["campaign_id"], r["environment"]))}
+
+
 def benchmark_expectations(row: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     normalized = validate_benchmark_policy(policy)
     policy_digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -105,6 +134,7 @@ def plan_reconciliation(
     preview_version: str, production_suffix: str,
     available_drivers: tuple[str, ...] = (),
     benchmark_policy: Mapping[str, Any] | None = None,
+    lifecycle_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Plan one bounded pass, with dependencies reconsidered on the next snapshot.
 
@@ -116,6 +146,8 @@ def plan_reconciliation(
         raise ValueError("now requires a timezone")
     now = now.astimezone(timezone.utc)
     deployment_policy = validate_benchmark_policy(benchmark_policy)
+    scope = validate_lifecycle_scope(lifecycle_scope)
+    canonical = {(r["campaign_id"], r["environment"]): r for r in scope["canonical_rounds"]} if scope else {}
     rounds = list(snapshot["rounds"])
     campaigns = list(snapshot["campaigns"])
     if len(rounds) > 1000 or len(campaigns) > 1000:
@@ -136,6 +168,44 @@ def plan_reconciliation(
         else:
             block(identity, f"gate-disabled:{gate}:{kind}")
 
+    eligible_ids = set()
+    unavailable_scope_campaigns = set()
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in rounds:
+        if row["status"] in {"open", "revealed"} and row.get("opened_at"):
+            groups.setdefault((row["campaign_id"], row["environment"]), []).append(row)
+    for key, grouped in sorted(groups.items()):
+        selected = canonical.get(key)
+        if selected is not None:
+            matching = [r for r in grouped if r["round_id"] == selected["round_id"] and r["blind_manifest_sha256"] == selected["blind_manifest_sha256"]]
+            if len(matching) != 1:
+                block(key[0], "canonical-round-binding-unavailable:" + key[1])
+                unavailable_scope_campaigns.add(key[0])
+                continue
+            eligible_ids.add(matching[0]["round_id"])
+            for row in grouped:
+                if row["round_id"] != selected["round_id"]:
+                    block(row["round_id"], "outside-canonical-lifecycle-scope")
+        elif len(grouped) == 1:
+            eligible_ids.add(grouped[0]["round_id"])
+        elif key[1] == "production":
+            # Explicitly frozen round expectations are already durable enrollment.
+            # This preserves audited archival recovery without enrolling siblings.
+            for row in grouped:
+                if row.get("automation_policy") is not None:
+                    eligible_ids.add(row["round_id"])
+                else:
+                    block(row["round_id"], "ambiguous-production-identity-needs-explicit-scope")
+        elif not any(r["campaign_id"] == key[0] and r["environment"] == "production" and r["status"] not in {"failed", "withdrawn"} for r in rounds):
+            # Once production exists these old Preview experiments are dormant;
+            # no canonical mapping is needed merely to process production.
+            block(key[0], "ambiguous-preview-identity")
+
+    for key in canonical.keys() - groups.keys():
+        block(key[0], "canonical-round-binding-unavailable:" + key[1])
+        unavailable_scope_campaigns.add(key[0])
+    eligible_ids.difference_update(r["round_id"] for r in rounds if r["campaign_id"] in unavailable_scope_campaigns)
+
     saturday = now.date() - timedelta(days=(now.weekday() - 5) % 7)
     campaign_ids = {c["campaign_id"] for c in campaigns}
     current_campaign = f"wwpdb-{saturday.isoformat()}"
@@ -144,6 +214,8 @@ def plan_reconciliation(
     for campaign in sorted(campaigns, key=lambda c: c["release_date"]):
         cid = campaign["campaign_id"]
         release = campaign["release_date"]
+        if cid in unavailable_scope_campaigns:
+            continue
         # Existing Preview IDs are authoritative (including repaired v5 rounds).
         previews = [r for r in rounds if r["campaign_id"] == cid and r["environment"] == "preview" and r["status"] == "open"]
         productions = [r for r in rounds if r["campaign_id"] == cid and r["environment"] == "production" and r["status"] not in {"failed", "withdrawn"}]
@@ -156,12 +228,13 @@ def plan_reconciliation(
                 add("advance_preview", cid, "preview", release_date=release,
                     round_id=f"preview-weekly-{release}-nextweekly-{preview_version}")
         elif previews and not productions:
+            previews = [r for r in previews if r["round_id"] in eligible_ids]
             if len(previews) != 1:
                 block(cid, "ambiguous-preview-identity")
                 continue
             source = previews[0]
             if timestamp(source["closes_at"]) <= now:
-                block(cid, "expired-preview-needs-explicit-new-voting-window")
+                block(cid, "expired-preview-needs-explicit-historical-recovery")
                 continue
             if not gates.kits:
                 block(cid, "gate-disabled:kits:promotion-registers-kit")
@@ -171,10 +244,10 @@ def plan_reconciliation(
                 source_manifest_sha256=source["blind_manifest_sha256"],
                 opens_at=source["opens_at"], closes_at=source["closes_at"])
 
-    production = sorted([r for r in rounds if r["environment"] == "production" and r["opened_at"] and r["status"] in {"open", "revealed"}], key=lambda r: (timestamp(r["opens_at"]), r["round_id"]))
+    production = sorted([r for r in rounds if r["environment"] == "production" and r["round_id"] in eligible_ids], key=lambda r: (timestamp(r["opens_at"]), r["round_id"]))
     for row in sorted(rounds, key=lambda r: (r["opens_at"], r["round_id"])):
         rid = row["round_id"]
-        if row["environment"] != "production" or row["status"] not in {"open", "revealed"}:
+        if row["environment"] != "production" or row["round_id"] not in eligible_ids:
             continue
         binding = {"round_id": rid, "environment": row["environment"], "blind_manifest_sha256": row["blind_manifest_sha256"]}
         if row["status"] == "revealed":

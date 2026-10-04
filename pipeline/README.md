@@ -191,6 +191,20 @@ policy must be explicitly configured before a round can advance to release.
 Durable dispatch receipts and idempotent handlers are still needed because a
 database lease cannot make external compute dispatch exactly once.
 
+For historical campaigns with multiple candidate rounds, an optional
+`foldarium.weekly-lifecycle-scope/v1` object binds each canonical round to its
+campaign, environment, and exact blind-manifest SHA. The planner refuses
+ambiguous or unavailable identities instead of guessing from version names.
+Already frozen archival expectations remain enrolled without enrolling sibling
+rounds. Pass the same `lifecycle_scope` to the planner or service execution loop.
+
+The inference-budget migration adds a separate immutable first-launch authority.
+A service coordinator claims initialization for an exact frozen execution and kit
+only once. A retry, including one after a lost claim acknowledgement or complete
+volume loss, must require an existing valid budget ledger. The public database
+contract does not itself launch inference, provide credentials, or configure a
+spending policy; a separately reviewed executor must enforce those requirements.
+
 Apply the matching featured-selection migration before the automation-outbox
 migration in `supabase/migrations/`. These are prepared source contracts, not an
 assertion that an existing production database has been migrated. Provider
@@ -202,6 +216,7 @@ path as an optional argument:
 ```bash
 node pipeline/tests/check_weekly_featured_database.mjs
 node pipeline/tests/check_weekly_automation_database.mjs
+node pipeline/tests/check_weekly_inference_budget_database.mjs
 ```
 
 Install `@electric-sql/pglite` in an external test environment or pass its module

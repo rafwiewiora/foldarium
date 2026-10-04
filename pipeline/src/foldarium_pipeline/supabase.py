@@ -1488,6 +1488,7 @@ class SupabaseCoordinator(SupabasePublisher):
                 "closes_at": f"eq.{safety.isoformat()}",
                 "reveal_manifest": "is.null",
                 "revealed_at": "is.null",
+                "metadata->retrospective_release->>activated_by_round_id": "is.null",
             }
         )
         response = self._request(
