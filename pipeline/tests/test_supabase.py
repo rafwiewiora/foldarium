@@ -1961,6 +1961,10 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     row = previous if self.get_count == 0 else successor
                     self.get_count += 1
                     return FakeResponse(json.dumps([row]).encode())
+                query = parse_qs(urlsplit(request.full_url).query)
+                self.test_case.assertEqual(query['metadata->retrospective_release->>activated_by_round_id'], ['is.null'])
+                if getattr(self, 'concurrent_activation', False):
+                    return FakeResponse(b'[]')
                 payload = json.loads(request.data)  # type: ignore[attr-defined]
                 self.test_case.assertEqual(payload["closes_at"], safety_close)  # type: ignore[attr-defined]
                 delayed = payload["metadata"]["retrospective_release"]
@@ -1998,6 +2002,13 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         )
         self.assertEqual(result["closes_at"], safety_close)
         self.assertEqual(len(opener.calls), 3)
+
+        racing_opener = LateHandoffOpener()
+        racing_opener.test_case = self
+        racing_opener.concurrent_activation = True
+        racing_coordinator = SupabaseCoordinator('https://project.supabase.co', 'service-role-key', 'results', opener=racing_opener)
+        with self.assertRaisesRegex(SupabasePublicationError, 'updated no exact round'):
+            racing_coordinator.close_delayed_weekly_round_for_successor(previous['round_id'], successor['round_id'], activated_at=activated)
 
         class ClosedSuccessorOpener(RecordingOpener):
             def __init__(self):

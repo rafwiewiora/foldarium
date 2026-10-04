@@ -196,7 +196,9 @@ def plan_reconciliation(
                     eligible_ids.add(row["round_id"])
                 else:
                     block(row["round_id"], "ambiguous-production-identity-needs-explicit-scope")
-        else:
+        elif not any(r["campaign_id"] == key[0] and r["environment"] == "production" and r["status"] not in {"failed", "withdrawn"} for r in rounds):
+            # Once production exists these old Preview experiments are dormant;
+            # no canonical mapping is needed merely to process production.
             block(key[0], "ambiguous-preview-identity")
 
     for key in canonical.keys() - groups.keys():
@@ -232,7 +234,7 @@ def plan_reconciliation(
                 continue
             source = previews[0]
             if timestamp(source["closes_at"]) <= now:
-                block(cid, "expired-preview-needs-explicit-new-voting-window")
+                block(cid, "expired-preview-needs-explicit-historical-recovery")
                 continue
             if not gates.kits:
                 block(cid, "gate-disabled:kits:promotion-registers-kit")

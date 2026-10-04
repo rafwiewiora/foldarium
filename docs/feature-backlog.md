@@ -87,7 +87,11 @@ Prepared source remains **planned** until its production flow is verified.
 - **Prepared:** a service-only database initialization grant survives complete
   inference-volume loss. The grant is immutable and can initialize a budget only
   once; retries must preserve an existing valid ledger. No provider launcher or
-  paid inference is enabled by this schema.
+  paid inference is enabled by this schema. The initialization migration has
+  been applied, while paid inference remains disabled.
+- **Prepared:** late handoffs atomically require an absent activation marker, so
+  competing successors cannot overwrite a completed handoff even when the
+  finite safety-close timestamp remains unchanged.
 - **Deployed:** database migration and operational execution adapter, with all
   new gates disabled.
 - **Pending:** live verification and deliberate gate activation. The public tree
@@ -106,7 +110,9 @@ Prepared source remains **planned** until its production flow is verified.
   and normalized counts remain unchanged; arbitrary count differences fail.
 - **Verified:** regression tests cover preserved choices and manifests, missing
   or changed provenance, unexplained differences, and the heavy-atom minimum.
-- **Pending:** operational evaluation and publication recovery verification.
+- **Deployed:** the compatibility fix is running in production; a private
+  evaluation retry is underway.
+- **Pending:** completed evaluation and publication recovery verification.
 
 ### Predicted-pocket display recovery
 

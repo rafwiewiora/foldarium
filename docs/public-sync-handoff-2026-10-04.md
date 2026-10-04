@@ -46,11 +46,15 @@ retained without being reapplied.
   original SMILES and policy plus complete graph/choice audits, and enforces the
   actual heavy-atom minimum. It preserves both recorded counts and all choices;
   it does not repair manifests or tolerate arbitrary count differences.
-- **Pending:** operational evaluation and publication recovery verification for
-  the ligand-eligibility change.
-- **Pending:** operational rollout of the new budget-initialization contract and
-  any separately reviewed inference executor. This public schema is not an
-  executable provider launcher and enables no paid calls.
+- **Completed:** the ligand-eligibility fix was deployed. Its private evaluation
+  retry is running; evaluation completion and publication remain pending.
+- **Completed:** the budget-initialization migration was applied. Paid inference
+  and the prepared recurring rollout remain disabled. This public schema is not
+  an executable provider launcher and enables no paid calls.
+- **Completed:** a guarded handoff update now requires the predecessor activation
+  marker to remain absent. A concurrent late handoff cannot overwrite the first
+  successor when both preserve the same expired safety-close timestamp. This
+  source hardening is prepared separately from activation.
 
 ## Intentional exclusions
 
@@ -72,23 +76,22 @@ source; provider launch adapters are independently maintained and reviewed.
 - Follow-up JavaScript suite: 608 tests passed with one expected optional
   WebAssembly skip. Production parity again passed for all seven shared browser
   targets and the public configuration contract.
-- Follow-up portable pipeline: 601 tests passed, including six additional exact
+- Follow-up portable pipeline: 602 tests passed, including seven additional exact
   lifecycle-scope and six audited ligand-normalization regressions.
 - The new isolated PostgreSQL harness passed one-time initialization, repeated
   claims, exact source/config/kit/budget binding, immutable authority, open voting
   compatibility, and service-only privilege checks.
-- Public audit passed for 2,393 tracked files. The ten changed files passed
+- Public audit passed for 2,393 tracked files. The twelve changed files passed
   additional credential-pattern, private-path, and recovery-identifier checks.
-- The five lifecycle/budget source, test, and migration files plus the new
-  ligand-normalization test match accepted operational source exactly. The
-  reveal validator retains its existing provider-neutral module description;
-  its new scientific logic is identical. `git diff --check` passed.
+- The lifecycle/budget source, tests, and migrations plus the new ligand test
+  match accepted operational source exactly. The reveal validator and Supabase
+  adapter preserve their existing provider-neutral descriptions and local
+  defaults; the newly mirrored logic is identical. `git diff --check` passed.
 - Scientific evaluation recovery remains pending separately; this follow-up
   does not claim that the next complete weekly publication has succeeded.
 
 The database, object store, runtime deployment, and public Git source are
-independently versioned. The previously applied migration head was
-`20261004090000_add_weekly_automation_outbox.sql`; the prepared budget anchor is
+independently versioned. The applied migration head is
 `20261004170000_anchor_weekly_inference_budget.sql`. The optional legacy data
 release is unchanged. Matching source does not certify lifecycle completion or
 activation of any gate.

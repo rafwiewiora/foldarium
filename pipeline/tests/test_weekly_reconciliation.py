@@ -98,7 +98,7 @@ class PlannerTests(unittest.TestCase):
         row['closes_at'] = '2026-09-24T00:00:00Z'
         result = plan(snapshot(row))
         self.assertNotIn('promote', kinds(result))
-        self.assertIn('expired-preview-needs-explicit-new-voting-window', [x['reason'] for x in result['blocked']])
+        self.assertIn('expired-preview-needs-explicit-historical-recovery', [x['reason'] for x in result['blocked']])
 
     def test_promotion_respects_kit_registration_side_effect_gate(self):
         row = round_row('p', campaign_id='wwpdb-2026-10-03', environment='preview', closes_at='2026-10-07T00:00:00Z')
@@ -154,6 +154,12 @@ class PlannerTests(unittest.TestCase):
     def test_drafts_retired_and_never_opened_rounds_have_no_round_actions(self):
         rows = [round_row('draft', status='draft'), round_row('withdrawn', status='withdrawn'), round_row('failed', status='failed'), round_row('never-opened', opened_at=None)]
         self.assertFalse(any(a['identity'] in {r['round_id'] for r in rows} for a in plan(snapshot(*rows))['actions']))
+
+    def test_dormant_preview_siblings_do_not_require_mapping_after_production_exists(self):
+        rows = [round_row('p1', environment='preview'), round_row('p2', environment='preview'), round_row()]
+        result = plan(snapshot(*rows))
+        self.assertNotIn('ambiguous-preview-identity', [x['reason'] for x in result['blocked']])
+        self.assertTrue(any(a['kind'] == 'reveal' and a['identity'] == 'weekly-old' for a in result['actions']))
 
     def test_scope_rejects_unknown_fields_and_duplicate_campaign_environment(self):
         from foldarium_pipeline.weekly_reconciliation import validate_lifecycle_scope
