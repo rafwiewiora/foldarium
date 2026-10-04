@@ -36,8 +36,9 @@ operational pull request 83 without copying its deployment or recovery files.
 - Completed: public-tree audit passed for 2,406 tracked files, and all 40 changed
   files passed a credential and private-runtime-identifier scan. Production
   parity passed for all seven shared browser modules and public configuration.
-- Pending: pull-request CI, including full database bootstrap, Rust mapper tests,
-  and the repository-wide secret scan.
+- Completed: public pull request 21 passed all six CI jobs, including Supabase
+  startup and full migration reset, Rust mapper tests, both Python environments,
+  JavaScript tests, and the repository-wide secret scan.
 - Pending: production recovery evaluation/publication verification. This source
   handoff does not assert that delayed answers have already been published.
 
