@@ -49,6 +49,8 @@ public branch has been merged or that gated automation has been activated.
 - **Pending:** verify the complete featured-selection and reconciliation flows
   before enabling gated actions. Applied schema and matching browser assets do
   not imply that inference, selection, reveal, or publication ran automatically.
+- **Completed:** the deployed cofolding endpoint was verified against three
+  published weeks, with explicit population and metric definitions.
 - **Completed:** the final shared browser parity check passed against the public
   production origin, including featured navigation and session-resume sources.
 - **Pending:** complete public review and merge; runtime end-to-end validation

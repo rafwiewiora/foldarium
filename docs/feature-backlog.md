@@ -20,6 +20,20 @@ Prepared source remains **planned** until its production flow is verified.
   leaderboards display opted-in player scores in a separately labeled
   **For fun** group.
 
+### Automatic cofolding benchmark refresh
+
+- **Status:** shipped
+- **Added:** 2026-10-04
+- **Goal:** refresh method rankings and weekly trends from verified, published
+  retrospective evaluations whenever a new round is published.
+- **Shipped:** a read-only aggregate API and browser integration replace the
+  static method-statistics file. Counts cover published quiz questions with
+  method poses; oracle and highest-ligand-pLDDT success use raw RMSD below 1.5 Å.
+  Missing ligand confidence excludes a target from top-1 only.
+- **Verified:** the production endpoint loads three published weeks with explicit
+  population and metric definitions. Full unpublished prediction campaigns are
+  outside this aggregate's population.
+
 ## Planned
 
 ### Five featured questions per week
@@ -68,19 +82,6 @@ Prepared source remains **planned** until its production flow is verified.
 - **Pending:** live verification and deliberate gate activation. The public tree
   supplies the contract and tests, without a scheduler, deployment configuration,
   credentials, or provider launcher.
-
-### Automatic cofolding benchmark refresh
-
-- **Status:** planned
-- **Added:** 2026-10-04
-- **Goal:** refresh method rankings and weekly trends from verified, published
-  retrospective evaluations whenever a new round is published.
-- **Prepared:** a read-only aggregate API and browser integration replace the
-  static method-statistics file. Counts cover published quiz questions with
-  method poses; oracle and highest-ligand-pLDDT success use raw RMSD below 1.5 Å.
-  Missing ligand confidence excludes a target from top-1 only.
-- **Pending:** production deployment and live verification. Full unpublished
-  prediction campaigns are outside this aggregate's population.
 
 ### Predicted-pocket display recovery
 
