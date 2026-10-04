@@ -27,6 +27,7 @@ from urllib.request import Request, urlopen
 from .clustering import choice_order_digest
 from .contracts import canonical_json, stable_id
 from .evaluation import (
+    UnscorableReferenceError,
     EVALUATOR_VERSION,
     evaluate_ligand_pose,
     released_partial_reference_override_for_item,
@@ -786,6 +787,7 @@ def _evaluate_validated_round(
         ligand = item["ligand"]
         eligibility = item["ligand_eligibility"]
         scored_choices: list[dict[str, Any]] = []
+        disposition = None
         overlay_candidates: list[dict[str, Any]] = []
         for choice in sorted(item["choices"], key=lambda value: value["id"]):
             try:
@@ -831,6 +833,22 @@ def _evaluate_validated_round(
                     prediction_path,
                     **evaluator_kwargs,
                 )
+            except UnscorableReferenceError as exc:
+                current_disposition = {**exc.disposition, "reference_sha256": reference["sha256"]}
+                if disposition is not None and disposition != current_disposition:
+                    raise WednesdayRevealError("inconsistent unscorable reference disposition") from exc
+                disposition = current_disposition
+                scored_choices.append({
+                    "id": choice["id"], "rmsd": None, "correct": None, "accepted_correct": None,
+                    "method": choice["method"], "method_version": choice["method_version"],
+                    "run_id": choice["run_id"], "sample_id": choice["sample_id"],
+                    "reference_uri": reference["source_uri"], "reference_sha256": reference["sha256"],
+                    "prediction_sha256": prediction["sha256"], "evaluator_version": EVALUATOR_VERSION,
+                    "correct_rmsd_threshold_angstrom": CORRECT_RMSD_ANGSTROM,
+                    "reveal_policy_version": REVEAL_POLICY_VERSION,
+                    "acceptance_policy_version": ACCEPTANCE_POLICY_VERSION,
+                })
+                continue
             except Exception as exc:
                 raise WednesdayRevealError(
                     f"released-coordinate evaluation failed for {item['id']}/{choice['id']}"
@@ -880,6 +898,12 @@ def _evaluate_validated_round(
                         ).hexdigest(),
                     }
                 )
+        if disposition is not None:
+            if any(choice["rmsd"] is not None for choice in scored_choices):
+                raise WednesdayRevealError("reference disposition differs between original choices")
+            scored_items.append({"id": item["id"], "evaluation_status": "unscorable",
+                                 "reference_disposition": disposition, "choices": scored_choices})
+            continue
         raw_correct_by_id = {
             choice["id"]: bool(choice["correct"])
             for choice in scored_choices

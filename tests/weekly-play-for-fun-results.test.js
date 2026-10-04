@@ -541,3 +541,54 @@ test('newer cross-session answer replaces an older answer for the same item', ()
   });
   assert.equal(result.complete_runs[0].correct, 0);
 });
+
+function dispositionFixture(all = false) {
+  const reveal = revealManifestForRound(2);
+  for (const [index, item] of reveal.items.entries()) {
+    if (!all && index === 0) continue;
+    const reference_sha256 = 'a'.repeat(64);
+    Object.assign(item, { evaluation_status: 'unscorable', reference_disposition: {
+      policy: 'foldarium.released-reference-disposition/v1', code: 'insufficient_reference_coverage', component_id: 'DRG',
+      expected_heavy_atoms: 20, observed_heavy_atoms: 10, explicitly_unobserved_heavy_atoms: 10,
+      reference_coverage: .5, minimum_reference_coverage: .8, reference_sha256,
+    } });
+    item.choices.forEach(choice => Object.assign(choice, { reference_sha256, rmsd: null, correct: null, accepted_correct: null }));
+  }
+  return {
+    roundId: ROUND_ID, itemCount: 2, revealManifest: reveal,
+    sessions: [postRevealSession({ sessionId: SESSION_A1, userId: USER_A, displayName: 'Alpha', startedAt: '2026-08-20T10:00:00Z' })],
+    voteAttempts: [
+      postRevealAttempt({ voteAttemptId: ATTEMPT_A1_NEW, sessionId: SESSION_A1, userId: USER_A, itemId: 'ITEM01', choiceId: 'choice-a', submittedAt: '2026-08-20T10:01:00Z' }),
+      postRevealAttempt({ voteAttemptId: ATTEMPT_A2, sessionId: SESSION_A1, userId: USER_A, itemId: 'ITEM02', pickedNone: true, submittedAt: '2026-08-20T10:02:00Z' }),
+    ],
+  };
+}
+
+test('play-for-fun v2 preserves full participation while excluding unscorable None from scores', () => {
+  const fixture = dispositionFixture();
+  assert.doesNotThrow(() => verifyRevealedPlayForFunRound({ ...revealedRound(), reveal_manifest: fixture.revealManifest }, ROUND_ID));
+  const result = scorePlayForFunResults(fixture);
+  assert.equal(result.format_version, 'foldarium.weekly-play-for-fun-leaderboard/v2');
+  assert.equal(result.item_count, 2);
+  assert.equal(result.scorable_item_count, 1);
+  assert.equal(result.excluded_item_count, 1);
+  assert.deepEqual(result.complete_runs[0], {
+    display_name: 'Alpha', correct: 1, answered: 1, total: 1, accuracy: 100, coverage: 100,
+    participation_mode: 'for_fun', rank: 1, full_total: 2, full_answered: 2, excluded_answered: 1,
+  });
+  fixture.voteAttempts[1].picked_none = false;
+  fixture.voteAttempts[1].choice_id = 'unknown-choice';
+  assert.throws(() => scorePlayForFunResults(fixture), /unknown vote choice/);
+});
+
+test('all-unscorable for-fun participation has zero scored denominator, null rates and no rank', () => {
+  const result = scorePlayForFunResults(dispositionFixture(true));
+  assert.equal(result.scorable_item_count, 0);
+  assert.equal(result.excluded_item_count, 2);
+  assert.equal(result.complete_runs.length, 0);
+  assert.equal(result.partial_runs.length, 1);
+  assert.deepEqual(result.partial_runs[0], {
+    display_name: 'Alpha', correct: 0, answered: 0, total: 0, accuracy: null, coverage: null,
+    participation_mode: 'for_fun', full_total: 2, full_answered: 2, excluded_answered: 2,
+  });
+});

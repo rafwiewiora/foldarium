@@ -786,5 +786,86 @@ class RetrospectiveArchiveTests(unittest.TestCase):
         )
 
 
+
+class UnscorableRetrospectiveTests(unittest.TestCase):
+    def fixture(self, *, all_unscorable=False):
+        reveal = reveal_manifest()
+        blind = blind_manifest()
+        second = deepcopy(reveal['items'][0])
+        second['id'] = 'item-2'
+        for index, choice in enumerate(second['choices']):
+            choice.update(id='choice-' + str(index), rmsd=None, correct=None, accepted_correct=None, reference_sha256='d' * 64)
+        second.update(evaluation_status='unscorable', reference_disposition={
+            'policy': 'foldarium.released-reference-disposition/v1',
+            'code': 'insufficient_reference_coverage', 'component_id': 'MJC',
+            'expected_heavy_atoms': 71, 'observed_heavy_atoms': 36,
+            'explicitly_unobserved_heavy_atoms': 35, 'reference_coverage': 36 / 71,
+            'minimum_reference_coverage': 0.8, 'reference_sha256': 'd' * 64})
+        reveal['items'].append(second)
+        second_blind = deepcopy(blind['items'][0]);second_blind['id']='item-2'
+        for index, choice in enumerate(second_blind['choices']):
+            choice['id']='choice-' + str(index)
+        blind['items'].append(second_blind)
+        if all_unscorable:
+            reveal['items'][0].update(evaluation_status='unscorable', reference_disposition=deepcopy(second['reference_disposition']))
+            for choice in reveal['items'][0]['choices']:
+                choice.update(rmsd=None, correct=None, accepted_correct=None, reference_sha256='d' * 64)
+        row = round_record();row.update(reveal_manifest=reveal,reveal_manifest_sha256=manifest_sha256(reveal))
+        evaluation=evaluation_descriptor();evaluation.update(format_version='foldarium.weekly-private-evaluation/v6',item_count=2,choice_count=4)
+        snapshot=build_retrospective_source_snapshot(ROUND_ID,**source_rows())
+        snapshot['votes'].extend([{**vote,'item_id':'item-2','choice_id':None,'picked_none':True,'selection_kind':'none'} for vote in list(snapshot['votes'])])
+        return row,evaluation,{'blind_manifest':blind,'reveal_manifest':reveal},snapshot
+
+    def build(self, fixture):
+        row,evaluation,artifact,snapshot=fixture
+        with patch('foldarium_pipeline.retrospective_archive._verify_evaluation',return_value=(evaluation,artifact)):
+            public,admin,_=build_retrospective_artifacts(row,evaluation,b'evaluation',snapshot)
+        return json.loads(public),json.loads(admin)
+
+    def test_unscorable_none_votes_are_neither_rewarded_nor_penalized_and_all_items_remain(self):
+        public,admin=self.build(self.fixture())
+        self.assertEqual(public['format_version'],'foldarium.weekly-retrospective-public/v2')
+        self.assertEqual(admin['format_version'],'foldarium.weekly-retrospective-admin/v2')
+        self.assertEqual(public['round']['item_count'],2)
+        self.assertEqual(public['round']['scorable_item_count'],1)
+        self.assertEqual(public['round']['excluded_item_count'],1)
+        self.assertEqual(len(public['questions']),2)
+        excluded=next(q for q in public['questions'] if q['item_id']=='item-2')
+        self.assertEqual(excluded['evaluation_status'],'unscorable')
+        self.assertNotIn('reference_sha256',excluded['reference_disposition'])
+        self.assertEqual(excluded['human_aggregate']['answered_count'],1)
+        self.assertEqual(excluded['human_aggregate']['scorable_answered_count'],0)
+        self.assertIsNone(excluded['human_aggregate']['correct_count'])
+        self.assertTrue(all(r['correct'] is None for r in excluded['automated_entries']))
+        self.assertIsNone(excluded['human_aggregate']['answers'][0]['correct'])
+        for participant in admin['participants']:
+            self.assertEqual(participant['answered'],1)
+            self.assertEqual(participant['total'],1)
+            self.assertEqual(participant['full_answered'],2)
+            self.assertEqual(participant['full_total'],2)
+            self.assertEqual(participant['excluded_answered'],1)
+        by_name={r['participant']:r for r in admin['participants']}
+        self.assertEqual(by_name['Claude Opus']['correct'],1)
+        self.assertEqual(by_name['PocketFox']['correct'],0)
+
+    def test_all_unscorable_has_no_artificial_zero_percent_or_completion(self):
+        public,admin=self.build(self.fixture(all_unscorable=True))
+        self.assertEqual(public['round']['scorable_item_count'],0)
+        self.assertEqual(public['human_aggregate']['unscored_only_count'],1)
+        for row in admin['participants']:
+            self.assertEqual(row['answered'],0)
+            self.assertEqual(row['total'],0)
+            self.assertIsNone(row['accuracy'])
+            self.assertIsNone(row['coverage'])
+            self.assertFalse(row['complete'])
+            self.assertEqual(row['full_answered'],2)
+
+    def test_malformed_disposition_cannot_reduce_denominator(self):
+        fixture=self.fixture()
+        fixture[2]['reveal_manifest']['items'][1]['choices'][0]['correct']=False
+        fixture[0]['reveal_manifest_sha256']=manifest_sha256(fixture[0]['reveal_manifest'])
+        with self.assertRaisesRegex(RetrospectiveArchiveError,'invalid reference disposition'):
+            self.build(fixture)
+
 if __name__ == "__main__":
     unittest.main()

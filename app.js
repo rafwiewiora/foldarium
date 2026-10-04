@@ -39,6 +39,15 @@ function weeklyPoseEvidence(choice) {
     : '';
   return `${methodName(choice._method)}${confidenceValue}${sminaValue}${interactionValue}`;
 }
+
+function weeklyItemUnscorable(item = cur?.item) {
+  return item?.source === 'weekly' && item.evaluation_status === 'unscorable';
+}
+
+function unscorableReferenceMessage(item = cur?.item) {
+  const d = item?.reference_disposition;
+  return `Not scored: the released crystal reference contains ${d?.observed_heavy_atoms ?? 'too few'} of ${d?.expected_heavy_atoms ?? 'the expected'} ligand heavy atoms. This question and your selection are preserved and excluded from score totals.`;
+}
 function weeklyLigandPlddt(choice) {
   const confidence = choice?._confidence;
   return confidence?.metric === 'ligand_plddt' && Number.isFinite(confidence.value)
@@ -414,6 +423,7 @@ const RETROSPECTIVE_QUESTION_FILTERS = [
   ['pose-unsolved', 'Correct pose · nobody right'],
   ['none-solved', 'No pose · someone chose None'],
   ['none-unsolved', 'No pose · nobody chose None'],
+  ['unscorable', 'Not scored · incomplete reference'],
 ];
 
 function weeklyItemHasCorrectPose(item) {
@@ -430,7 +440,7 @@ function restoreWeeklyPriorVote(questionState, prior, clusters) {
   if (prior.picked_none) {
     questionState.selected = {
       none: true,
-      correct: !choices.some(acceptedChoiceCorrect),
+      correct: weeklyItemUnscorable(questionState.item) ? null : !choices.some(acceptedChoiceCorrect),
       label: 'None of these',
     };
     questionState.selectionExact = true;
@@ -451,6 +461,8 @@ function restoreWeeklyPriorVote(questionState, prior, clusters) {
 
 function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter) {
   if (filter === 'all') return true;
+  if (filter === 'unscorable') return weeklyItemUnscorable(item);
+  if (weeklyItemUnscorable(item)) return false;
   const hasPose = weeklyItemHasCorrectPose(item);
   const result = weeklyQuestionResultForItem(item);
   const solved = Number(result?.correct_count || 0) > 0;
@@ -2184,6 +2196,7 @@ function answerViewPoseCorrect(choice) {
   return rawChoiceCorrect(choice);
 }
 function answerPoseStatus(choice) {
+  if (weeklyItemUnscorable()) return 'Not scored';
   if (rawChoiceCorrect(choice)) return 'Exact correct ✓';
   if (choice?.clusterAccepted === true) return 'Cluster-accepted only';
   return 'Incorrect';
@@ -2197,6 +2210,13 @@ function exactChoicesForEntry(entry) {
     .sort((left, right) => left.rmsd - right.rmsd);
 }
 function applyAnswerRevealView() {
+  if (weeklyItemUnscorable()) {
+    cur.showAnswer = false;
+    cur.answerRevealBest = null;
+    resetCrystalViewState();
+    syncXtalRow();
+    return;
+  }
   const choices = allItemChoices();
   const best = bestRawCorrectPose(choices);
   cur.answerRevealBest = best;
@@ -2317,6 +2337,15 @@ function syncGridSelection() {
 
 function applyRetrospectiveAnswer() {
   if (!isRetrospectiveReview() || cur?.item?.source !== 'weekly') return false;
+  if (weeklyItemUnscorable()) {
+    cur.selected = null;
+    cur.selectionExact = false;
+    cur.selectedAsCluster = false;
+    cur.answerChoices = allItemChoices();
+    cur.revealed = true;
+    applyAnswerRevealView();
+    return true;
+  }
   const choices = allItemChoices();
   const best = (isPrivatePrecloseReview()
     ? window.foldariumPrivateReview?.selectRetrospectiveAnswer?.({ choices })
@@ -3952,7 +3981,7 @@ function renderDevNav() {
   $('#next').style.display = useQuestionNav ? 'none' : '';
   $('#next').textContent = 'Next →';
   syncQuestionNavigation();
-  $('#myview').style.display = '';
+  $('#myview').style.display = weeklyItemUnscorable() ? 'none' : '';
   $('#myview').textContent = cur.showAnswer ? '← Hide answer (my view)' : 'Reveal answer →';
   syncXtalRow();
   $('#answer-details').hidden = !cur.showAnswer;
@@ -4538,7 +4567,7 @@ function summarizePrivateRetrospective(items) {
       return String(left.choice._weeklyChoiceId || left.choice.id || '')
         .localeCompare(String(right.choice._weeklyChoiceId || right.choice.id || ''));
     })[0]?.choice || null;
-  const rows = (items || []).map(item => {
+  const rows = (items || []).filter(item => !weeklyItemUnscorable(item)).map(item => {
     const choices = (item.choices || []).filter(choice => !isFixedReferenceChoice(choice));
     const methods = {};
     for (const method of ['openfold3', 'boltz2']) {
@@ -4692,6 +4721,7 @@ function privateQuestionAnswerLabel(answer) {
 }
 
 function privateQuestionAnswerState(answer) {
+  if (answer?.correct === null) return 'unscorable';
   if (answer?.correct) return 'correct';
   const choice = privateQuestionAnswerChoice(answer);
   return choice?.clusterAccepted === true ? 'cluster-accepted' : '';
@@ -4733,7 +4763,7 @@ function renderPrivateQuestionResult(result) {
         return `<div class="weekly-question-result-answer">
           <span class="weekly-question-result-rank">${index + 1}</span>
           <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
-          <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
+          <span class="weekly-question-result-correct ${state || 'wrong'}">${state === 'unscorable' ? 'Not scored' : state ? 'correct' : 'wrong'}</span>
           <span>${playerLabel(answer.vote_count)}</span>
         </div>`;
       }).join('')}
@@ -4761,7 +4791,7 @@ function renderArchiveQuestionResult(result) {
     return `<div class="weekly-question-result-answer">
       <span class="weekly-question-result-rank">·</span>
       <b>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</b>
-      <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
+      <span class="weekly-question-result-correct ${state || 'wrong'}">${state === 'unscorable' ? 'Not scored' : state ? 'correct' : 'wrong'}</span>
       <span>${answer.display_names?.length
         ? answer.display_names.map(escapeLeaderboardText).join(', ')
         : `${answer.vote_count} ${answer.vote_count === 1 ? 'answer' : 'answers'}`}</span>
@@ -4772,11 +4802,13 @@ function renderArchiveQuestionResult(result) {
     return `<div class="weekly-question-result-answer">
       <span class="weekly-question-result-rank">${index + 1}</span>
       <b>${escapeLeaderboardText(answer.participant)}</b>
-      <span class="weekly-question-result-correct ${state || 'wrong'}">${state ? 'correct' : 'wrong'}</span>
+      <span class="weekly-question-result-correct ${state || 'wrong'}">${state === 'unscorable' ? 'Not scored' : state ? 'correct' : 'wrong'}</span>
       <span>${escapeLeaderboardText(privateQuestionAnswerLabel(answer))}</span>
     </div>`;
   }).join('');
-  const humanSummary = `<div><strong>${human.correct_count || 0}/${human.answered_count || 0}</strong>
+  const humanSummary = result.evaluation_status === 'unscorable'
+    ? `<p class="weekly-scorecard-note">${escapeLeaderboardText(unscorableReferenceMessage())}</p>`
+    : `<div><strong>${human.correct_count || 0}/${human.answered_count || 0}</strong>
       <span>player answers were correct</span>
     </div>`;
   const humanBody = humanRows || '<p class="weekly-scorecard-empty">No player answers.</p>';
@@ -4815,7 +4847,8 @@ function renderWeeklyLeaderboard() {
     host.replaceChildren();
     return;
   }
-  const total = WEEKLY_LEADERBOARD?.item_count || ITEMS.length || 0;
+  const total = WEEKLY_LEADERBOARD?.scorable_item_count
+    ?? ITEMS.filter(item => !weeklyItemUnscorable(item)).length;
   const localName = participantDisplayName || 'You';
   const localAnswered = localWeeklyScore.answered;
   const localCorrect = localWeeklyScore.correct;
@@ -4925,6 +4958,7 @@ function weeklyLeaderboardFromRetrospectiveSummary(publication) {
     format_version: 'foldarium.weekly-leaderboard/v1',
     round_id: publication.round_id,
     item_count: publication.item_count,
+    ...(publication.scorable_item_count != null ? { scorable_item_count: publication.scorable_item_count, excluded_item_count: publication.excluded_item_count } : {}),
     participant_count: rows.length,
     complete_runs: completeRuns,
     partial_runs: partialRuns,
@@ -4939,7 +4973,11 @@ async function loadWeeklyPlayForFunLeaderboard() {
     const response = await fetch(`/api/weekly-play-for-fun-results?${query}`);
     const payload = await response.json().catch(() => null);
     if (!response.ok
-        || payload?.format_version !== 'foldarium.weekly-play-for-fun-leaderboard/v1'
+        || !['foldarium.weekly-play-for-fun-leaderboard/v1', 'foldarium.weekly-play-for-fun-leaderboard/v2'].includes(payload?.format_version)
+        || (payload?.format_version === 'foldarium.weekly-play-for-fun-leaderboard/v2'
+          && (!Number.isInteger(payload.scorable_item_count) || payload.scorable_item_count < 0
+            || !Number.isInteger(payload.excluded_item_count) || payload.excluded_item_count <= 0
+            || payload.scorable_item_count + payload.excluded_item_count !== payload.item_count))
         || payload.round_id !== WEEKLY_ROUND.round_id
         || payload.item_count !== WEEKLY_ROUND.item_count
         || !Array.isArray(payload.complete_runs)
@@ -5009,7 +5047,7 @@ async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
 }
 
 function bumpLocalWeeklyScore(youRight) {
-  if (!weeklyResultsRevealActive()) return;
+  if (!weeklyResultsRevealActive() || weeklyItemUnscorable()) return;
   const itemId = cur?.item?.id;
   if (!itemId || localWeeklyScoredItems.has(itemId)) return;
   localWeeklyScoredItems.add(itemId);
@@ -5384,7 +5422,7 @@ async function onPick(k, exactChoice = null, {
     const chooseNone = () => {
       cur.selected = {
         none: true,
-        correct: !answerChoices.some(acceptedChoiceCorrect),
+        correct: weeklyItemUnscorable() ? null : !answerChoices.some(acceptedChoiceCorrect),
         label: 'None of these',
       };
       cur.selectionExact = displayMode === 'grid' || !clustered;
@@ -5513,12 +5551,17 @@ async function finalizeReveal() {
   const viewerTrace = viewerTraceRecorder?.stop({ appState: currentReplayableAppState() }) ?? null;
   await viewerRebuild.enqueue(() => {
     const keepGrid = displayMode === 'grid';
-    cur.revealed = true; cur.showAnswer = true;
-    if (weeklyResultsRevealActive()) {
+    cur.revealed = true; cur.showAnswer = !weeklyItemUnscorable();
+    if (weeklyResultsRevealActive() && !weeklyItemUnscorable()) {
       applyAnswerRevealView();
     } else if (!keepGrid) { displayMode = 'all'; clustered = false; }
     syncButtons();
   });
+  if (weeklyItemUnscorable()) {
+    renderRevealedQuestionUi();
+    if (postRevealVote) rememberWeeklyItemState();
+    return;
+  }
   const picked = cur.selected;
   const af3 = cur.clusters.flatMap(c => c.members).find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
   const youRight = picked.none ? !!picked.correct : acceptedChoiceCorrect(picked);
@@ -5540,6 +5583,20 @@ async function finalizeReveal() {
 
 function renderRevealedQuestionUi() {
   const picked = cur.selected;
+  if (weeklyItemUnscorable()) {
+    const verdict = $('#verdict');
+    verdict.style.display = '';
+    verdict.textContent = unscorableReferenceMessage();
+    delete verdict.dataset.state;
+    $('#answer-ai').textContent = '';
+    $('#answer-details').hidden = true;
+    $('#lock').style.display = 'none';
+    $('#myview').style.display = 'none';
+    $('#next').style.display = isRetrospectiveReview() ? 'none' : '';
+    $('#next').textContent = nextSessionQuestionIndex() !== null ? 'Next question →' : 'View final score →';
+    syncXtalRow();
+    return;
+  }
   if (!picked) return;
   const af3 = cur.clusters.flatMap(c => c.members)
     .find(c => c.af3_sample === cur.item.plddt_pick_sample) || null;
@@ -5581,7 +5638,7 @@ function renderRevealedQuestionUi() {
   $('#answer-details').hidden = !cur.showAnswer;
   if (cur.showAnswer) $('#answer-details').open = false;
   $('#next').style.display = ''; $('#next').textContent = nextSessionQuestionIndex() !== null ? 'Next question →' : 'View final score →';
-  $('#myview').style.display = '';
+  $('#myview').style.display = weeklyItemUnscorable() ? 'none' : '';
   $('#myview').textContent = cur.showAnswer
     ? '← Back to my view (hide answer)'
     : 'Show answer →';
@@ -5682,6 +5739,7 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
 
 // after reveal: flip between the green/red answer and the original anonymised "my view" to study it
 async function toggleAnswer() {
+  if (weeklyItemUnscorable()) return;
   if (DEV) return toggleAnswerDev();
   if (!cur.revealed || viewerTransitionBusy) return;
   await viewerRebuild.enqueue(
@@ -5707,6 +5765,7 @@ async function toggleAnswer() {
 
 function renderRevealList(picked, af3) {
   const box = $('#answer-choices'); box.innerHTML = '';
+  if (weeklyItemUnscorable()) { box.textContent = unscorableReferenceMessage(); return; }
   if ((picked && picked.none) || cur.item.source === 'weekly') {
     const selectedNone = !!(picked && picked.none);
     const noneCorrect = !cur.item.has_correct;
@@ -5971,7 +6030,7 @@ function syncStageBadge() {
 // Sets cur.revealed alongside cur.showAnswer so buildLayer()/protUrls() colour by correctness and show the
 // crystal reference, but never scores or logs (that lives in reveal(), which dev never calls).
 async function toggleAnswerDev() {
-  if (viewerTransitionBusy) return;
+  if (viewerTransitionBusy || weeklyItemUnscorable()) return;
   await viewerRebuild.enqueue(
     () => {
       cur.showAnswer = !cur.showAnswer;
@@ -6210,6 +6269,8 @@ async function init() {
         ))[0] || null;
       return {
         id: item.id,
+        evaluation_status: revealItems.get(item.id)?.evaluation_status || null,
+        reference_disposition: revealItems.get(item.id)?.reference_disposition || null,
         ligand,
         week: item.week,
         protein_file: item.protein_uri || choices[0]?.afprotein_file,
@@ -6223,7 +6284,8 @@ async function init() {
         source: 'weekly',
         clustering_available: clusteringAvailable,
         bucket: 'weekly',
-        has_correct: choices.some(choice => choice.correct === true),
+        has_correct: revealItems.get(item.id)?.evaluation_status === 'unscorable'
+          ? null : choices.some(choice => choice.correct === true),
         easyPlayable: true,
         alignment_warning: item.metadata?.display_alignment || null,
         pocket_warning: item.metadata?.display_pocket || null,
@@ -6295,6 +6357,7 @@ async function init() {
         reveal_manifest: detail.reveal_manifest,
         answer_overlays: detail.answer_overlays,
       },
+      { publicProjection: true },
     );
     const similarityFor = window.foldariumWeeklyTrainingSimilarity?.weeklySimilarityRecord;
     POOLS.weekly = normalizedPool.map((item, publicationIndex) => ({

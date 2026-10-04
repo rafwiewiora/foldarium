@@ -37,9 +37,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STORAGE_ERROR_BYTES = 16 * 1024
-# Only immutable, digest-verified Storage uploads use these retries. RPCs and
+# Only immutable, digest-verified Storage transfers use these retries. RPCs and
 # metadata-changing PUTs remain single attempts because their effects may differ.
 _STORAGE_UPLOAD_RETRY_DELAYS = (1.0, 2.0, 4.0)
+_STORAGE_DOWNLOAD_RETRY_DELAYS = (1.0, 2.0, 4.0)
 _TRANSIENT_STORAGE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530})
 IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
@@ -1373,6 +1374,7 @@ class SupabaseCoordinator(SupabasePublisher):
                 "closes_at": f"eq.{row.get('closes_at')}",
                 "reveal_manifest": "is.null",
                 "revealed_at": "is.null",
+                "metadata->retrospective_release->>activated_by_round_id": "is.null",
             }
         )
         response = self._request(
@@ -1753,10 +1755,22 @@ class SupabaseCoordinator(SupabasePublisher):
             + "/"
             + quote(object_path, safe="/")
         )
-        body = self._request(endpoint, None, operation="artifact download", method="GET")
-        if body is None or hashlib.sha256(body).hexdigest() != digest:
-            raise SupabasePublicationError("downloaded artifact does not match its object digest")
-        return body
+        # Retry only this exact immutable URI. A partial/failed transport can be
+        # safely read again; successful bytes must pass SHA verification and a
+        # digest mismatch, missing object or authorization error never retries.
+        for attempt in range(len(_STORAGE_DOWNLOAD_RETRY_DELAYS) + 1):
+            try:
+                body = self._request(endpoint, None, operation="artifact download", method="GET")
+            except SupabasePublicationError as error:
+                transient = error.transport_failure or error.http_status in _TRANSIENT_STORAGE_HTTP_STATUSES
+                if not transient or attempt == len(_STORAGE_DOWNLOAD_RETRY_DELAYS):
+                    raise
+                time.sleep(_STORAGE_DOWNLOAD_RETRY_DELAYS[attempt])
+                continue
+            if body is None or hashlib.sha256(body).hexdigest() != digest:
+                raise SupabasePublicationError("downloaded artifact does not match its object digest")
+            return body
+        raise AssertionError("unreachable immutable download retry state")
 
     def store_bytes(
         self,
@@ -2895,6 +2909,7 @@ class SupabaseCoordinator(SupabasePublisher):
 
         from .private_evaluation import (
             PRIVATE_EVALUATION_FORMAT_VERSION,
+            PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION,
             PRIVATE_EVALUATION_MEDIA_TYPE,
         )
         from .wednesday_reveal import (
@@ -2914,7 +2929,7 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError(
                 "private weekly evaluation must bind the production environment"
             )
-        if payload.get("format_version") != PRIVATE_EVALUATION_FORMAT_VERSION:
+        if payload.get("format_version") not in {PRIVATE_EVALUATION_FORMAT_VERSION, PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION}:
             raise SupabasePublicationError("private evaluation format_version is invalid")
         if payload.get("artifact_media_type") != PRIVATE_EVALUATION_MEDIA_TYPE:
             raise SupabasePublicationError("private evaluation artifact media type is invalid")
@@ -3211,6 +3226,10 @@ class SupabaseCoordinator(SupabasePublisher):
     ) -> dict[str, Any]:
         """Validate and register one exact source-bound archive publication."""
 
+        from .private_evaluation import (
+            PRIVATE_EVALUATION_FORMAT_VERSION,
+            PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION,
+        )
         from .retrospective_archive import (
             RETROSPECTIVE_MEDIA_TYPE,
             RETROSPECTIVE_PUBLICATION_FORMAT_VERSION,
@@ -3239,9 +3258,10 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError(
                 "retrospective publication format_version is invalid"
             )
-        if payload.get("evaluation_format_version") != (
-            "foldarium.weekly-private-evaluation/v5"
-        ):
+        if payload.get("evaluation_format_version") not in {
+            PRIVATE_EVALUATION_FORMAT_VERSION,
+            PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION,
+        }:
             raise SupabasePublicationError(
                 "retrospective evaluation format_version is invalid"
             )

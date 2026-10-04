@@ -472,6 +472,32 @@ class SupabasePublisherTests(unittest.TestCase):
         self.assertEqual(rpc["p_source_snapshot_canonical"], source)
         self.assertEqual(rpc["p_publication"], descriptor)
 
+    def test_retrospective_registration_accepts_exact_v6_and_rejects_unknown_versions(self) -> None:
+        descriptor, source = retrospective_publication_descriptor()
+        descriptor["evaluation_format_version"] = "foldarium.weekly-private-evaluation/v6"
+
+        class RegistrationOpener(RecordingOpener):
+            def __call__(self, request: object, *, timeout: float) -> FakeResponse:
+                self.calls.append((request, timeout))
+                return FakeResponse(json.dumps(json.loads(request.data)["p_publication"]).encode())
+
+        opener = RegistrationOpener()
+        coordinator = SupabaseCoordinator(
+            "https://project.supabase.co", "service-role-key", "prediction-results", opener=opener
+        )
+        row = coordinator.register_weekly_retrospective_publication(
+            descriptor, source_snapshot_canonical=source
+        )
+        self.assertEqual(row, descriptor)
+        self.assertEqual(len(opener.calls), 1)
+        self.assertEqual(json.loads(opener.calls[0][0].data)["p_publication"], descriptor)
+        for version in ("foldarium.weekly-private-evaluation/v4", "foldarium.weekly-private-evaluation/v7", None):
+            with self.subTest(version=version):
+                bad = {**descriptor, "evaluation_format_version": version}
+                with self.assertRaisesRegex(SupabasePublicationError, "format_version"):
+                    coordinator.register_weekly_retrospective_publication(bad, source_snapshot_canonical=source)
+        self.assertEqual(len(opener.calls), 1, "unknown formats must fail before any request")
+
     def test_retrospective_source_snapshot_fetches_only_bounded_relevant_fields(
         self,
     ) -> None:
@@ -1876,6 +1902,10 @@ class SupabaseCoordinatorTests(unittest.TestCase):
                     row = previous if self.get_count == 0 else successor
                     self.get_count += 1
                     return FakeResponse(json.dumps([row]).encode())
+                query = parse_qs(urlsplit(request.full_url).query)
+                self.test_case.assertEqual(query['metadata->retrospective_release->>activated_by_round_id'], ['is.null'])
+                if getattr(self, 'concurrent_activation', False):
+                    return FakeResponse(b'[]')
                 payload = json.loads(request.data)  # type: ignore[attr-defined]
                 self.test_case.assertEqual(  # type: ignore[attr-defined]
                     payload["closes_at"], activated.isoformat()
@@ -2002,6 +2032,13 @@ class SupabaseCoordinatorTests(unittest.TestCase):
         )
         self.assertEqual(result["closes_at"], safety_close)
         self.assertEqual(len(opener.calls), 3)
+
+        racing_opener = LateHandoffOpener()
+        racing_opener.test_case = self
+        racing_opener.concurrent_activation = True
+        racing_coordinator = SupabaseCoordinator('https://project.supabase.co', 'service-role-key', 'results', opener=racing_opener)
+        with self.assertRaisesRegex(SupabasePublicationError, 'updated no exact round'):
+            racing_coordinator.close_delayed_weekly_round_for_successor(previous['round_id'], successor['round_id'], activated_at=activated)
 
         racing_opener = LateHandoffOpener()
         racing_opener.test_case = self

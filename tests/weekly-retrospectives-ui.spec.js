@@ -290,7 +290,7 @@ async function unlock(page, url) {
   await expect(page.locator('#archive-app')).toBeVisible();
 }
 
-test('archive list has four outcome lanes, no Mol-star, and no desktop overflow', async ({ page }) => {
+test('archive list has separate outcome lanes, no Mol-star, and no desktop overflow', async ({ page }) => {
   const molecularRequests = [];
   page.on('request', request => {
     if (/molstar/i.test(request.url())) molecularRequests.push(request.url());
@@ -304,7 +304,7 @@ test('archive list has four outcome lanes, no Mol-star, and no desktop overflow'
   await expect(page.locator('.outcome-caption')).toHaveText(
     'Human outcomes · share of questions',
   );
-  await expect(page.locator('.round-row .rail-lane')).toHaveCount(4);
+  await expect(page.locator('.round-row .rail-lane')).toHaveCount(5);
   const filledWidth = await page.locator(
     '.rail-lane[data-outcome="pose-solved"] .rail-fill',
   ).evaluate(node => node.getBoundingClientRect().width);
@@ -341,12 +341,12 @@ test('desktop split view keeps archive summary inside its pane', async ({ page }
   });
 });
 
-test('detail filters four outcomes, safely renders admin names, and fits mobile', async ({ page }) => {
+test('detail filters scored and unscorable outcomes, safely renders admin names, and fits mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page);
   await unlock(page, `${baseUrl}/${roundId}`);
   await expect(page.locator('#round-detail')).toBeVisible();
-  await expect(page.locator('.filter-row button')).toHaveCount(5);
+  await expect(page.locator('.filter-row button')).toHaveCount(6);
   await expect(page.locator('.question-list')).toContainText('PocketFox');
   await expect(page.locator('.question-list')).toContainText('Human players');
   await expect(page.locator('.question-list')).toContainText('0/2 correct');
@@ -414,4 +414,41 @@ test('cofolding ranks raw-pose methods and exposes weekly trends', async ({ page
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('.method-chart')).toBeVisible();
+});
+
+
+test('incomplete references remain visible without fabricated losses, None wins, or null percentages', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  const detail = structuredClone(detailPayload);
+  Object.assign(detail.round, { scorable_item_count: 1, excluded_item_count: 1 });
+  const disposition = { policy: 'foldarium.released-reference-disposition/v1', code: 'insufficient_reference_coverage',
+    component_id: 'LIG', expected_heavy_atoms: 20, observed_heavy_atoms: 10,
+    explicitly_unobserved_heavy_atoms: 10, minimum_reference_coverage: .8, reference_coverage: .5 };
+  Object.assign(detail.reveal_manifest.items[0], { evaluation_status: 'unscorable', reference_disposition: disposition });
+  detail.reveal_manifest.items[0].choices.forEach(choice => Object.assign(choice, { rmsd: null, correct: null, accepted_correct: null }));
+  const question = detail.retrospective.questions[0];
+  Object.assign(question, { evaluation_status: 'unscorable', reference_disposition: disposition });
+  question.human_aggregate.correct_count = null;
+  question.human_aggregate.answers.forEach(answer => { answer.correct = null; });
+  question.automated_entries.forEach(answer => Object.assign(answer, { correct: null, choice_id: null, picked_none: true, selection_kind: 'none' }));
+  detail.retrospective.human_entries[0] = { ...detail.retrospective.human_entries[0], correct: 0, answered: 0, accuracy: null, total: 1 };
+  await page.route('**/api/weekly-retrospectives**', route => {
+    const url = new URL(route.request().url());
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(url.searchParams.get('round_id') ? detail : listPayload) });
+  });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await unlock(page, `${baseUrl}/${roundId}`);
+  await page.locator('.filter-row button[data-filter="unscorable"]').click();
+  const row = page.locator('.question-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText('10 of 20 ligand heavy atoms');
+  await expect(row).toContainText('not scored');
+  await expect(row.locator('.target-method-table .wrong')).toHaveCount(0);
+  await expect(row.locator('.target-method-table .correct')).toHaveCount(0);
+  await expect(page.locator('#round-detail')).toContainText('Not scored');
+  await expect(page.locator('#round-detail')).not.toContainText('#null');
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

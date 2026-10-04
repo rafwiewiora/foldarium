@@ -36,12 +36,13 @@ test('archive routes resolve list, detail, and all-time without changing weekly 
   assert.equal(quizEntryMode('/weekly/retrospectives'), 'classic');
 });
 
-test('four outcome semantics classify pose and None questions by human solve state', () => {
+test('outcome semantics keep incomplete references separate from pose and None questions', () => {
   assert.deepEqual(OUTCOME_FILTERS.map(([value]) => value), [
     'pose-solved',
     'pose-unsolved',
     'none-solved',
     'none-unsolved',
+    'unscorable',
   ]);
   const pose = { choices: [{ correct: false }, { correct: true }] };
   const none = { choices: [{ correct: false }] };

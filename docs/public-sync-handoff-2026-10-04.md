@@ -1,97 +1,56 @@
-# Public mirror follow-up — 2026-10-04
+# Public mirror: audited unscorable references — 2026-10-04
 
-This updates the same-day integration handoff after public pull request 19 merged
-as public `main` commit `a515a08`. The follow-up starts from that merged source;
-previous browser, scientific display, selection, and Storage retry changes are
-retained without being reapplied.
+This follow-up starts from public main `7391e28`, after public pull request 20.
+It mirrors the accepted scientific and consumer changes through the same-day
+operational pull request 83 without copying its deployment or recovery files.
 
-## Verified runtime state
+## Completed source
 
-- **Completed:** five featured questions are registered for the current
-  37-question round. The marker is immutable, bound to the exact full blind
-  manifest, and verified through the public read boundary. Private selection
-  artifacts remain private. The full manifest, Selector kit, and scientific
-  benchmark population retain all 37 questions.
-- **Completed:** the browser supports the featured subset and optional full-round
-  exploration while preserving canonical question ordinals. Resume tokens keep
-  the same selection; historical sessions keep their original full scope.
-- **Completed:** the production cofolding endpoint serves three published weeks
-  with explicit population and metric definitions. Counts describe published quiz
-  questions with method poses, not unpublished prediction campaigns.
-- **Completed:** the featured-selection and automation-outbox migrations and the
-  corresponding browser and worker sources were deployed. Immutable Storage
-  upload retries were also deployed.
-- **Completed:** the new Preview assembly is registered with 39 questions and
-  390 choices, including one explicit full-receptor display warning. The
-  scientific display fallback and upload retry retain artifact validation.
-- **Pending:** full evaluation and production publication of that new assembly.
-- **Pending:** recurring reconciliation, inference, selection, reveal, and
-  publication activation. All newly introduced automation gates remain disabled;
-  registering one selection does not enable a recurring schedule.
-
-## Portable follow-up source
-
-- **Completed:** mirrored exact lifecycle scope in the provider-independent
-  planner, service loop, and tests. Each canonical identity binds campaign,
-  environment, round, and blind-manifest SHA. Ambiguous historical siblings stay
-  blocked unless explicitly scoped or already enrolled by frozen expectations.
-  The planner does not infer the preferred round from a version label.
-- **Completed:** mirrored the immutable inference-budget initialization migration
-  and its isolated PostgreSQL behavioral harness. Its service-only claim grants
-  initialization once per exact frozen execution/kit/config/budget. An executor
-  must retain and validate the existing ledger after every subsequent claim,
-  including after an ambiguous acknowledgement or complete volume loss.
-- **Completed:** mirrored strict compatibility for historical explicit-hydrogen
-  eligibility metadata. The validator recomputes the normalization, binds the
-  original SMILES and policy plus complete graph/choice audits, and enforces the
-  actual heavy-atom minimum. It preserves both recorded counts and all choices;
-  it does not repair manifests or tolerate arbitrary count differences.
-- **Completed:** the ligand-eligibility fix was deployed. Its private evaluation
-  retry is running; evaluation completion and publication remain pending.
-- **Completed:** the budget-initialization migration was applied. Paid inference
-  and the prepared recurring rollout remain disabled. This public schema is not
-  an executable provider launcher and enables no paid calls.
-- **Completed:** a guarded handoff update now requires the predecessor activation
-  marker to remain absent. A concurrent late handoff cannot overwrite the first
-  successor when both preserve the same expired safety-close timestamp. This
-  source hardening is prepared separately from activation.
-
-## Intentional exclusions
-
-Credentials, live runtime configuration, private data and artifacts, pre-reveal
-ballots, operator logs, recovery execution identifiers, access gates, deployment
-SDKs and profiles, and spend-producing schedules remain outside this mirror.
-Hosting-specific route adapters and the private canonical lifecycle scope are
-not copied. The schema and tests contain synthetic fixtures only.
-
-The operational journal, exact-date recovery helpers, deployment-specific
-reconciliation executor/tests, and unattended provider launchers remain excluded.
-The public tree preserves its local defaults, loopback development support,
-portable environment names, and pinned browser dependency. Shared planner,
-service-loop, migration, and database-harness source matches accepted operational
-source; provider launch adapters are independently maintained and reviewed.
+- Exact heavy-atom identity and explicitly deposited missing-atom evidence can
+  establish an unscorable released reference. Ambiguous chemistry still fails;
+  the RMSD acceptance and reference-coverage thresholds are unchanged.
+- Every original item, choice, coordinate artifact, and vote is retained.
+  Unscorable choices carry null metrics and no fabricated answer overlay.
+- Private evaluation v6 and retrospective v2 record full, scorable, and excluded
+  populations. Fully scored legacy artifacts preserve their existing format.
+- Selector scoring, public archives, method statistics, and post-reveal Play for
+  fun use the scorable denominator and retain the full population separately.
+  An all-unscorable population is unranked with null accuracy.
+- Molecular review accepts the validated public disposition, preserves original
+  poses, and displays an explicit Not scored message. Retrospective projection
+  also retains the blind-safe warning for a full-receptor display fallback.
+- Exact immutable Storage downloads have bounded transient retries and verify
+  the content digest. Arbitrary mutation RPCs and wrong-content responses do not
+  gain retries. Both evaluation formats pass the publication registration gate.
+- An additive database migration preserves service-only permissions, immutable
+  catalog bindings, reveal windows, and automation receipt checks.
 
 ## Verification
 
-- Follow-up JavaScript suite: 608 tests passed with one expected optional
-  WebAssembly skip. Production parity again passed for all seven shared browser
-  targets and the public configuration contract.
-- Follow-up portable pipeline: 602 tests passed, including seven additional exact
-  lifecycle-scope and six audited ligand-normalization regressions.
-- The new isolated PostgreSQL harness passed one-time initialization, repeated
-  claims, exact source/config/kit/budget binding, immutable authority, open voting
-  compatibility, and service-only privilege checks.
-- Public audit passed for 2,393 tracked files. The twelve changed files passed
-  additional credential-pattern, private-path, and recovery-identifier checks.
-- The lifecycle/budget source, tests, and migrations plus the new ligand test
-  match accepted operational source exactly. The reveal validator and Supabase
-  adapter preserve their existing provider-neutral descriptions and local
-  defaults; the newly mirrored logic is identical. `git diff --check` passed.
-- Scientific evaluation recovery remains pending separately; this follow-up
-  does not claim that the next complete weekly publication has succeeded.
+- Completed: 630 JavaScript tests passed with one optional WebAssembly skip;
+  all 616 scientific Python tests passed; the dependency-light run passed with
+  139 expected skips. The strict unscorable PostgreSQL behavior harness passed.
+- Completed: browser fixture enters an unscorable question, renders all poses,
+  navigates to a scored question with crystal comparisons, and returns without
+  losing null metrics or selecting None. No production votes are written.
+- Completed: public-tree audit passed for 2,406 tracked files, and all 40 changed
+  files passed a credential and private-runtime-identifier scan. Production
+  parity passed for all seven shared browser modules and public configuration.
+- Pending: pull-request CI, including full database bootstrap, Rust mapper tests,
+  and the repository-wide secret scan.
+- Pending: production recovery evaluation/publication verification. This source
+  handoff does not assert that delayed answers have already been published.
 
-The database, object store, runtime deployment, and public Git source are
-independently versioned. The applied migration head is
-`20261004170000_anchor_weekly_inference_budget.sql`. The optional legacy data
-release is unchanged. Matching source does not certify lifecycle completion or
-activation of any gate.
+## Intentional exclusions
+
+Credentials, private artifacts and ballots, operational execution identifiers,
+local fixture data, access gates, live environment configuration, hosting route
+adapters, deployment SDKs and profiles, and spend-producing schedules remain
+excluded. Future intake policy v5, historical Preview publication support,
+archive identity changes, and featured-cohort ranking are separate work.
+
+The public Supabase adapter retains local execution defaults, and the browser
+retains its access-free shell and local development behavior. Existing public
+handoff guards are preserved. The new migration is
+`20261004200000_support_unscorable_reference_dispositions.sql`; its presence in
+Git is not a statement that it has been applied to any running database.

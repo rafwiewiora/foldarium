@@ -22,7 +22,8 @@ function declaration(source, signature) {
 }
 
 function installDeclarations(source, signatures, sandbox) {
-  const context = vm.createContext(sandbox);
+  const context = vm.createContext(Object.assign(sandbox, { cur: sandbox.cur ?? null }));
+  vm.runInContext(declaration(source, 'function weeklyItemUnscorable(item = cur?.item)'), context);
   for (const signature of signatures) {
     vm.runInContext(declaration(source, signature), context);
   }
