@@ -169,6 +169,46 @@ These are server-only. Browser clients must receive only the project URL and a
 publishable key. Start with a staging project, write gates disabled, and a small
 target cap. Verify RLS with independent users before enabling writes.
 
+## Featured questions and reconciliation
+
+`weekly_question_selection.select_weekly_questions` selects up to five human
+questions from a complete blind round. Its default uniform draw is reproducible
+from the seed and candidate identities. Blind pose-cluster diversity and
+cross-method disagreement are recorded as explanatory scores; weighting is an
+explicit option. Missing scores do not exclude a question. Selection does not
+reduce the full scientific manifest, Selector kit, or benchmark denominator.
+
+`freeze_weekly_featured_questions` stores a content-addressed private audit and
+registers a source-bound public marker through a service-role RPC. The browser
+uses that marker for navigation and retains canonical full-round question
+indices. Historical sessions resume their original full scope.
+
+`weekly_reconciliation.plan_reconciliation` is a pure desired-state planner.
+`weekly_reconciliation_store.reconcile_weekly` adds a bounded, leased execution
+loop around an operator-supplied executor. Every write gate defaults off; the
+default dry run neither enqueues work nor invokes the executor. A benchmark
+policy must be explicitly configured before a round can advance to release.
+Durable dispatch receipts and idempotent handlers are still needed because a
+database lease cannot make external compute dispatch exactly once.
+
+Apply the matching featured-selection migration before the automation-outbox
+migration in `supabase/migrations/`. These are prepared source contracts, not an
+assertion that an existing production database has been migrated. Provider
+launchers and schedules are intentionally outside the public repository.
+
+The isolated PostgreSQL behavioral tests accept a locally installed PGlite module
+path as an optional argument:
+
+```bash
+node pipeline/tests/check_weekly_featured_database.mjs
+node pipeline/tests/check_weekly_automation_database.mjs
+```
+
+Install `@electric-sql/pglite` in an external test environment or pass its module
+path. These harnesses create disposable databases and use synthetic data; they
+do not connect to production. The featured harness uses PostgreSQL's actual
+SHA-256 function to test the digest contract.
+
 ## Portable execution contract
 
 ```text

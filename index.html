@@ -359,6 +359,10 @@
   .participant-setup input{width:100%;margin-top:6px;background:var(--panel);border:1px solid var(--line);
     color:var(--ink);border-radius:8px;padding:10px 11px;font:13px/1.45 inherit}
   .participant-setup input:focus{outline:none;border-color:var(--accent)}
+  #weekly-question-scope:not([hidden]){display:grid;gap:6px;padding:10px 0;font-size:12px}
+  #weekly-question-scope select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;
+    background:var(--panel);color:var(--ink);font:inherit}
+  #weekly-question-scope .hint{margin:0}
   .participant-setup .hint.action-required{color:var(--ink);font-weight:650}
   .performance-consent{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;
     padding:8px;border:1px solid #b8dce9;border-radius:7px;background:#edf8fc;color:#36515e!important;
@@ -483,6 +487,15 @@
         <span>Share beta performance diagnostics with this player name. This records load timings and coarse browser, screen, device, network, and WebGL capabilities. It does not record browser fingerprints, IP addresses, plugins, fonts, page content, or exact hardware identifiers.</span>
       </label>
       <p class="dialog-status" id="name-status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="weekly-question-scope" hidden>
+      <label for="weekly-question-scope-select">This week's questions</label>
+      <select id="weekly-question-scope-select">
+        <option value="featured">This week's five</option>
+        <option value="all">Explore all questions</option>
+      </select>
+      <p class="hint" id="weekly-question-scope-hint"></p>
     </section>
 
     <div id="setup">
@@ -695,6 +708,7 @@ import './quiz-entry-mode.js';
 import { createDeferredBackend, initQuizBackend } from './quiz-backend.js';
 import { createWeeklyTraceStream } from './weekly-trace-stream.js';
 import { createWeeklySessionResumeStore } from './weekly-session-resume.js?v=2026082701';
+import * as foldariumFeaturedQuestions from './weekly-featured-questions.js';
 import * as foldariumPrivateReview from './weekly-private-review.js';
 import {
   fetchWeeklyTrainingSimilarityReport,
@@ -717,6 +731,7 @@ import {
   window.foldariumBackend = createDeferredBackend();
   window.createWeeklyTraceStream = createWeeklyTraceStream;
   window.foldariumWeeklySessionResume = createWeeklySessionResumeStore(sessionStorage);
+  window.foldariumFeaturedQuestions = foldariumFeaturedQuestions;
   window.foldariumPrivateReview = foldariumPrivateReview;
   window.FOLDARIUM_PRIVATE_REVIEW = Object.freeze({ active: false });
   window.FOLDARIUM_ARCHIVE_REVIEW = Object.freeze({

@@ -1,0 +1,241 @@
+"""Exact-identity Weekly desired-state planning, independent of execution provider.
+
+No wall-clock-derived round is substituted for a stored round. Plans contain only
+identities/digests, never manifests, answers, task payloads, or credentials.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import math
+import re
+import uuid
+from typing import Any, Mapping
+
+from .weekly_lifecycle import delayed_retrospective_release
+
+
+@dataclass(frozen=True)
+class Gates:
+    intake: bool = False
+    predictions: bool = False
+    preview: bool = False
+    production: bool = False
+    kits: bool = False
+    featured: bool = False
+    evaluation: bool = False
+    reveal: bool = False
+    retrospective: bool = False
+    benchmarks: bool = False
+
+
+@dataclass(frozen=True)
+class Action:
+    kind: str
+    identity: str
+    parameters: Mapping[str, Any]
+    gate: str
+
+    @property
+    def key(self) -> str:
+        value = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(value.encode()).hexdigest()
+
+    def record(self) -> dict[str, Any]:
+        return {"action_key": self.key, **asdict(self)}
+
+
+def timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("reconciliation timestamps require a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_benchmark_policy(policy: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Validate an explicit deployment policy; absent is distinct from empty."""
+    if policy is None:
+        return None
+    if not isinstance(policy, Mapping) or set(policy) != {"schema", "policy_id", "required_methods"}:
+        raise ValueError("invalid benchmark policy fields")
+    if policy["schema"] != "foldarium.weekly-benchmark-policy/v1" or not isinstance(policy["policy_id"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", policy["policy_id"]):
+        raise ValueError("invalid benchmark policy identity")
+    methods = policy["required_methods"]
+    if not isinstance(methods, list) or len(methods) > 20:
+        raise ValueError("benchmark policy requires at most 20 methods")
+    seen = set()
+    normalized = []
+    for method in methods:
+        if not isinstance(method, Mapping) or set(method) != {"driver", "model_id", "config_sha256", "max_cost_usd"}:
+            raise ValueError("invalid benchmark method fields")
+        if not isinstance(method["driver"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", method["driver"]):
+            raise ValueError("invalid benchmark driver")
+        if not isinstance(method["model_id"], str) or not 1 <= len(method["model_id"]) <= 200:
+            raise ValueError("exact benchmark model_id required")
+        if not isinstance(method["config_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", method["config_sha256"]):
+            raise ValueError("exact benchmark config_sha256 required")
+        cost = method["max_cost_usd"]
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost <= 0:
+            raise ValueError("benchmark max_cost_usd must be finite and positive")
+        identity = (method["driver"], method["model_id"], method["config_sha256"])
+        if identity in seen:
+            raise ValueError("duplicate benchmark method")
+        seen.add(identity)
+        normalized.append(dict(method))
+    normalized.sort(key=lambda m: (m["driver"], m["model_id"], m["config_sha256"]))
+    return {"schema": policy["schema"], "policy_id": policy["policy_id"], "required_methods": normalized}
+
+
+def benchmark_expectations(row: Mapping[str, Any], policy: Mapping[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    normalized = validate_benchmark_policy(policy)
+    policy_digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    jobs = []
+    for method in normalized["required_methods"]:
+        identity = {"environment": row["environment"], "round_id": row["round_id"],
+            "blind_manifest_sha256": row["blind_manifest_sha256"], "policy_sha256": policy_digest, **method}
+        execution_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True, separators=(",", ":"))))
+        jobs.append({"execution_id": execution_id, **method})
+    return policy_digest, jobs
+
+
+def plan_reconciliation(
+    snapshot: Mapping[str, Any], *, now: datetime, gates: Gates,
+    preview_version: str, production_suffix: str,
+    available_drivers: tuple[str, ...] = (),
+    benchmark_policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Plan one bounded pass, with dependencies reconsidered on the next snapshot.
+
+    A frozen explicit benchmark expectation is required before revealing any
+    round. Empty expectations are supported but must be explicitly registered.
+    Benchmark ingestion is closed-but-UNREVEALED, as required by the existing RPC.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now requires a timezone")
+    now = now.astimezone(timezone.utc)
+    deployment_policy = validate_benchmark_policy(benchmark_policy)
+    rounds = list(snapshot["rounds"])
+    campaigns = list(snapshot["campaigns"])
+    if len(rounds) > 1000 or len(campaigns) > 1000:
+        raise ValueError("reconciliation snapshot exceeds bound")
+    by_id = {r["round_id"]: r for r in rounds}
+    if len(by_id) != len(rounds):
+        raise ValueError("duplicate round identity")
+    actions: list[dict[str, Any]] = []
+    blocked: list[dict[str, str]] = []
+
+    def block(identity: str, reason: str) -> None:
+        blocked.append({"identity": identity, "reason": reason})
+
+    def add(kind: str, identity: str, gate: str, **parameters: Any) -> None:
+        action = Action(kind, identity, parameters, gate)
+        if getattr(gates, gate):
+            actions.append(action.record())
+        else:
+            block(identity, f"gate-disabled:{gate}:{kind}")
+
+    saturday = now.date() - timedelta(days=(now.weekday() - 5) % 7)
+    campaign_ids = {c["campaign_id"] for c in campaigns}
+    current_campaign = f"wwpdb-{saturday.isoformat()}"
+    if current_campaign not in campaign_ids:
+        add("intake", current_campaign, "intake", release_date=saturday.isoformat())
+    for campaign in sorted(campaigns, key=lambda c: c["release_date"]):
+        cid = campaign["campaign_id"]
+        release = campaign["release_date"]
+        # Existing Preview IDs are authoritative (including repaired v5 rounds).
+        previews = [r for r in rounds if r["campaign_id"] == cid and r["environment"] == "preview" and r["status"] == "open"]
+        productions = [r for r in rounds if r["campaign_id"] == cid and r["environment"] == "production" and r["status"] not in {"failed", "withdrawn"}]
+        if not previews and not productions:
+            pending = [r for r in campaign.get("runs", []) if r["status"] in {"pending", "queued"} and r.get("attempt_count", 0) == 0]
+            if pending:
+                for run in pending:
+                    add("dispatch_prediction", run["run_id"], "predictions", campaign_id=cid, run_id=run["run_id"])
+            else:
+                add("advance_preview", cid, "preview", release_date=release,
+                    round_id=f"preview-weekly-{release}-nextweekly-{preview_version}")
+        elif previews and not productions:
+            if len(previews) != 1:
+                block(cid, "ambiguous-preview-identity")
+                continue
+            source = previews[0]
+            if timestamp(source["closes_at"]) <= now:
+                block(cid, "expired-preview-needs-explicit-new-voting-window")
+                continue
+            if not gates.kits:
+                block(cid, "gate-disabled:kits:promotion-registers-kit")
+                continue
+            add("promote", cid, "production", source_round_id=source["round_id"],
+                round_id=f"weekly-{release}-{production_suffix}",
+                source_manifest_sha256=source["blind_manifest_sha256"],
+                opens_at=source["opens_at"], closes_at=source["closes_at"])
+
+    production = sorted([r for r in rounds if r["environment"] == "production" and r["opened_at"] and r["status"] in {"open", "revealed"}], key=lambda r: (timestamp(r["opens_at"]), r["round_id"]))
+    for row in sorted(rounds, key=lambda r: (r["opens_at"], r["round_id"])):
+        rid = row["round_id"]
+        if row["environment"] != "production" or row["status"] not in {"open", "revealed"}:
+            continue
+        binding = {"round_id": rid, "environment": row["environment"], "blind_manifest_sha256": row["blind_manifest_sha256"]}
+        if row["status"] == "revealed":
+            if not row.get("retrospective_published"):
+                add("publish_retrospective", rid, "retrospective", **binding)
+            continue
+        if not row.get("featured_registered"):
+            add("freeze_featured", rid, "featured", **binding)
+        if not row.get("kit"):
+            add("register_kit", rid, "kits", **binding)
+        policy = row.get("automation_policy")
+        if policy is None:
+            if deployment_policy is None:
+                block(rid, "benchmark-expectations-not-frozen")
+            else:
+                policy_digest, expected_jobs = benchmark_expectations(row, deployment_policy)
+                add("freeze_policy", rid, "benchmarks", **binding,
+                    policy_sha256=policy_digest, expected_executions=expected_jobs)
+        elif policy["blind_manifest_sha256"] != row["blind_manifest_sha256"]:
+            raise ValueError(f"automation policy manifest mismatch for {rid}")
+        jobs = row.get("benchmark_jobs", [])
+        expected = set(policy["expected_execution_ids"]) if policy else set()
+        if policy and expected != {j["execution_id"] for j in jobs}:
+            raise ValueError(f"benchmark expectation membership mismatch for {rid}")
+        missing_receipts = []
+        for job in jobs:
+            if job.get("receipt"):
+                continue
+            missing_receipts.append(job["execution_id"])
+            if not row.get("kit"):
+                block(rid, "benchmark-awaiting-kit")
+            elif not job.get("artifact_uri"):
+                if not job.get("max_cost_usd"):
+                    block(rid, "llm-budget-not-frozen")
+                elif job["driver"] not in available_drivers:
+                    block(rid, f"llm-driver-unavailable:{job['driver']}")
+                else:
+                    add("score_benchmark", job["execution_id"], "benchmarks", **binding,
+                        execution_id=job["execution_id"], driver=job["driver"],
+                        model_id=job["model_id"], config_sha256=job["config_sha256"],
+                        max_cost_usd=job.get("max_cost_usd"))
+            elif timestamp(row["closes_at"]) <= now:
+                add("submit_benchmark", job["execution_id"], "benchmarks", **binding,
+                    execution_id=job["execution_id"], artifact_sha256=job["artifact_sha256"])
+        release_policy = delayed_retrospective_release(row)
+        if release_policy and not release_policy.get("activated_by_round_id"):
+            candidates = [r for r in production if timestamp(r["opens_at"]) > timestamp(row["opens_at"]) and timestamp(r["opens_at"]) <= now and r["status"] == "open"]
+            if not candidates:
+                block(rid, "awaiting-exact-successor-activation")
+            else:
+                # Close only; reveal must wait for expected benchmark receipts.
+                add("activate_successor", rid, "reveal", **binding, successor_round_id=candidates[0]["round_id"])
+            continue
+        if timestamp(row["closes_at"]) > now:
+            continue
+        if not row.get("evaluation_ready"):
+            add("evaluate", rid, "evaluation", **binding)
+        if policy is None or missing_receipts:
+            if missing_receipts:
+                block(rid, "awaiting-required-benchmark-receipts")
+            continue
+        if row.get("evaluation_ready"):
+            add("reveal", rid, "reveal", **binding)
+    return {"schema": "foldarium.weekly-reconciliation-plan/v1", "as_of": now.isoformat(), "actions": actions, "blocked": blocked}

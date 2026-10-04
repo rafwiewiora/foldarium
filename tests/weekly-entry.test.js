@@ -27,7 +27,7 @@ test('weekly-only chrome stays focused on human play while the Selector API rema
   assert.match(app, /const WEEKLY_ONLY = window\.FOLDARIUM_QUIZ_MODE === 'weekly'/);
   assert.match(app, /quizSource = WEEKLY_ONLY \? 'weekly' : 'cameo'/);
   assert.match(app, /displayMode = WEEKLY_ONLY \? 'grid' : 'all'/);
-  assert.match(app, /const questionOrdinal = isRetrospectiveReview\(\)/);
+  assert.match(app, /const questionOrdinal = \(isRetrospectiveReview\(\)/);
   assert.match(app, /`question \$\{questionOrdinal\}`/);
   assert.match(app, /startNamedSession\(\{/);
   assert.match(html, /id="participant-setup"/);
@@ -80,5 +80,6 @@ test('weekly pose-specific protein policy is explicit in one-at-a-time and Grid 
   assert.match(app, /cluster: choice\.cluster_id \|\| `choice-\$\{index\}`/);
   assert.match(app, /clustering_available: clusteringAvailable/);
   assert.match(app, /alignment_warning: item\.metadata\?\.display_alignment \|\| null/);
+  assert.match(app, /pocket_warning: item\.metadata\?\.display_pocket \|\| null/);
   assert.match(app, /cur\.item\.alignment_warning\?\.message/);
 });

@@ -27,6 +27,85 @@ export function scoreMethodPoses(poses) {
   };
 }
 
+// Callers must verify that each manifest pair belongs to a published, revealed
+// production round before passing it here. Only aggregate counts are returned.
+export function buildPublishedMethodStats(contexts) {
+  const totals = new Map();
+  const rounds = new Set();
+  for (const { blindProjection: blind, revealProjection: reveal } of contexts) {
+    if (!blind?.round_id || blind.round_id !== reveal?.round_id
+        || rounds.has(blind.round_id)
+        || !Array.isArray(blind.items) || !Array.isArray(reveal.items)
+        || blind.items.length !== reveal.items.length) {
+      throw new Error('Published method performance manifests are invalid.');
+    }
+    rounds.add(blind.round_id);
+    const revealItems = uniqueById(reveal.items);
+    uniqueById(blind.items);
+    for (const item of blind.items) {
+      const answer = revealItems.get(item.id);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(item.week)
+          || !Array.isArray(item.choices) || !item.choices.length
+          || !Array.isArray(answer?.choices)
+          || item.choices.length !== answer.choices.length) {
+        throw new Error('Published method performance target is invalid.');
+      }
+      const answers = uniqueById(answer.choices);
+      uniqueById(item.choices);
+      const methods = new Map();
+      for (const choice of item.choices) {
+        const pose = answers.get(choice.id);
+        if (typeof choice.method !== 'string' || !choice.method
+            || !Number.isFinite(pose?.rmsd) || pose.rmsd < 0
+            || typeof pose.correct !== 'boolean'
+            || pose.correct !== (pose.rmsd < 1.5)) {
+          throw new Error('Published raw pose correctness is invalid.');
+        }
+        const poses = methods.get(choice.method) || [];
+        poses.push({ id: choice.id, confidence: choice.confidence, correct: pose.rmsd < 1.5 });
+        methods.set(choice.method, poses);
+      }
+      for (const [method, poses] of methods) {
+        const key = JSON.stringify([item.week, method]);
+        const row = totals.get(key) || {
+          week: item.week, method, targets: 0, oracle_successes: 0,
+          top1_evaluated: 0, top1_successes: 0,
+        };
+        const score = scoreMethodPoses(poses);
+        row.targets += 1;
+        row.oracle_successes += Number(score.oracle_success);
+        row.top1_evaluated += Number(score.top1_success !== null);
+        row.top1_successes += Number(score.top1_success === true);
+        totals.set(key, row);
+      }
+    }
+  }
+  return {
+    schema_version: 1,
+    population: 'published_weekly_quiz',
+    publication_count: rounds.size,
+    metric: {
+      correctness: 'Raw pose RMSD < 1.5 A',
+      oracle: 'Any raw-correct pose produced by the method',
+      top1: 'Highest ligand pLDDT pose; choice ID ascending breaks ties',
+      missing_confidence: 'Excluded from the top-1 denominator',
+      target: 'One published quiz question with at least one pose from the method',
+    },
+    weeks: validateMethodStats({ schema_version: 1, weeks: [...totals.values()] }),
+  };
+}
+
+function uniqueById(values) {
+  const result = new Map();
+  for (const value of values) {
+    if (typeof value?.id !== 'string' || !value.id || result.has(value.id)) {
+      throw new Error('Published method performance identity is invalid.');
+    }
+    result.set(value.id, value);
+  }
+  return result;
+}
+
 export function validateMethodStats(data) {
   if (data?.schema_version !== 1 || !Array.isArray(data.weeks)) {
     throw new Error('Method performance data is unavailable.');

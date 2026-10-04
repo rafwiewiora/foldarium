@@ -815,6 +815,189 @@ class PairwisePoseDistanceTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
+class WeeklyQuizEmptyPocketTests(unittest.TestCase):
+    @staticmethod
+    def floating_fixture(shift: float, *, floating: bool = True) -> bytes:
+        return ("\n".join(
+            line[:38] + f"{102.0:8.3f}" + line[46:]
+            if floating and line.startswith("HETATM") else line
+            for line in pdb_fixture(shift).decode().splitlines()
+        ) + "\n").encode()
+
+    def test_empty_selection_requires_explicit_fallback_and_keeps_normal_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / "raw.pdb"
+            raw.write_bytes(pdb_fixture(0))
+            _, model = weekly_quiz_module._load_model(raw, gemmi)
+            options = dict(
+                transform=weekly_quiz_module._identity_transform(gemmi),
+                gemmi=gemmi, numpy=numpy,
+            )
+            far = numpy.array([[10.0, 100.0, 0.0]])
+            with self.assertRaisesRegex(
+                weekly_quiz_module.WeeklyQuizAssemblyError, "export is empty"
+            ):
+                weekly_quiz_module._write_polymer(root / "empty.pdb", model, near=far, **options)
+            self.assertFalse((root / "empty.pdb").exists())
+            weekly_quiz_module._write_polymer(root / "full.pdb", model, near=None, **options)
+            provenance = weekly_quiz_module._write_polymer(
+                root / "fallback.pdb", model, near=far,
+                allow_empty_pocket_fallback=True, **options,
+            )
+            self.assertEqual((root / "full.pdb").read_bytes(), (root / "fallback.pdb").read_bytes())
+            self.assertEqual(provenance["mode"], "full_receptor_no_contacts")
+            self.assertEqual(provenance["contact_residue_count"], 0)
+            self.assertEqual(provenance["exported_residue_count"], 6)
+            # The normal selection and the strict <5 Å boundary are unchanged.
+            for distance, expected_mode in ((4.999, "contact_residues"), (5.0, "full_receptor_no_contacts")):
+                provenance = weekly_quiz_module._write_polymer(
+                    root / "boundary.pdb", model,
+                    near=numpy.array([[3.8, distance, 0.0]]),
+                    allow_empty_pocket_fallback=True, **options,
+                )
+                self.assertEqual(provenance["mode"], expected_mode)
+            near = numpy.array([[3.8, 2.0, 0.0]])
+            weekly_quiz_module._write_polymer(root / "normal.pdb", model, near=near, **options)
+            provenance = weekly_quiz_module._write_polymer(
+                root / "normal-fallback-enabled.pdb", model, near=near,
+                allow_empty_pocket_fallback=True, **options,
+            )
+            self.assertEqual(provenance["mode"], "contact_residues")
+            self.assertEqual((root / "normal.pdb").read_bytes(), (root / "normal-fallback-enabled.pdb").read_bytes())
+            self.assertLess(provenance["exported_residue_count"], 6)
+
+    def test_invalid_coordinates_and_missing_polymer_never_fall_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = root / "raw.pdb"
+            raw.write_bytes(pdb_fixture(0))
+            _, model = weekly_quiz_module._load_model(raw, gemmi)
+            options = dict(
+                transform=weekly_quiz_module._identity_transform(gemmi),
+                gemmi=gemmi, numpy=numpy, allow_empty_pocket_fallback=True,
+            )
+            for invalid in ([], [[1, 2]], [[1, float("nan"), 0]], [[1, float("inf"), 0]]):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    weekly_quiz_module.WeeklyQuizAssemblyError, "ligand coordinates are invalid"
+                ):
+                    weekly_quiz_module._write_polymer(root / "bad.pdb", model, near=invalid, **options)
+            with self.assertRaisesRegex(weekly_quiz_module.WeeklyQuizAssemblyError, "export is empty"):
+                weekly_quiz_module._write_polymer(
+                    root / "missing.pdb", gemmi.Model("1"), near=[[1, 100, 0]], **options
+                )
+            model[0][0][0].pos.x = float("nan")
+            with self.assertRaisesRegex(weekly_quiz_module.WeeklyQuizAssemblyError, "receptor coordinates are invalid"):
+                weekly_quiz_module._write_polymer(root / "bad.pdb", model, near=[[1, 100, 0]], **options)
+            self.assertFalse((root / "bad.pdb").exists())
+            self.assertFalse((root / "missing.pdb").exists())
+
+    def test_mixed_and_all_floating_poses_keep_coordinates_scoring_and_publication_lineage(self) -> None:
+        for all_floating in (False, True):
+            for batched in (False, True):
+                with self.subTest(all_floating=all_floating, batched=batched), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    contents = {
+                        "openfold3": self.floating_fixture(0),
+                        "boltz2": self.floating_fixture(20, floating=all_floating),
+                    }
+                    rows, downloads = [], {}
+                    for method, content in contents.items():
+                        row, uri = run_row(method, content)
+                        rows.append(row)
+                        downloads[uri] = content
+                    scored = {}
+
+                    def score(**request):
+                        scored[request["pose_id"]] = {
+                            "protein": Path(request["protein_path"]).read_bytes(),
+                            "ligand": Path(request["ligand_path"]).read_bytes(),
+                        }
+                        return {
+                            "pose_id": request["pose_id"],
+                            "schema_version": "foldarium.pose-score/v1",
+                            "status": "succeeded",
+                            "scores": {"smina_affinity_kcal_mol": -1.0},
+                            "provenance": {"mode": "score_only", "scoring_function": "vina"},
+                            "interaction_summary": {"engine": "prolif", "policy": "fixture/v1", "count": 0},
+                        }
+
+                    stage = stage_weekly_quiz(
+                        rows, root, round_id="weekly-floating", campaign_id="weekly-2026-08-08",
+                        downloader=lambda uri, **_: downloads[uri],
+                        **({"choice_batch_scorer": lambda requests: [score(**request) for request in requests]}
+                           if batched else {"choice_scorer": score}),
+                    )
+                    item = stage["items"][0]
+                    self.assertEqual(len(item["choices"]), 2)
+                    self.assertEqual(len(scored), 2)
+                    self.assertEqual(item["clustering"]["cluster_count"], 1 if all_floating else 2)
+                    expected_fallback_count = 2 if all_floating else 1
+                    overlay = item["clustering"]["receptor_anchor"]["overlay_pocket_export"]
+                    self.assertEqual(overlay["mode"], "full_receptor_no_contacts" if all_floating else "contact_residues")
+                    if all_floating:
+                        self.assertEqual((root / item["pocket_path"]).read_bytes(), (root / item["protein_path"]).read_bytes())
+                    for choice in item["choices"]:
+                        floating = all_floating or choice["method"] == "openfold3"
+                        provenance = choice["alignment"]["pocket_export"]
+                        self.assertEqual(provenance["mode"], "full_receptor_no_contacts" if floating else "contact_residues")
+                        protein = (root / choice["protein_path"]).read_bytes()
+                        ligand = (root / choice["pose_path"]).read_bytes()
+                        self.assertEqual(scored[choice["scoring"]["pose_id"]], {"protein": protein, "ligand": ligand})
+                        protein_lines = [line for line in protein.decode().splitlines() if line.startswith("ATOM")]
+                        ligand_lines = [line for line in ligand.decode().splitlines() if line.startswith("HETATM")]
+                        self.assertEqual(len(protein_lines), 18)
+                        self.assertEqual(len(ligand_lines), 15)
+                        self.assertEqual({float(line[38:46]) for line in protein_lines}, {0.0})
+                        self.assertEqual({float(line[38:46]) for line in ligand_lines}, {102.0 if floating else 2.0})
+                        # The receptor translation applies equally to ligand and receptor.
+                        self.assertAlmostEqual(float(ligand_lines[0][30:38]) - float(protein_lines[0][30:38]), 6.2)
+                        self.assertEqual(choice["artifact_sha256"], hashlib.sha256(contents[choice["method"]]).hexdigest())
+                        if floating:
+                            self.assertEqual((root / choice["pocket_path"]).read_bytes(), protein)
+                    private, public = FakeCoordinator("private"), FakeCoordinator("quiz-public")
+                    summary = publish_staged_weekly_quiz(
+                        root, private_coordinator=private, public_coordinator=public,
+                        opens_at="2026-08-08T03:00:00Z", closes_at="2026-08-12T00:00:00Z", open_round=True,
+                    )
+                    self.assertEqual(summary["choice_count"], 2)
+                    blind = private.opened["blind_manifest"]
+                    warning = blind["items"][0]["metadata"]["display_pocket"]
+                    self.assertEqual(warning["fallback_choice_count"], expected_fallback_count)
+                    self.assertEqual(warning["overlay_fallback"], all_floating)
+                    self.assertEqual(warning["code"], weekly_quiz_module.POCKET_EXPORT_WARNING_CODE)
+                    self.assertNotIn("run_id", json.dumps(blind))
+                    self.assertNotIn("artifact_sha256", json.dumps(blind))
+                    self.assertNotIn("alignment", blind["items"][0]["choices"][0])
+                    private_index = next(json.loads(content) for content, media in private.stored
+                        if media == "application/json" and "blind_manifest_sha256" in json.loads(content))
+                    self.assertEqual(private_index["items"][0]["clustering"]["receptor_anchor"]["overlay_pocket_export"], overlay)
+                    by_sample = {choice["sample_id"]: choice for choice in item["choices"]}
+                    for choice in private_index["items"][0]["choices"]:
+                        original = by_sample[choice["sample_id"]]
+                        self.assertEqual(choice["artifact_sha256"], original["artifact_sha256"])
+                        self.assertEqual(choice["alignment"], original["alignment"])
+                        if choice["alignment"]["pocket_export"]["mode"] == "full_receptor_no_contacts":
+                            self.assertEqual(choice["pocket_uri"], choice["protein_uri"])
+                    self.assertEqual(len(private.registered_selector_kits), 1)
+
+    def test_floating_poses_do_not_hide_missing_protein_or_digest_mismatch(self) -> None:
+        floating = self.floating_fixture(0)
+        no_protein = b"\n".join(line for line in floating.splitlines() if not line.startswith(b"ATOM")) + b"\n"
+        for broken, wrong_digest in ((no_protein, False), (floating, True)):
+            with self.subTest(wrong_digest=wrong_digest), tempfile.TemporaryDirectory() as temporary:
+                first, uri = run_row("openfold3", broken)
+                second, second_uri = run_row("boltz2", pdb_fixture(20))
+                downloads = {uri: broken + b"\n" if wrong_digest else broken, second_uri: pdb_fixture(20)}
+                with self.assertRaises(weekly_quiz_module.WeeklyQuizAssemblyError):
+                    stage_weekly_quiz(
+                        [first, second], temporary, round_id="weekly-invalid", campaign_id="weekly-2026-08-08",
+                        downloader=lambda uri, **_: downloads[uri],
+                    )
+                self.assertFalse(Path(temporary, "stage.json").exists())
+
+
+@unittest.skipUnless(HAS_ASSEMBLY_DEPS, "weekly assembly dependencies are optional")
 class WeeklyQuizAssemblyTests(unittest.TestCase):
     def test_stages_explicit_h_smiles_against_predicted_heavy_coordinates(self) -> None:
         from rdkit import Chem
@@ -1228,6 +1411,7 @@ class WeeklyQuizAssemblyTests(unittest.TestCase):
             self.assertEqual(summary["single_cluster_item_count"], 1)
             self.assertTrue(public.public_bucket_checked)
             blind = private.opened["blind_manifest"]
+            self.assertNotIn("display_pocket", blind["items"][0]["metadata"])
             self.assertNotIn("run_id", json.dumps(blind))
             self.assertNotIn("clustering", blind["items"][0])
             self.assertEqual(

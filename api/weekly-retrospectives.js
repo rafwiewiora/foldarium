@@ -21,6 +21,7 @@ import {
   verifyPublicArtifact,
   verifySourceSnapshot,
 } from '../lib/weekly-retrospectives.js';
+import { buildPublishedMethodStats } from '../method-performance.js';
 
 const PUBLIC_BRIEF_CACHE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=600';
 const PUBLIC_DETAIL_CACHE = 'public, max-age=300, s-maxage=86400, stale-while-revalidate=604800';
@@ -95,6 +96,16 @@ export function createWeeklyRetrospectivesHandler({
       }
 
       const publications = await client.fetchAllPublications();
+      if (mode.name === 'cofolding') {
+        const contexts = await mapWithConcurrency(
+          publications,
+          ARTIFACT_LOAD_CONCURRENCY,
+          publication => client.fetchVerifiedContext(publication),
+        );
+        const result = buildPublishedMethodStats(contexts);
+        response.setHeader('Cache-Control', PUBLIC_BRIEF_CACHE);
+        return send(response, 200, result);
+      }
       if (mode.admin) {
         const hmacKey = participantHmacKey(env);
         const weeks = await mapWithConcurrency(
@@ -183,11 +194,20 @@ function participantHmacKey(env) {
 function parseMode(query) {
   const admin = optionalFlag(query.admin, 'admin');
   const allTime = optionalFlag(query.all_time, 'all_time');
+  const cofolding = optionalFlag(query.cofolding, 'cofolding');
   const roundId = optionalSingle(query.round_id, 'round_id');
   const cursorRaw = optionalSingle(query.cursor, 'cursor');
   const limitRaw = optionalSingle(query.limit, 'limit');
   const ranking = optionalSingle(query.ranking, 'ranking') || 'total_correct';
   const participantKind = optionalSingle(query.participant_kind, 'participant_kind');
+
+  if (cofolding) {
+    if (admin || allTime || roundId || cursorRaw != null || limitRaw != null
+        || query.ranking != null || query.participant_kind != null) {
+      throw new WeeklyRetrospectiveError('cofolding request is invalid');
+    }
+    return { name: 'cofolding', admin: false };
+  }
 
   if (allTime && roundId || admin && !allTime && !roundId) {
     throw new WeeklyRetrospectiveError('request mode is invalid');

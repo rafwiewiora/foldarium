@@ -12,9 +12,11 @@ same worker usable across local and remote execution backends.
 from __future__ import annotations
 
 import hashlib
+from http.client import IncompleteRead
 import json
 import os
 import re
+import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -35,6 +37,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STORAGE_ERROR_BYTES = 16 * 1024
+# Only immutable, digest-verified Storage uploads use these retries. RPCs and
+# metadata-changing PUTs remain single attempts because their effects may differ.
+_STORAGE_UPLOAD_RETRY_DELAYS = (1.0, 2.0, 4.0)
+_TRANSIENT_STORAGE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530})
 IMMUTABLE_PUBLIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 # Retrying a prediction is a metered state transition, not ordinary queue
@@ -122,9 +128,10 @@ class SupabaseConfigurationError(ValueError):
 class SupabasePublicationError(RuntimeError):
     """Raised when verification or a sanitized Supabase request fails."""
 
-    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+    def __init__(self, message: str, *, http_status: int | None = None, transport_failure: bool = False) -> None:
         super().__init__(message)
         self.http_status = http_status
+        self.transport_failure = transport_failure
 
 
 def _safe_identifier(value: Any, field: str) -> str:
@@ -474,23 +481,40 @@ class SupabasePublisher:
         return f"sha256/{digest[:2]}/{digest}"
 
     def _upload(self, source: Path, digest: str, media_type: str) -> None:
-        object_path = self._object_path(digest)
+        self._store_immutable_bytes(source.read_bytes(), digest, media_type, operation="artifact upload")
+
+    def _store_immutable_bytes(
+        self, content: bytes, digest: str, media_type: str, *, operation: str,
+        cache_control: str | None = None,
+    ) -> None:
+        """Retry only the same verified bytes at their immutable content address.
+
+        A request can succeed remotely before its response is lost. Retrying
+        then yields a duplicate, which must still pass existing-object SHA
+        verification. Verification failures caused by transport/server outages
+        may retry; conflicting bytes or permanent HTTP errors never do.
+        """
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise SupabasePublicationError("upload bytes do not match their content digest")
         endpoint = (
-            "/storage/v1/object/"
-            + quote(self.storage_bucket, safe="")
-            + "/"
-            + quote(object_path, safe="/")
+            "/storage/v1/object/" + quote(self.storage_bucket, safe="") + "/"
+            + quote(self._object_path(digest), safe="/")
         )
-        response = self._request(
-            endpoint,
-            source.read_bytes(),
-            operation="artifact upload",
-            content_type=media_type,
-            extra_headers={"x-upsert": "false"},
-            allow_conflict=True,
-        )
-        if response is None:
-            self._verify_existing_object(digest)
+        for attempt in range(len(_STORAGE_UPLOAD_RETRY_DELAYS) + 1):
+            try:
+                response = self._request(
+                    endpoint, content, operation=operation, content_type=media_type,
+                    extra_headers={"x-upsert": "false", **({"Cache-Control": cache_control} if cache_control else {})},
+                    allow_conflict=True,
+                )
+                if response is None:
+                    self._verify_existing_object(digest)
+                return
+            except SupabasePublicationError as error:
+                transient = error.transport_failure or error.http_status in _TRANSIENT_STORAGE_HTTP_STATUSES
+                if not transient or attempt == len(_STORAGE_UPLOAD_RETRY_DELAYS):
+                    raise
+                time.sleep(_STORAGE_UPLOAD_RETRY_DELAYS[attempt])
 
     def _verify_existing_object(self, digest: str) -> None:
         object_path = self._object_path(digest)
@@ -576,16 +600,16 @@ class SupabasePublisher:
                 f"{operation} failed with HTTP {status}",
                 http_status=status,
             ) from None
-        except (URLError, TimeoutError, OSError):
-            raise SupabasePublicationError(f"{operation} request failed") from None
+        except (URLError, TimeoutError, OSError, IncompleteRead):
+            raise SupabasePublicationError(f"{operation} request failed", transport_failure=True) from None
 
         try:
             status = getattr(response, "status", None)
             if status is None and hasattr(response, "getcode"):
                 status = response.getcode()
             data = response.read()
-        except (URLError, TimeoutError, OSError):
-            raise SupabasePublicationError(f"{operation} response failed") from None
+        except (URLError, TimeoutError, OSError, IncompleteRead):
+            raise SupabasePublicationError(f"{operation} response failed", transport_failure=True) from None
         finally:
             close = getattr(response, "close", None)
             if close is not None:
@@ -593,7 +617,7 @@ class SupabasePublisher:
         if status is not None and not 200 <= int(status) < 300:
             if allow_conflict and _is_storage_duplicate_response(int(status), data):
                 return None
-            raise SupabasePublicationError(f"{operation} failed with HTTP {status}")
+            raise SupabasePublicationError(f"{operation} failed with HTTP {status}", http_status=int(status))
         return data
 
 
@@ -1754,25 +1778,9 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError("cache_control must be a short string")
         digest = hashlib.sha256(content).hexdigest()
         object_path = self._object_path(digest)
-        endpoint = (
-            "/storage/v1/object/"
-            + quote(self.storage_bucket, safe="")
-            + "/"
-            + quote(object_path, safe="/")
+        self._store_immutable_bytes(
+            content, digest, media_type, operation="source snapshot upload", cache_control=cache_control,
         )
-        response = self._request(
-            endpoint,
-            content,
-            operation="source snapshot upload",
-            content_type=media_type,
-            extra_headers={
-                "x-upsert": "false",
-                **({"Cache-Control": cache_control} if cache_control else {}),
-            },
-            allow_conflict=True,
-        )
-        if response is None:
-            self._verify_existing_object(digest)
         return {
             "object_uri": f"supabase://{self.storage_bucket}/{object_path}",
             "sha256": digest,
@@ -3406,6 +3414,36 @@ class SupabaseCoordinator(SupabasePublisher):
                     f"retrospective publication catalog differs at {field}"
                 )
         return row
+
+    def register_weekly_featured_questions(
+        self,
+        *,
+        round_id: str,
+        featured_questions: Mapping[str, Any],
+        selection_canonical: str,
+        selection_artifact: Mapping[str, Any],
+    ) -> Any:
+        """Freeze a private-audited human draw without changing the full round."""
+
+        marker = _json_object(featured_questions, "featured_questions")
+        artifact = _json_object(selection_artifact, "selection_artifact")
+        if not isinstance(selection_canonical, str) or not selection_canonical:
+            raise SupabasePublicationError("selection_canonical is required")
+        content = selection_canonical.encode("utf-8")
+        digest = hashlib.sha256(content).hexdigest()
+        if (
+            marker.get("selection_sha256") != digest
+            or artifact.get("sha256") != digest
+            or artifact.get("size_bytes") != len(content)
+            or artifact.get("media_type") != "application/json"
+        ):
+            raise SupabasePublicationError("featured selection does not match its artifact digest")
+        return self._rpc("register_weekly_featured_questions", {
+            "p_round_id": _safe_identifier(round_id, "round_id"),
+            "p_featured_questions": marker,
+            "p_selection_canonical": selection_canonical,
+            "p_selection_artifact": artifact,
+        })
 
     def register_weekly_selector_kit(
         self,

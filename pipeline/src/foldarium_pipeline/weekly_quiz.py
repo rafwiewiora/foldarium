@@ -50,6 +50,12 @@ from .selection import (
 
 WEEKLY_QUIZ_STAGE_VERSION = 11
 POCKET_RADIUS_ANGSTROM = 5.0
+POCKET_EXPORT_POLICY = "within-5-angstrom-or-full-receptor-if-no-contacts/v1"
+POCKET_EXPORT_WARNING_CODE = "no_predicted_receptor_contacts"
+POCKET_EXPORT_WARNING_MESSAGE = (
+    "Some predicted pockets have no protein residues within 5 Å of the ligand; "
+    "the full protein is shown instead, with all coordinates unchanged."
+)
 DISPLAY_ALIGNMENT_MIN_COMPLEX_SUPPORT_FRACTION = 0.20
 DISPLAY_ALIGNMENT_MIN_CONTACT_CHAIN_SUPPORT_FRACTION = 0.20
 DISPLAY_ALIGNMENT_MIN_ABSOLUTE_SUPPORT = 5
@@ -759,7 +765,22 @@ def _write_polymer(
     transform: Any,
     gemmi: Any,
     numpy: Any,
-) -> None:
+    allow_empty_pocket_fallback: bool = False,
+) -> dict[str, Any]:
+    """Export a receptor, preserving a no-contact pose without inventing a pocket.
+
+    Only a valid, empty distance selection may fall back to the full receptor.
+    Missing polymers, invalid coordinates, and all other export errors still fail.
+    """
+    if near is not None:
+        near = numpy.asarray(near, dtype=float)
+        if (
+            near.ndim != 2
+            or near.shape[1] != 3
+            or not len(near)
+            or not numpy.isfinite(near).all()
+        ):
+            raise WeeklyQuizAssemblyError("browser pocket ligand coordinates are invalid")
     chain_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     chain_names: dict[str, str] = {}
     lines: list[str] = []
@@ -770,6 +791,8 @@ def _write_polymer(
         coordinates = numpy.array(
             [_position(atom, transform, gemmi) for atom in atoms], dtype=float
         )
+        if not numpy.isfinite(coordinates).all():
+            raise WeeklyQuizAssemblyError("browser receptor coordinates are invalid")
         if near is not None and (
             not len(coordinates)
             or float(numpy.min(numpy.linalg.norm(coordinates[:, None] - near[None], axis=2)))
@@ -796,9 +819,27 @@ def _write_polymer(
                 )
             )
     if not lines:
+        if near is not None and allow_empty_pocket_fallback:
+            # A full export independently enforces the nonempty receptor and
+            # browser chain limits. Do not catch arbitrary export failures.
+            full_export = _write_polymer(
+                path, model, near=None, transform=transform, gemmi=gemmi, numpy=numpy
+            )
+            return {
+                **full_export,
+                "mode": "full_receptor_no_contacts",
+                "contact_residue_count": 0,
+            }
         raise WeeklyQuizAssemblyError("browser protein/pocket export is empty")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\nEND\n", encoding="utf-8")
+    return {
+        "policy": POCKET_EXPORT_POLICY,
+        "mode": "full_receptor" if near is None else "contact_residues",
+        "cutoff_angstrom": POCKET_RADIUS_ANGSTROM,
+        "contact_residue_count": None if near is None else residue_number,
+        "exported_residue_count": residue_number,
+    }
 
 
 def _load_model(path: Path, gemmi: Any) -> tuple[Any, Any]:
@@ -1701,10 +1742,11 @@ def stage_weekly_quiz(
                 gemmi=gemmi,
                 numpy=numpy,
             )
-            _write_polymer(
+            alignment["pocket_export"] = _write_polymer(
                 root / choice_pocket_relative,
                 choice["model"],
                 near=numpy.array(coordinates, dtype=float),
+                allow_empty_pocket_fallback=True,
                 transform=transform,
                 gemmi=gemmi,
                 numpy=numpy,
@@ -1850,10 +1892,11 @@ def stage_weekly_quiz(
         # an all-overlay comparison frame and is never an experimental answer.
         protein_relative = choice_rows[reference_choice_index]["protein_path"]
         pocket_relative = f"assets/{target_id}/overlay-pocket.pdb"
-        _write_polymer(
+        receptor_anchor["overlay_pocket_export"] = _write_polymer(
             root / pocket_relative,
             reference_model,
             near=pose_cloud,
+            allow_empty_pocket_fallback=True,
             transform=_identity_transform(gemmi),
             gemmi=gemmi,
             numpy=numpy,
@@ -3125,6 +3168,23 @@ def publish_staged_weekly_quiz(
             item_metadata["display_alignment"] = {
                 "code": warning["code"],
                 "message": warning["message"],
+            }
+        fallback_choice_count = sum(
+            choice.get("alignment", {}).get("pocket_export", {}).get("mode")
+            == "full_receptor_no_contacts"
+            for choice in item["choices"]
+        )
+        overlay_fallback = (
+            item["clustering"]["receptor_anchor"].get("overlay_pocket_export", {}).get("mode")
+            == "full_receptor_no_contacts"
+        )
+        if fallback_choice_count or overlay_fallback:
+            item_metadata["display_pocket"] = {
+                "code": POCKET_EXPORT_WARNING_CODE,
+                "message": POCKET_EXPORT_WARNING_MESSAGE,
+                "policy": POCKET_EXPORT_POLICY,
+                "fallback_choice_count": fallback_choice_count,
+                "overlay_fallback": overlay_fallback,
             }
         manifest_item["metadata"] = item_metadata
         manifest_items.append(manifest_item)

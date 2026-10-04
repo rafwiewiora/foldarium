@@ -77,7 +77,7 @@ test('weekly voting keeps comment prompting optional and supports free question 
   assert.match(html, /class="vote-submit-row"[\s\S]*?id="lock"[\s\S]*?id="vote-comment-enabled"[^>]*checked/);
   assert.match(html, /id="question-prev"[\s\S]*?id="question-next"/);
   assert.match(app, /weeklyCommentPromptEnabled = false;[\s\S]*?vote-comment-enabled'\)\.checked = false/);
-  assert.match(app, /if \(idx \+ 1 < ITEMS\.length\) await loadQuestion\(idx \+ 1\)/);
+  assert.match(app, /if \(nextIndex !== null\) await loadQuestion\(nextIndex\)/);
   assert.match(app, /WEEKLY_ITEM_STATES\.set\(cur\.item\.id, cur\)/);
   assert.match(app, /savedWeeklyState\?\.clusters/);
   assert.match(app, /WEEKLY_VOTES\.has\(cur\.item\.id\) \? 'Update vote' : 'Record vote'/);

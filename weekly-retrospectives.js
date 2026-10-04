@@ -895,7 +895,7 @@ async function loadCofolding() {
   const status = document.getElementById('cofolding-status');
   status.textContent = 'Loading method performance…';
   try {
-    const response = await fetch('/weekly_method_stats.json?v=20260830');
+    const response = await fetch('/api/weekly-retrospectives?cofolding=1');
     if (!response.ok) throw new Error('Method performance is unavailable');
     state.methodData = await response.json();
     validateMethodStats(state.methodData);
@@ -904,7 +904,9 @@ async function loadCofolding() {
     renderCofoldingOverall(methods);
     renderCofoldingMethodFilter(methods);
     setCofoldingView(state.cofoldingView);
-    status.textContent = '';
+    status.textContent = methods.length
+      ? 'Published quiz questions only · updates as new retrospectives are published.'
+      : 'No published quiz method results yet.';
   } catch (error) {
     state.methodData = null;
     status.textContent = error.message;

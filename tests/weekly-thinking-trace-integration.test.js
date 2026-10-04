@@ -14,7 +14,7 @@ test('weekly thinking trace covers periodic, navigation, vote, visibility, and c
   assert.match(app, /onEntry: entry => weeklyTraceStream\?\.recordEntry\?\.\(entry\)/);
   assert.match(app, /weeklyTraceStream\?\.startVisit\?\.\(\{ itemId: item\.id, questionIndex: i \}\)/);
   assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\('navigation'\)/);
-  assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\(idx \+ 1 < ITEMS\.length \? 'vote' : 'completion'\)/);
+  assert.match(app, /weeklyTraceStream\?\.endVisit\?\.\(nextIndex !== null \? 'vote' : 'completion'\)/);
   assert.match(app, /weeklyTraceStream\?\.flush\?\.\('visibility'\)/);
   assert.match(app, /recordAppEvent\('vote_submitted'\)/);
   assert.match(app, /await weeklyTraceStream\?\.checkpoint\?\.\('vote'\)/);
@@ -71,7 +71,7 @@ test('three future Grid pages are prefetched without navigation cancellation', a
   assert.doesNotMatch(app, /async function loadQuestion\(i\) \{\s*structurePrefetcher\.cancel\(\)/);
   assert.match(app, /structurePrefetcher\.textWhenReady\(requestUrl\)/);
   assert.match(app, /builders\.data\.rawData\(\{ data: prefetchedText/);
-  assert.match(app, /pendingQuestionPrefetchIndexes = Array\.from\(/);
+  assert.match(app, /pendingQuestionPrefetchIndexes = sessionIndexes\.slice\(/);
   assert.match(app, /priority: QUESTION_PREFETCH_LOOKAHEAD - distance/);
   assert.match(app, /view\.classList\.remove\('loading-grid'\); syncReviewState\(\);\s*startPendingQuestionPrefetch\(\)/);
   assert.match(prefetch, /const DEFAULT_CONCURRENCY = 4/);
