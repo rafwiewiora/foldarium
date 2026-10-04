@@ -206,6 +206,15 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** portable tests cover nested call identity, uncertainty, terminal
   errors, receipt preservation, and the run-claim race. Deployment is separate.
 
+### Supported Node CI coverage
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** web and API tests plus the public boundary audit run independently
+  on Node 22 and 24; selector parity explicitly uses Node 24.
+- **Pending:** both supported runtime checks in CI. This changes test runners only,
+  without altering runtime configuration, hosting integration or access policy.
+
 ### Durable prediction handoffs
 
 - **Status:** planned

@@ -139,7 +139,17 @@ Completed: 19 focused tests, 665 JavaScript tests (one optional WebAssembly skip
 Real PostgreSQL dispatch guards, the 2,459-file public-tree audit, ten-file
 credential/runtime scan and all seven production browser parity checks pass.
 Production worker cutover and migrations
-through `20261005020000` are verified; public CI remains pending. No hosted
+through `20261005020000` are verified. All six durable-handoff CI checks passed,
+including clean database startup/reset and repository-wide secrets. No hosted
 worker functions, SDK integration tests, profiles, schedules, operational records,
 credentials or live artifacts are included. The new migration depends on the
 private diagnostics catalog migration and does not itself integrate a launcher.
+
+## Follow-up: supported Node test runners
+
+Prepared: the public web/API test and boundary-audit job runs on Node 22 and 24,
+with independent results; selector parity explicitly uses Node 24. These are
+supported LTS releases in the [official release table](https://nodejs.org/en/about/previous-releases),
+while the previous Node 20 CI runtime is end-of-life. Local `npm test` passes 665 tests with one optional WebAssembly skip and the
+2,459-file public audit. Both supported-version CI results remain pending. Deployment runtime, runtime compatibility
+metadata, provider integrations, credentials and access policies are unchanged.
