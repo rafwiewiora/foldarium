@@ -8,6 +8,7 @@ from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
 from .contracts import canonical_json, stable_id
+from .reference_disposition import validate_reference_disposition
 
 QUIZ_SCHEMA_VERSION = 1
 REVEAL_ONLY_FIELDS = frozenset(
@@ -292,6 +293,10 @@ def build_reveal_manifest(
         choices = item.get("choices")
         if item_id not in expected or not isinstance(choices, list):
             raise QuizManifestError(f"unexpected scored item: {item_id}")
+        try:
+            unscorable = validate_reference_disposition(item)
+        except ValueError as exc:
+            raise QuizManifestError(str(exc)) from exc
         seen: set[str] = set()
         normalized_choices: list[dict[str, Any]] = []
         for raw_choice in choices:
@@ -301,18 +306,21 @@ def build_reveal_manifest(
                 raise QuizManifestError(f"unexpected or duplicate scored choice: {choice_id}")
             rmsd = choice.get("rmsd")
             correct = choice.get("correct")
-            if isinstance(rmsd, bool) or not isinstance(rmsd, (int, float)) or rmsd < 0:
+            if not unscorable and (isinstance(rmsd, bool) or not isinstance(rmsd, (int, float)) or rmsd < 0):
                 raise QuizManifestError("scored choice.rmsd must be a non-negative number")
-            if not isinstance(correct, bool):
+            if not unscorable and not isinstance(correct, bool):
                 raise QuizManifestError("scored choice.correct must be boolean")
             normalized = deepcopy(choice)
             normalized["id"] = choice_id
-            normalized["rmsd"] = float(rmsd)
+            normalized["rmsd"] = None if unscorable else float(rmsd)
             seen.add(choice_id)
             normalized_choices.append(normalized)
         if seen != expected[item_id]:
             raise QuizManifestError(f"scored choices are incomplete for {item_id}")
-        reveal_items.append({"id": item_id, "choices": normalized_choices})
+        normalized_item = {"id": item_id, "choices": normalized_choices}
+        if unscorable:
+            normalized_item.update(evaluation_status="unscorable", reference_disposition=deepcopy(item["reference_disposition"]))
+        reveal_items.append(normalized_item)
     if {item["id"] for item in reveal_items} != set(expected):
         raise QuizManifestError("scored item IDs do not match the blind manifest")
     reveal_items.sort(key=lambda item: item["id"])

@@ -25,6 +25,7 @@ from .private_evaluation import (
     describe_private_evaluation_artifact,
 )
 from .quiz import manifest_sha256
+from .reference_disposition import validate_reference_disposition
 from .supabase import PRIVATE_WEEKLY_EVALUATION_FIELDS
 
 RETROSPECTIVE_PUBLICATION_FORMAT_VERSION = (
@@ -33,6 +34,8 @@ RETROSPECTIVE_PUBLICATION_FORMAT_VERSION = (
 RETROSPECTIVE_SOURCE_FORMAT_VERSION = "foldarium.weekly-retrospective-source/v1"
 RETROSPECTIVE_PUBLIC_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v1"
 RETROSPECTIVE_ADMIN_FORMAT_VERSION = "foldarium.weekly-retrospective-admin/v1"
+RETROSPECTIVE_PUBLIC_UNSCORABLE_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v2"
+RETROSPECTIVE_ADMIN_UNSCORABLE_FORMAT_VERSION = "foldarium.weekly-retrospective-admin/v2"
 RETROSPECTIVE_MEDIA_TYPE = "application/json"
 LEGACY_ANONYMOUS_ROUND_ID = "weekly-2026-08-08-beta-v5-global-tm-29"
 LEGACY_ANONYMOUS_DISPLAY_NAME = "Anonymous"
@@ -577,8 +580,8 @@ def _verify_evaluation(
             raise RetrospectiveArchiveError(
                 f"private evaluation catalog differs from artifact at {field}"
             )
-    if catalog.get("format_version") != PRIVATE_EVALUATION_FORMAT_VERSION:
-        raise RetrospectiveArchiveError("retrospective requires a v5 private evaluation")
+    if catalog.get("format_version") not in {PRIVATE_EVALUATION_FORMAT_VERSION, "foldarium.weekly-private-evaluation/v6"}:
+        raise RetrospectiveArchiveError("retrospective requires a verified v5 or v6 private evaluation")
     for field in (
         "round_id",
         "campaign_id",
@@ -617,17 +620,23 @@ def _answer_key(reveal: Mapping[str, Any], item_count: int) -> dict[str, Any]:
         raw_choices = item.get("choices")
         if not isinstance(raw_choices, list) or not raw_choices:
             raise RetrospectiveArchiveError("reveal item has no choices")
-        choices: dict[str, dict[str, bool]] = {}
+        try:
+            unscorable = validate_reference_disposition(item)
+        except ValueError as exc:
+            raise RetrospectiveArchiveError("invalid reference disposition") from exc
+        choices: dict[str, dict[str, bool | None]] = {}
         for raw_choice in raw_choices:
             choice = _object(raw_choice, "reveal choice")
             choice_id = _text(choice.get("id"), "reveal choice id")
             if choice_id in choices:
                 raise RetrospectiveArchiveError("reveal choice IDs are duplicated")
             choices[choice_id] = {
-                "accepted_correct": choice.get("accepted_correct") is True,
-                "raw_correct": choice.get("correct") is True,
+                "accepted_correct": None if unscorable else choice.get("accepted_correct") is True,
+                "raw_correct": None if unscorable else choice.get("correct") is True,
             }
         key[item_id] = {
+            "score_eligible": not unscorable,
+            "reference_disposition": deepcopy(item.get("reference_disposition")) if unscorable else None,
             "choices": choices,
             "choice_order": {choice_id: index for index, choice_id in enumerate(choices)},
             "has_accepted_correct": any(
@@ -694,8 +703,9 @@ def _percent(numerator: int, denominator: int) -> float:
     return math.floor((numerator / denominator) * 1000.0 + 0.5) / 10.0
 
 
-def _result_row(identity: str, kind: str, correct: int, answered: int, total: int) -> dict:
-    return {
+def _result_row(identity: str, kind: str, correct: int, answered: int, total: int,
+        *, full_answered: int | None = None, full_total: int | None = None) -> dict:
+    result = {
         "participant": identity,
         "participant_kind": kind,
         "correct": correct,
@@ -705,6 +715,14 @@ def _result_row(identity: str, kind: str, correct: int, answered: int, total: in
         "coverage": _percent(answered, total),
         "complete": answered == total,
     }
+    if full_total is not None:
+        result.update(full_answered=full_answered, full_total=full_total,
+            excluded_answered=full_answered - answered,
+            excluded_item_count=full_total - total,
+            accuracy=_percent(correct, answered) if answered else None,
+            coverage=_percent(answered, total) if total else None,
+            complete=total > 0 and answered == total)
+    return result
 
 
 def _assert_sanitized_artifact(value: Any) -> None:
@@ -753,6 +771,9 @@ def build_retrospective_artifacts(
     if sum(len(item["choices"]) for item in answer_key.values()) != choice_count:
         raise RetrospectiveArchiveError("reveal choice_count is inconsistent")
     smina_picks = _smina_picks(blind, answer_key)
+    scorable_item_count = sum(item["score_eligible"] for item in answer_key.values())
+    excluded_item_count = item_count - scorable_item_count
+    has_exclusions = excluded_item_count > 0
 
     raw_participants = _rows(source_snapshot.get("participants"), "participants")
     participant_by_link: dict[str, dict[str, Any]] = {}
@@ -828,7 +849,7 @@ def build_retrospective_artifacts(
                 if vote.get("choice_id") is not None or selection_kind != "none":
                     raise RetrospectiveArchiveError("picked-none vote is inconsistent")
                 choice_id = None
-                correct = not answer_key[item_id]["has_accepted_correct"]
+                correct = not answer_key[item_id]["has_accepted_correct"] if answer_key[item_id]["score_eligible"] else None
             else:
                 choice_id = _text(vote.get("choice_id"), "vote choice_id")
                 choice = answer_key[item_id]["choices"].get(choice_id)
@@ -852,8 +873,9 @@ def build_retrospective_artifacts(
                 labels[link],
                 participant_kind,
                 correct_count,
-                len(seen_items),
-                item_count,
+                sum(answer_key[item_id]["score_eligible"] for item_id in seen_items),
+                scorable_item_count,
+                **({"full_answered": len(seen_items), "full_total": item_count} if has_exclusions else {}),
             )
         )
 
@@ -877,8 +899,9 @@ def build_retrospective_artifacts(
             SMINA_IDENTITY,
             "baseline",
             smina_correct,
-            item_count,
-            item_count,
+            scorable_item_count,
+            scorable_item_count,
+            **({"full_answered": item_count, "full_total": item_count} if has_exclusions else {}),
         )
     )
 
@@ -913,7 +936,7 @@ def build_retrospective_artifacts(
             for row in responses
             if row["participant_kind"] != "human"
         ]
-        aggregate: dict[tuple[str | None, bool, str, bool], int] = {}
+        aggregate: dict[tuple[str | None, bool, str, bool | None], int] = {}
         for response in human_responses:
             key = (
                 response["choice_id"],
@@ -951,13 +974,20 @@ def build_retrospective_artifacts(
                     "suppressed": False,
                     "correct_count": sum(
                         1 for row in human_responses if row["correct"]
-                    ),
+                    ) if answer_key[item_id]["score_eligible"] else None,
                     "answers": human_answers,
                 },
                 "automated_entries": automated_responses,
             }
         )
         admin_questions.append({"item_id": item_id, "responses": responses})
+        if has_exclusions:
+            evaluation_scope = {"evaluation_status": "scored" if answer_key[item_id]["score_eligible"] else "unscorable"}
+            if not answer_key[item_id]["score_eligible"]:
+                evaluation_scope["reference_disposition"] = {key: value for key, value in answer_key[item_id]["reference_disposition"].items() if key != "reference_sha256"}
+            public_questions[-1].update(evaluation_scope)
+            admin_questions[-1].update(evaluation_scope)
+            public_questions[-1]["human_aggregate"]["scorable_answered_count"] = len(human_responses) if answer_key[item_id]["score_eligible"] else 0
 
     round_block = {
         "round_id": round_id,
@@ -968,8 +998,10 @@ def build_retrospective_artifacts(
         "item_count": item_count,
         "choice_count": choice_count,
     }
+    if has_exclusions:
+        round_block.update(scorable_item_count=scorable_item_count, excluded_item_count=excluded_item_count)
     public_artifact = {
-        "format_version": RETROSPECTIVE_PUBLIC_FORMAT_VERSION,
+        "format_version": RETROSPECTIVE_PUBLIC_UNSCORABLE_FORMAT_VERSION if has_exclusions else RETROSPECTIVE_PUBLIC_FORMAT_VERSION,
         "round": round_block,
         "human_aggregate": {
             "participant_count": len(human_results),
@@ -978,7 +1010,7 @@ def build_retrospective_artifacts(
             "partial_count": sum(
                 1
                 for row in human_results
-                if 0 < row["answered"] < item_count
+                if 0 < row["answered"] < scorable_item_count
             ),
             "score_distribution": [
                 {
@@ -996,11 +1028,13 @@ def build_retrospective_artifacts(
         "questions": public_questions,
     }
     admin_artifact = {
-        "format_version": RETROSPECTIVE_ADMIN_FORMAT_VERSION,
+        "format_version": RETROSPECTIVE_ADMIN_UNSCORABLE_FORMAT_VERSION if has_exclusions else RETROSPECTIVE_ADMIN_FORMAT_VERSION,
         "round": round_block,
         "participants": participant_rows,
         "questions": admin_questions,
     }
+    if has_exclusions:
+        public_artifact["human_aggregate"]["unscored_only_count"] = sum(row["answered"] == 0 and row["full_answered"] > 0 for row in human_results)
     _assert_sanitized_artifact(public_artifact)
     _assert_sanitized_artifact(admin_artifact)
     public_bytes = canonical_json(public_artifact).encode("utf-8")

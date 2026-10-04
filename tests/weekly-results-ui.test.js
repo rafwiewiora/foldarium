@@ -30,7 +30,10 @@ function block(source, signature) {
 
 function evaluateDeclaration(source, signature, sandbox) {
   const { start, end } = block(source, signature);
-  return vm.runInContext(`(${source.slice(start, end)})`, vm.createContext(sandbox));
+  const context = vm.createContext(Object.assign(sandbox, { cur: sandbox.cur ?? null }));
+  const helper = block(source, 'function weeklyItemUnscorable(item = cur?.item)');
+  vm.runInContext(source.slice(helper.start, helper.end), context);
+  return vm.runInContext(`(${source.slice(start, end)})`, context);
 }
 
 test('Weekly pocket display warnings remain visible alongside alignment warnings and clear on navigation', async () => {

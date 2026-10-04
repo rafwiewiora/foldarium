@@ -16,6 +16,7 @@ export const OUTCOME_FILTERS = Object.freeze([
   ['pose-unsolved', 'Pose · no human correct'],
   ['none-solved', 'None · human correct'],
   ['none-unsolved', 'None · no human correct'],
+  ['unscorable', 'Not scored · incomplete reference'],
 ]);
 
 const OUTCOME_LABELS = new Map(OUTCOME_FILTERS);
@@ -42,6 +43,7 @@ export function archiveRoute(pathname, search = '') {
 }
 
 export function questionOutcome(question, revealItem) {
+  if (revealItem?.evaluation_status === 'unscorable' || question?.evaluation_status === 'unscorable') return 'unscorable';
   if (question?.human_aggregate?.suppressed === true) return 'suppressed';
   const hasPose = revealItem?.choices?.some(choice => choice.correct === true) === true;
   const solved = Number(question?.human_aggregate?.correct_count) > 0;
@@ -141,7 +143,11 @@ async function playForFunLeaderboard(roundId) {
   const response = await fetch(`/api/weekly-play-for-fun-results?${query}`);
   const payload = await response.json().catch(() => null);
   if (!response.ok
-      || payload?.format_version !== 'foldarium.weekly-play-for-fun-leaderboard/v1'
+      || !['foldarium.weekly-play-for-fun-leaderboard/v1', 'foldarium.weekly-play-for-fun-leaderboard/v2'].includes(payload?.format_version)
+        || (payload?.format_version === 'foldarium.weekly-play-for-fun-leaderboard/v2'
+          && (!Number.isInteger(payload.scorable_item_count) || payload.scorable_item_count < 0
+            || !Number.isInteger(payload.excluded_item_count) || payload.excluded_item_count <= 0
+            || payload.scorable_item_count + payload.excluded_item_count !== payload.item_count))
       || payload.round_id !== roundId) {
     throw new Error(payload?.error || 'Play-for-fun results are unavailable');
   }
@@ -348,11 +354,16 @@ function buildSimilarityMeta(similarity) {
 }
 
 export function humanAnswerSummary(human) {
+  if (human?.correct_count === null) return `${Number(human?.answered_count) || 0} selections · not scored`;
   const answered = Number(human?.answered_count) || 0;
   return answered ? `${Number(human?.correct_count) || 0}/${answered} correct` : 'No answers';
 }
 
 export function targetMethodOutcomes(blindItem, revealItem, methods = null) {
+  if (revealItem?.evaluation_status === 'unscorable') {
+    const ids = methods || [...new Set((blindItem?.choices || []).map(choice => choice.method).filter(Boolean))].sort();
+    return ids.map(method => ({ method, oracle_success: null, top1_success: null }));
+  }
   const revealChoices = new Map(
     (revealItem?.choices || []).map(choice => [choice.id, choice]),
   );
@@ -461,16 +472,28 @@ function renderQuestionRow(row, methods) {
   for (const automated of automatedEntries) {
     answers.append(answerLine(
       automated.participant,
-      `${choiceLabel(automated.choice_id, automated.picked_none, row.blindItem)} · ${automated.correct ? 'correct' : 'wrong'}`,
+      `${choiceLabel(automated.choice_id, automated.picked_none, row.blindItem)} · ${answerCorrectnessLabel(automated.correct)}`,
     ));
   }
   node.append(title);
+  if (row.outcome === 'unscorable') {
+    const d = row.question.reference_disposition || row.revealItem?.reference_disposition;
+    node.append(element('p', 'empty compact', `Not scored: the released reference contains ${d?.observed_heavy_atoms ?? 'too few'} of ${d?.expected_heavy_atoms ?? 'the expected'} ligand heavy atoms. Selections are preserved and excluded from score totals.`));
+  }
   const similarity = buildSimilarityMeta(row.similarity);
   if (similarity) node.append(similarity);
   const methodTable = buildTargetMethodTable(row, methods);
   if (methodTable) node.append(methodTable);
   node.append(answers);
   return node;
+}
+
+export function formatAccuracy(value) {
+  return Number.isFinite(value) ? `${Math.round(value)}%` : 'Not scored';
+}
+
+export function answerCorrectnessLabel(value) {
+  return value === null ? 'not scored' : value === true ? 'correct' : 'wrong';
 }
 
 function renderAutomatedLeaderboard(host, detail) {
@@ -482,8 +505,8 @@ function renderAutomatedLeaderboard(host, detail) {
   ));
   rows.forEach((row, index) => {
     list.append(answerLine(
-      `${index + 1}. ${row.participant}`,
-      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+      `${row.total > 0 ? index + 1 : '—'}. ${row.participant}`,
+      `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
     ));
   });
   section.append(list);
@@ -500,8 +523,8 @@ function renderHumanLeaderboard(host, detail) {
   );
   rows.forEach((row, index) => {
     list.append(answerLine(
-      `${index + 1}. ${row.participant}`,
-      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+      `${row.total > 0 ? index + 1 : '—'}. ${row.participant}`,
+      `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
     ));
   });
   if (rows.length) {
@@ -517,7 +540,7 @@ function renderHumanLeaderboard(host, detail) {
   for (const row of forFunRows) {
     list.append(answerLine(
       `${row.display_name} · For fun`,
-      `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`,
+      `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
     ));
   }
   if (!forFunRows.length) {
@@ -537,8 +560,8 @@ function renderAdminDetail(host, detail, admin) {
     .forEach((row, index) => {
       const line = element('div', 'admin-line');
       line.append(
-        element('span', '', `${index + 1}. ${row.participant} · ${formatKind(row.participant_kind)}`),
-        element('span', '', `${row.correct}/${row.total} · ${Math.round(row.accuracy)}%`),
+        element('span', '', `${row.total > 0 ? index + 1 : '—'}. ${row.participant} · ${formatKind(row.participant_kind)}`),
+        element('span', '', `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`),
       );
       participants.append(line);
     });
@@ -551,7 +574,7 @@ function renderAdminDetail(host, detail, admin) {
     for (const response of question.responses || []) {
       group.append(answerLine(
         response.participant,
-        `${choiceLabel(response.choice_id, response.picked_none, item)} · ${response.correct ? 'correct' : 'wrong'}`,
+        `${choiceLabel(response.choice_id, response.picked_none, item)} · ${answerCorrectnessLabel(response.correct)}`,
       ));
     }
     panel.append(group);
@@ -591,6 +614,10 @@ function renderDetail() {
     overviewCell('Predicted poses', round.choice_count),
     overviewCell('Human participants', detail.retrospective?.human_aggregate?.participant_count || 0),
   );
+  if (round.excluded_item_count > 0) {
+    overview.append(overviewCell('Scorable questions', round.scorable_item_count),
+      overviewCell('Not scored', round.excluded_item_count));
+  }
   host.append(head, overview);
   renderHumanLeaderboard(host, detail);
   renderAutomatedLeaderboard(host, detail);
@@ -695,7 +722,7 @@ function renderAllTime(payload) {
     if (row.provisional) participant.append(element('span', 'provisional', 'Provisional'));
     participant.append(element('div', 'kind', formatKind(row.participant_kind)));
     line.append(
-      element('span', 'rank', `#${row.rank}`),
+      element('span', 'rank', Number.isInteger(row.rank) ? `#${row.rank}` : '—'),
       participant,
       element('span', 'metric', `${row.complete_weeks}/${row.weeks_participated} complete`),
       element('span', 'metric', `${row.total_correct}/${row.total_questions}`),
@@ -722,9 +749,10 @@ function renderCofoldingOverall(methods) {
   for (const [index, row] of methods.entries()) {
     const line = element('div', 'method-ranking-row');
     line.append(
-      element('span', 'rank', `#${index + 1}`),
+      element('span', 'rank', row.targets > 0 ? `#${index + 1}` : '—'),
       element('span', 'participant', methodName(row.method)),
-      element('span', 'metric', row.targets),
+      element('span', 'metric', row.excluded_targets > 0
+        ? `${row.targets} scored / ${row.full_targets} total` : row.targets),
       methodRate(row.oracle_rate, row.oracle_successes, row.targets),
       methodRate(row.top1_rate, row.top1_successes, row.top1_evaluated),
     );

@@ -87,6 +87,7 @@ function buildWeek({
   suppressHumans = false,
   overlayTamper = null,
   referenceUri = REFERENCE_URI,
+  displayPocket = null,
   revealedAt = `2026-08-${String(20 + index).padStart(2, '0')}T00:00:00Z`,
 } = {}) {
   const opensAt = `2026-08-${String(10 + index).padStart(2, '0')}T00:00:00Z`;
@@ -102,6 +103,7 @@ function buildWeek({
       protein_uri: 'supabase://structures/weekly/protein.pdb',
       pocket_uri: 'supabase://structures/weekly/pocket.pdb',
       metadata: {
+        ...(displayPocket == null ? {} : { display_pocket: displayPocket }),
         presentation: {
           policy: 'weekly-presentation/v1',
           group: 'multi-cluster',
@@ -1118,5 +1120,34 @@ test('quiz backend exposes retrospective methods on remote, deferred, read-only,
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+test('archive detail preserves the blind-safe zero-contact pocket warning', async () => {
+  const warning = {
+    policy: 'within-5-angstrom-or-full-receptor-if-no-contacts/v1',
+    code: 'no_predicted_receptor_contacts',
+    message: 'Some predicted pockets have no protein residues within 5 Å of the ligand; the full protein is shown instead, with all coordinates unchanged.',
+    fallback_choice_count: 1,
+    overlay_fallback: false,
+  };
+  for (const displayPocket of [warning, { ...warning, fallback_choice_count: 0, overlay_fallback: true }]) {
+    const week = buildWeek({ displayPocket });
+    const handler = createWeeklyRetrospectivesHandler({ env: env(), fetchImpl: archiveFetch([week]) });
+    const detail = await invoke(handler, { query: { round_id: week.publication.round_id } });
+    assert.equal(detail.statusCode, 200);
+    assert.deepEqual(detail.body.blind_manifest.items[0].metadata.display_pocket, displayPocket);
+  }
+  for (const displayPocket of [
+    { ...warning, private_pose_id: 'must-not-project' },
+    { ...warning, overlay_fallback: 'false' },
+    { ...warning, fallback_choice_count: -1 },
+    { ...warning, fallback_choice_count: 3 },
+    { ...warning, fallback_choice_count: 0 },
+  ]) {
+    const week = buildWeek({ displayPocket });
+    const handler = createWeeklyRetrospectivesHandler({ env: env(), fetchImpl: archiveFetch([week]) });
+    const detail = await invoke(handler, { query: { round_id: week.publication.round_id } });
+    assert.notEqual(detail.statusCode, 200);
+    assert.doesNotMatch(detail.serialized, /must-not-project/);
   }
 });

@@ -1,3 +1,5 @@
+import { isUnscorableReference } from './lib/reference-disposition.js';
+
 const METHOD_NAMES = {
   boltz2: 'Boltz-2',
   openfold3: 'OpenFold3',
@@ -51,14 +53,15 @@ export function buildPublishedMethodStats(contexts) {
         throw new Error('Published method performance target is invalid.');
       }
       const answers = uniqueById(answer.choices);
+      const unscorable = isUnscorableReference(answer, { publicProjection: true });
       uniqueById(item.choices);
       const methods = new Map();
       for (const choice of item.choices) {
         const pose = answers.get(choice.id);
         if (typeof choice.method !== 'string' || !choice.method
-            || !Number.isFinite(pose?.rmsd) || pose.rmsd < 0
+            || !pose || (!unscorable && (!Number.isFinite(pose.rmsd) || pose.rmsd < 0
             || typeof pose.correct !== 'boolean'
-            || pose.correct !== (pose.rmsd < 1.5)) {
+            || pose.correct !== (pose.rmsd < 1.5)))) {
           throw new Error('Published raw pose correctness is invalid.');
         }
         const poses = methods.get(choice.method) || [];
@@ -71,6 +74,11 @@ export function buildPublishedMethodStats(contexts) {
           week: item.week, method, targets: 0, oracle_successes: 0,
           top1_evaluated: 0, top1_successes: 0,
         };
+        if (unscorable) {
+          row.excluded_targets = (row.excluded_targets || 0) + 1;
+          totals.set(key, row);
+          continue;
+        }
         const score = scoreMethodPoses(poses);
         row.targets += 1;
         row.oracle_successes += Number(score.oracle_success);
@@ -126,6 +134,7 @@ export function validateMethodStats(data) {
         || row.oracle_successes > row.targets
         || row.top1_evaluated > row.targets
         || row.top1_successes > row.top1_evaluated
+        || (Object.hasOwn(row, 'excluded_targets') && (!Number.isSafeInteger(row.excluded_targets) || row.excluded_targets < 0))
         || seen.has(key)) {
       throw new Error('Method performance data is invalid.');
     }
@@ -155,10 +164,12 @@ export function aggregateMethodStats(data) {
     total.oracle_successes += row.oracle_successes;
     total.top1_evaluated += row.top1_evaluated;
     total.top1_successes += row.top1_successes;
+    if (Object.hasOwn(row, 'excluded_targets')) total.excluded_targets = (total.excluded_targets || 0) + row.excluded_targets;
     totals.set(row.method, total);
   }
   return [...totals.values()].map(total => ({
     ...total,
+    ...(Object.hasOwn(total, 'excluded_targets') ? { full_targets: total.targets + total.excluded_targets } : {}),
     oracle_rate: successRate(total.oracle_successes, total.targets),
     top1_rate: successRate(total.top1_successes, total.top1_evaluated),
   })).sort((left, right) => (

@@ -133,6 +133,79 @@ class EvaluationError(RuntimeError):
     """Raised when a pose cannot be evaluated unambiguously."""
 
 
+class UnscorableReferenceError(EvaluationError):
+    """A proven incomplete released reference; no pose correctness is defined."""
+
+    def __init__(self, disposition):
+        super().__init__("released reference has explicitly unobserved atoms below the coverage floor")
+        self.disposition = disposition
+
+
+def _proven_unscorable_reference(reference_path, model, component_id, heavy_atoms, ligand_smiles):
+    """Recognize deposited missing atoms, never infer a disposition from a scoring error."""
+    from .reference_disposition import REFERENCE_DISPOSITION_POLICY
+    gemmi, _numpy, Chem, _rd = _dependencies()
+    try:
+        block = gemmi.cif.read(str(reference_path)).sole_block()
+        atom_rows = block.find("_chem_comp_atom.", ["comp_id", "atom_id", "type_symbol"])
+        elements = {gemmi.cif.as_string(r[1]): gemmi.Element(r[2]).atomic_number for r in atom_rows
+                    if r[0] == component_id and gemmi.Element(r[2]).atomic_number != 1}
+        if len(elements) != heavy_atoms or sum(r[0] == component_id and gemmi.Element(r[2]).atomic_number != 1 for r in atom_rows) != heavy_atoms:
+            return None
+        names = list(elements)
+        ccd = Chem.RWMol()
+        for name in names:
+            ccd.AddAtom(Chem.Atom(elements[name]))
+        for r in block.find("_chem_comp_bond.", ["comp_id", "atom_id_1", "atom_id_2"]):
+            left, right = gemmi.cif.as_string(r[1]), gemmi.cif.as_string(r[2])
+            if r[0] == component_id and left in elements and right in elements:
+                ccd.AddBond(names.index(left), names.index(right), Chem.BondType.SINGLE)
+        source = Chem.MolFromSmiles(ligand_smiles or "")
+        if source is None:
+            return None
+        task = Chem.RWMol(); indices = {}
+        for atom in source.GetAtoms():
+            if atom.GetAtomicNum() != 1:
+                indices[atom.GetIdx()] = task.AddAtom(Chem.Atom(atom.GetAtomicNum()))
+        for bond in source.GetBonds():
+            a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            if a in indices and b in indices:
+                task.AddBond(indices[a], indices[b], Chem.BondType.SINGLE)
+        if task.GetNumAtoms() != heavy_atoms or task.GetNumBonds() != ccd.GetNumBonds() or not ccd.GetMol().HasSubstructMatch(task.GetMol()):
+            return None
+        missing_rows = block.find("_pdbx_unobs_or_zero_occ_atoms.",
+            ["PDB_model_num", "auth_asym_id", "auth_comp_id", "auth_seq_id", "auth_atom_id", "label_alt_id", "PDB_ins_code"])
+        conformers = []
+        for chain in model:
+            for residue in chain:
+                if residue.name != component_id:
+                    continue
+                for alt in _residue_altloc_keys(residue):
+                    atoms = _conformer_heavy_atoms(residue, alt)
+                    observed = {a.name: a.element.atomic_number for a in atoms}
+                    if len(observed) != len(atoms) or not observed or any(elements.get(k) != v for k, v in observed.items()):
+                        return None
+                    missing = {gemmi.cif.as_string(r[4]) for r in missing_rows
+                        if str(r[0]) == str(model.num) and r[1] == chain.name and r[2] == component_id
+                        and str(r[3]) == str(residue.seqid.num)
+                        and gemmi.cif.as_string(r[5]) in ("", alt)
+                        and gemmi.cif.as_string(r[6]) == residue.seqid.icode.strip()}
+                    if set(elements) - set(observed) != missing & set(elements):
+                        return None
+                    conformers.append(len(observed))
+        observed_count = max(conformers, default=0)
+        if not 0 < observed_count / heavy_atoms < PARTIAL_REFERENCE_COVERAGE_MIN:
+            return None
+        return {"policy": REFERENCE_DISPOSITION_POLICY, "code": "insufficient_reference_coverage",
+                "component_id": component_id, "expected_heavy_atoms": heavy_atoms,
+                "observed_heavy_atoms": observed_count,
+                "explicitly_unobserved_heavy_atoms": heavy_atoms - observed_count,
+                "reference_coverage": observed_count / heavy_atoms,
+                "minimum_reference_coverage": PARTIAL_REFERENCE_COVERAGE_MIN}
+    except (ValueError, RuntimeError, KeyError, TypeError):
+        return None
+
+
 def _structure_dependencies():
     try:
         import gemmi
@@ -1680,6 +1753,9 @@ def evaluate_ligand_pose(
     reference_polymers = _polymer_chains(reference_model)
     predicted_polymers = _polymer_chains(prediction_model)
     if not reference_ligands:
+        disposition = _proven_unscorable_reference(reference_path, reference_model, component_id, heavy_atoms, ligand_smiles)
+        if disposition is not None and predicted_ligands and reference_polymers and predicted_polymers:
+            raise UnscorableReferenceError(disposition)
         raise EvaluationError(f"reference contains no {component_id} ligand with {heavy_atoms} atoms")
     if not predicted_ligands:
         raise EvaluationError(f"prediction contains no ligand with {heavy_atoms} heavy atoms")

@@ -57,13 +57,32 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Planned
 
-### Immutable artifact upload recovery
+### Audited incomplete-reference handling
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** exact chemical identity and deposited missing-atom proof can mark
+  a released crystal reference unscorable. All original questions, choices,
+  artifact identities, and votes remain intact; correctness and RMSD are null.
+- **Prepared:** private evaluation v6 and retrospective v2 expose full, scorable,
+  and excluded populations. Leaderboards, selector scoring, cofolding metrics,
+  and Play for fun exclude only verified unscorable questions. Fully scored
+  historical artifacts retain their existing formats and behavior.
+- **Prepared:** molecular archive review displays the original poses without
+  fabricating an answer overlay or a winning None choice. Zero-contact display
+  warnings survive retrospective projection.
+- **Pending:** production recovery publication verification; source validation
+  does not itself claim that a delayed round has been revealed.
+
+
+### Immutable artifact upload and download recovery
 
 - **Status:** planned
 - **Added:** 2026-10-04
 - **Goal:** survive transient Storage service failures while preserving exact
   scientific artifacts and publication integrity.
-- **Prepared:** bounded retries of the same bytes at the same content address,
+- **Prepared:** bounded retries of exact immutable downloads and uploads of
+  the same bytes at the same content address,
   with SHA verification after ambiguous success. Permanent failures and digest
   conflicts fail closed; RPCs and mutable writes do not retry.
 - **Deployed:** the immutable-upload retry fix is running in production.

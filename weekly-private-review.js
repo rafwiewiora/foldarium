@@ -1,3 +1,4 @@
+import { isUnscorableReference } from './lib/reference-disposition.js';
 import { enrichPrivateWeeklyPool } from './lib/released-crystal.js';
 
 export const ALLOWED_ROUND_ID = 'weekly-2026-08-08-beta-v5-global-tm-29';
@@ -348,6 +349,9 @@ export function validateWeeklyQuestionResults(
     || !Array.isArray(results.items)
     || results.items.length !== results.item_count) {
     throw new Error('Weekly question results metadata is invalid.');
+  }
+  if ((revealManifest?.items || []).some(item => isUnscorableReference(item))) {
+    throw new Error('Legacy private question results do not support unscorable references.');
   }
   const revealItems = new Map((revealManifest?.items || []).map(item => [
     item.id,

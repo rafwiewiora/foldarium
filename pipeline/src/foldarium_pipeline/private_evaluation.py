@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
+from .reference_disposition import validate_reference_disposition
 from .contracts import canonical_json, stable_id
 from .evaluation import evaluate_ligand_pose
 from .quiz import manifest_sha256
@@ -39,6 +40,16 @@ from .wednesday_reveal import (
 from .weekly_lifecycle import WeeklyLifecycleError, delayed_retrospective_release
 
 PRIVATE_EVALUATION_FORMAT_VERSION = "foldarium.weekly-private-evaluation/v5"
+PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION = "foldarium.weekly-private-evaluation/v6"
+
+
+def _evaluation_format(reveal):
+    try:
+        flags = [validate_reference_disposition(item) for item in reveal.get("items", [])]
+    except ValueError as exc:
+        raise PrivateEvaluationError(str(exc)) from exc
+    return PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION if any(flags) else PRIVATE_EVALUATION_FORMAT_VERSION
+
 PRIVATE_EVALUATION_MEDIA_TYPE = "application/json"
 PRODUCTION_BETA_CATCHUP_ROUND_ID = "weekly-2026-08-08-beta-v5-global-tm-29"
 ALLOWED_PRECLOSE_EVALUATION_ROUND_IDS = frozenset(
@@ -273,6 +284,11 @@ def _answer_overlay_rows(
         if not isinstance(item, Mapping):
             raise PrivateEvaluationError("answer overlay reveal item is invalid")
         item_id = _text(item.get("id"), "answer overlay reveal item_id")
+        try:
+            if validate_reference_disposition(item):
+                continue
+        except ValueError as exc:
+            raise PrivateEvaluationError(str(exc)) from exc
         choices = item.get("choices")
         if not isinstance(choices, list) or not choices:
             raise PrivateEvaluationError("answer overlay reveal choices are invalid")
@@ -483,7 +499,7 @@ def describe_private_evaluation_artifact(
         raise PrivateEvaluationError("artifact bytes are not canonical JSON")
 
     format_version = decoded.get("format_version")
-    if format_version != PRIVATE_EVALUATION_FORMAT_VERSION:
+    if format_version not in {PRIVATE_EVALUATION_FORMAT_VERSION, PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION}:
         raise PrivateEvaluationError("artifact format_version is invalid")
 
     round_block = decoded.get("round")
@@ -524,6 +540,8 @@ def describe_private_evaluation_artifact(
     if not isinstance(reveal, Mapping):
         raise PrivateEvaluationError("artifact reveal manifest is missing")
     reveal = deepcopy(dict(reveal))
+    if format_version != _evaluation_format(reveal):
+        raise PrivateEvaluationError("artifact format does not match reference dispositions")
     blind_manifest = decoded.get("blind_manifest")
     blind_canonical = _artifact_manifest_canonical_json(
         decoded.get("blind_manifest_canonical_json"),
@@ -588,11 +606,16 @@ def describe_private_evaluation_artifact(
     if choice_count != len(prediction_bindings):
         raise PrivateEvaluationError("artifact choice_count is inconsistent")
 
+    if format_version == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION and "counts" in decoded:
+        excluded = sum(validate_reference_disposition(item) for item in reveal["items"])
+        if counts.get("scorable_item_count") != item_count - excluded or counts.get("excluded_item_count") != excluded:
+            raise PrivateEvaluationError("artifact scorable counts are inconsistent")
+
     descriptor = {
         "evaluation_id": stable_id(
             "weekly_eval",
             {
-                "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+                "format_version": format_version,
                 "round_id": round_id,
                 "blind_manifest_sha256": blind_sha256,
                 "private_index_sha256": private_index["sha256"],
@@ -610,7 +633,7 @@ def describe_private_evaluation_artifact(
         "reveal_manifest_sha256": reveal_sha256,
         "reference_set_sha256": reference_set_sha256,
         "prediction_set_sha256": prediction_set_sha256,
-        "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+        "format_version": format_version,
         "evaluator_versions": evaluator_versions,
         "reveal_policy_version": REVEAL_POLICY_VERSION,
         "acceptance_policy_version": ACCEPTANCE_POLICY_VERSION,
@@ -771,8 +794,9 @@ def build_private_evaluation_artifact(
         canonical_json(answer_overlays).encode("utf-8")
     ).hexdigest()
 
+    format_version = _evaluation_format(reveal)
     artifact = {
-        "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+        "format_version": format_version,
         "round": {
             "round_id": round_id,
             "campaign_id": _text(round_record.get("campaign_id"), "campaign_id"),
@@ -805,6 +829,9 @@ def build_private_evaluation_artifact(
         "reveal_manifest": reveal,
         "reveal_manifest_canonical_json": reveal_manifest_canonical_json,
     }
+    if format_version == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION:
+        excluded = sum(validate_reference_disposition(item) for item in reveal["items"])
+        artifact["counts"].update(scorable_item_count=item_count - excluded, excluded_item_count=excluded)
     # This is the exact finite canonical representation stored and hashed.  A
     # wall-clock timestamp is deliberately absent so identical scientific
     # inputs produce identical bytes on every retry.
@@ -818,7 +845,7 @@ def build_private_evaluation_artifact(
         "evaluation_id": stable_id(
             "weekly_eval",
             {
-                "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+                "format_version": format_version,
                 "round_id": round_id,
                 "blind_manifest_sha256": blind_sha256,
                 "private_index_sha256": private_index["sha256"],
@@ -836,7 +863,7 @@ def build_private_evaluation_artifact(
         "reveal_manifest_sha256": reveal_sha256,
         "reference_set_sha256": reference_set_sha256,
         "prediction_set_sha256": prediction_set_sha256,
-        "format_version": PRIVATE_EVALUATION_FORMAT_VERSION,
+        "format_version": format_version,
         "evaluator_versions": sorted(evaluator_versions),
         "reveal_policy_version": REVEAL_POLICY_VERSION,
         "acceptance_policy_version": ACCEPTANCE_POLICY_VERSION,
