@@ -243,6 +243,12 @@ async function mockApi(page) {
   });
   await page.route('**/api/weekly-retrospectives**', route => {
     const url = new URL(route.request().url());
+    if (url.searchParams.get('cofolding') === '1') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: readFileSync(new URL('../weekly_method_stats.json', import.meta.url), 'utf8'),
+      });
+    }
     if (url.searchParams.get('round_id')) {
       return route.fulfill({
         contentType: 'application/json',

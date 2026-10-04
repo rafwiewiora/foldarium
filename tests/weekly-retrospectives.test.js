@@ -568,6 +568,77 @@ async function invoke(handler, {
   return result;
 }
 
+test('cofolding automatically aggregates verified published rounds without loading ballots', async () => {
+  const week = buildWeek();
+  const fetchImpl = archiveFetch([week]);
+  const result = await invoke(createWeeklyRetrospectivesHandler({ env: env(), fetchImpl }), {
+    query: { cofolding: '1' },
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.population, 'published_weekly_quiz');
+  assert.equal(result.body.publication_count, 1);
+  assert.deepEqual(result.body.weeks, [
+    { week: '2026-08-08', method: 'model-a', targets: 1,
+      oracle_successes: 1, top1_evaluated: 1, top1_successes: 1 },
+    { week: '2026-08-08', method: 'model-b', targets: 1,
+      oracle_successes: 0, top1_evaluated: 1, top1_successes: 0 },
+  ]);
+  assert.match(result.headers['Cache-Control'], /s-maxage=300/);
+  const downloads = fetchImpl.calls.filter(call => call.url.pathname.includes('/storage/'));
+  assert.equal(downloads.length, 1, 'only the bound evaluation is needed');
+  assert.ok(downloads[0].url.pathname.endsWith(week.evaluation.artifact_sha256));
+  assert.doesNotMatch(result.serialized, /PocketFox|user_id|participant|supabase|sha256|choice-a/);
+
+  const second = buildWeek({ index: 1 });
+  const updated = await invoke(createWeeklyRetrospectivesHandler({
+    env: env(), fetchImpl: archiveFetch([week, second]),
+  }), { query: { cofolding: '1' } });
+  assert.equal(updated.body.publication_count, 2);
+  assert.equal(updated.body.weeks[0].targets, 2);
+});
+
+test('cofolding fails closed for unverified or unrevealed production data', async () => {
+  for (const mutate of [
+    week => { week.round.status = 'open'; },
+    week => { week.round.environment = 'preview'; },
+    week => { week.evaluation.environment = 'preview'; },
+    week => { week.publication.environment = 'preview'; },
+    week => { week.round.reveal_manifest.items[0].choices[0].rmsd = 9; },
+    week => { week.objects.set(week.evaluation.artifact_sha256, Buffer.from('{}')); },
+  ]) {
+    const week = buildWeek();
+    mutate(week);
+    const result = await invoke(createWeeklyRetrospectivesHandler({
+      env: env(), fetchImpl: archiveFetch([week]),
+    }), { query: { cofolding: '1' } });
+    assert.equal(result.statusCode, 404);
+    assert.deepEqual(result.body, { error: 'Not found' });
+    assert.equal(result.headers['Cache-Control'], 'no-store');
+  }
+  const empty = await invoke(createWeeklyRetrospectivesHandler({
+    env: env(), fetchImpl: archiveFetch([]),
+  }), { query: { cofolding: '1' } });
+  assert.equal(empty.statusCode, 200);
+  assert.equal(empty.body.publication_count, 0);
+  assert.deepEqual(empty.body.weeks, []);
+});
+
+test('cofolding mode rejects conflicting filters before reading archive data', async () => {
+  for (const query of [
+    { cofolding: '1', all_time: '1' },
+    { cofolding: '1', round_id: 'round-a' },
+    { cofolding: '1', ranking: 'total_correct' },
+    { cofolding: '1', participant_kind: 'llm' },
+    { cofolding: '1', limit: '1' },
+    { cofolding: ['1', '1'] },
+  ]) {
+    const fetchImpl = archiveFetch([]);
+    const result = await invoke(createWeeklyRetrospectivesHandler({ env: env(), fetchImpl }), { query });
+    assert.equal(result.statusCode, 400);
+    assert.equal(fetchImpl.calls.length, 0);
+  }
+});
+
 test('list uses newest-first opaque keyset cursors and validates limits', async () => {
   const weeks = [
     buildWeek({ index: 0, revealedAt: '2026-08-20T00:00:00Z' }),

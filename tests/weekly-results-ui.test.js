@@ -33,6 +33,52 @@ function evaluateDeclaration(source, signature, sandbox) {
   return vm.runInContext(`(${source.slice(start, end)})`, vm.createContext(sandbox));
 }
 
+test('Weekly pocket display warnings remain visible alongside alignment warnings and clear on navigation', async () => {
+  const app = await read('app.js');
+  const classes = new Set();
+  const instruction = {
+    textContent: '',
+    style: {},
+    classList: { toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); } },
+  };
+  const alignment = 'Models could not be aligned reliably.';
+  const pocket = 'Some predicted pockets have no protein residues within 5 Å of the ligand; the full protein is shown instead, with all coordinates unchanged.';
+  const cur = { item: { source: 'weekly', pocket_warning: { message: pocket } } };
+  let retrospective = false;
+  const render = evaluateDeclaration(app, 'function renderViewerInstruction()', {
+    cur,
+    $: selector => {
+      assert.equal(selector, '#instruction');
+      return instruction;
+    },
+    weeklyViewerInstruction: () => 'Choose a pose.',
+    isRetrospectiveReview: () => retrospective,
+  });
+
+  render();
+  assert.equal(instruction.textContent, pocket);
+  assert.equal(instruction.style.display, '');
+  assert.equal(classes.has('alignment-warning'), true);
+
+  cur.item.alignment_warning = { message: alignment };
+  retrospective = true;
+  render();
+  assert.equal(instruction.textContent, `${alignment} ${pocket}`);
+  assert.equal(instruction.style.display, '');
+
+  cur.item = { source: 'weekly' };
+  render();
+  assert.equal(instruction.textContent, 'Choose a pose.');
+  assert.equal(instruction.style.display, 'none');
+  assert.equal(classes.has('alignment-warning'), false);
+
+  retrospective = false;
+  cur.item = { source: 'cameo', pocket_warning: { message: pocket } };
+  render();
+  assert.equal(instruction.textContent, 'Pick the pose that best fits the binding pocket.');
+  assert.equal(instruction.style.display, '');
+});
+
 function sampleLeaderboard(overrides = {}) {
   return {
     format_version: WEEKLY_LEADERBOARD_FORMAT_VERSION,
@@ -776,7 +822,7 @@ test('revealed Weekly records answer-informed votes before showing results', asy
   assert.match(app, /loadWeeklyPlayForFunLeaderboard\(\)\.then\(renderWeeklyLeaderboard\)/);
   assert.match(
     app,
-    /revisableForFunSession = quizSource === 'weekly'[\s\S]*public_status === 'revealed'[\s\S]*if \(!revisableForFunSession\) researchBackend\(\)\?\.completeSession/,
+    /revisableForFunSession = quizSource === 'weekly'[\s\S]*public_status === 'revealed'[\s\S]*if \(!revisableForFunSession && !\(quizSource === 'weekly' && weeklyQuestionScope\.mode === 'featured'\)\)[\s\S]*researchBackend\(\)\?\.completeSession/,
   );
   assert.match(html, /\.post-reveal-vote-note\{/);
 });

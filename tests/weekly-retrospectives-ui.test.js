@@ -114,7 +114,8 @@ test('standalone archive stays Mol-star-free and renders API names with safe DOM
   assert.match(html, /data-cofolding-view="overall">Overall</);
   assert.match(html, /data-cofolding-view="weekly">Weekly trends</);
   assert.match(html, /Raw-pose method performance/);
-  assert.match(ui, /weekly_method_stats\.json/);
+  assert.match(ui, /api\/weekly-retrospectives\?cofolding=1/);
+  assert.doesNotMatch(ui, /weekly_method_stats\.json/);
   assert.match(ui, /methodTrend\(state\.methodData, state\.cofoldingMethod\)/);
   assert.match(ui, /targetMethodOutcomes\(row\.blindItem, row\.revealItem, methods\)/);
   assert.match(css, /\.target-method-table\{/);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   aggregateMethodStats,
+  buildPublishedMethodStats,
   methodTrend,
   scoreMethodPoses,
   validateMethodStats,
@@ -11,6 +12,65 @@ import {
 const confidence = value => ({
   metric: 'ligand_plddt',
   value,
+});
+
+function publishedContext(roundId = 'round-a', week = '2026-08-08') {
+  return {
+    blindProjection: {
+      round_id: roundId,
+      items: [{ id: '9XYZ', week, choices: [
+        { id: 'pose-b', method: 'boltz2', confidence: confidence(90) },
+        { id: 'pose-a', method: 'boltz2', confidence: confidence(90) },
+        { id: 'pose-c', method: 'openfold3' },
+      ] }],
+    },
+    revealProjection: {
+      round_id: roundId,
+      items: [{ id: '9XYZ', choices: [
+        { id: 'pose-b', correct: true, accepted_correct: true, rmsd: 0.8 },
+        { id: 'pose-a', correct: false, accepted_correct: true, rmsd: 1.5 },
+        { id: 'pose-c', correct: true, accepted_correct: true, rmsd: 1.49 },
+      ] }],
+    },
+  };
+}
+
+test('published aggregates use strict raw RMSD, stable confidence ties, and separate denominators', () => {
+  const data = buildPublishedMethodStats([publishedContext()]);
+  assert.equal(data.population, 'published_weekly_quiz');
+  assert.equal(data.publication_count, 1);
+  assert.deepEqual(data.weeks, [
+    { week: '2026-08-08', method: 'boltz2', targets: 1,
+      oracle_successes: 1, top1_evaluated: 1, top1_successes: 0 },
+    { week: '2026-08-08', method: 'openfold3', targets: 1,
+      oracle_successes: 1, top1_evaluated: 0, top1_successes: 0 },
+  ]);
+  const later = publishedContext('round-b', '2026-08-15');
+  const updated = buildPublishedMethodStats([later, publishedContext()]);
+  assert.equal(updated.publication_count, 2);
+  assert.deepEqual(methodTrend(updated, 'boltz2').map(row => row.week), [
+    '2026-08-08', '2026-08-15',
+  ]);
+  assert.equal(aggregateMethodStats(updated)[0].targets, 2);
+});
+
+test('published aggregates reject ambiguous or contradictory scientific inputs', () => {
+  for (const mutate of [
+    context => { context.revealProjection.round_id = 'other-round'; },
+    context => { context.revealProjection.items[0].id = 'other-target'; },
+    context => { context.revealProjection.items[0].choices[0].id = 'missing-pose'; },
+    context => { context.revealProjection.items[0].choices[0].rmsd = 5; },
+    context => { context.revealProjection.items[0].choices[0].rmsd = -1; },
+    context => { context.revealProjection.items[0].choices[0].rmsd = null; },
+    context => { context.blindProjection.items[0].choices[0].id = 'pose-a'; },
+    context => { context.blindProjection.items[0].choices[0].method = ''; },
+  ]) {
+    const context = publishedContext();
+    mutate(context);
+    assert.throws(() => buildPublishedMethodStats([context]), /invalid/);
+  }
+  assert.throws(() => buildPublishedMethodStats([publishedContext(), publishedContext()]), /invalid/);
+  assert.deepEqual(buildPublishedMethodStats([]).weeks, []);
 });
 
 test('scores oracle and top-1 from raw correctness rather than cluster acceptance', () => {
@@ -77,7 +137,7 @@ test('aggregates method totals and returns ordered weekly trends', () => {
   ]);
 });
 
-test('the preview fixture contains the three revealed production weeks', async () => {
+test('the historical fixture preserves the three original revealed weeks', async () => {
   const data = JSON.parse(await readFile(
     new URL('../weekly_method_stats.json', import.meta.url),
     'utf8',

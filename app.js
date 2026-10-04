@@ -252,6 +252,8 @@ const performanceDiagnosticsCollector = PERFORMANCE_RECORDING_REQUESTED
 let POOLS = { cameo: [], rnp: [], weekly: [] };
 let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'hard' : 'easy';
 let WEEKLY_ROUND = null;
+let weeklyQuestionScope = { mode: 'all' };
+let weeklyFeaturedScope = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
 let WEEKLY_FOR_FUN_LEADERBOARD = null;
@@ -338,6 +340,7 @@ function currentReplayableAppState({ includeVoteComment = false, continuousTrace
     source: quizSource,
     difficulty,
     round_id: quizSource === 'weekly' ? (WEEKLY_ROUND?.round_id || null) : null,
+    ...(quizSource === 'weekly' ? { question_scope: weeklyQuestionScope } : {}),
     question_index: cur ? idx : null,
     item_id: cur?.item?.id || null,
     display_mode: displayMode,
@@ -460,8 +463,58 @@ function retrospectiveQuestionMatches(item, filter = retrospectiveQuestionFilter
   return true;
 }
 
+function weeklyScopeQuestionIndexes(items = ITEMS) {
+  if (quizSource !== 'weekly' || isRetrospectiveReview()) return items.map((_, index) => index);
+  return window.foldariumFeaturedQuestions.scopedWeeklyQuestionIndexes(items, weeklyQuestionScope);
+}
+
+function nextSessionQuestionIndex() {
+  const indexes = quizSource === 'weekly' ? retrospectiveQuestionIndexes() : ITEMS.map((_, index) => index);
+  return indexes[indexes.indexOf(idx) + 1] ?? null;
+}
+
+function syncWeeklyQuestionScope() {
+  const box = $('#weekly-question-scope');
+  if (!box) return;
+  box.hidden = quizSource !== 'weekly' || isRetrospectiveReview() || !weeklyFeaturedScope;
+  if (box.hidden) return;
+  const count = weeklyFeaturedScope.item_ids.length;
+  const select = $('#weekly-question-scope-select');
+  select.value = weeklyQuestionScope.mode;
+  select.disabled = viewerTransitionBusy || revealRequested;
+  select.options[0].textContent = `This week's ${count}`;
+  select.options[1].textContent = `Explore all ${POOLS.weekly.length} questions`;
+  $('#weekly-question-scope-hint').textContent = weeklyQuestionScope.mode === 'featured'
+    ? `${count} featured questions. Votes count toward the full round; you can explore more anytime.`
+    : 'Full round. Your saved votes stay available when switching views.';
+}
+
+async function setWeeklyQuestionScope(mode) {
+  if (!weeklyFeaturedScope || !['featured', 'all'].includes(mode)
+      || viewerTransitionBusy || revealRequested) return;
+  weeklyQuestionScope = mode === 'featured' ? weeklyFeaturedScope : { mode: 'all' };
+  syncWeeklyQuestionScope();
+  if (cur) {
+    recordAppEvent('question_scope_changed');
+    rememberWeeklyItemState();
+    const indexes = weeklyScopeQuestionIndexes();
+    const nextIndex = indexes.includes(idx) ? idx : indexes[0];
+    saveWeeklyResumePosition(nextIndex);
+    await loadQuestion(nextIndex);
+  } else {
+    discardPreparedFirstGrid();
+    WEEKLY_PREPARED_SESSION = null;
+    firstGridPrebuildPromise = null;
+    showIntro();
+    firstGridPreparationPromise = prepareFirstWeeklyQuestionAssets()
+      .then(() => scheduleFirstWeeklyGridPrebuild())
+      .catch(error => console.warn('Weekly preview preparation omitted:', error.message));
+  }
+}
+
 function retrospectiveQuestionIndexes(filter = retrospectiveQuestionFilter) {
-  if (!isRetrospectiveReview()) return ITEMS.map((_, index) => index);
+  if (!isRetrospectiveReview()) return typeof weeklyScopeQuestionIndexes === 'function'
+    ? weeklyScopeQuestionIndexes() : ITEMS.map((_, index) => index);
   const rows = ITEMS
     .map((item, index) => ({
       item,
@@ -505,6 +558,7 @@ function syncRetrospectiveQuestionSort(visible) {
 }
 
 function syncQuestionNavigation() {
+  if (typeof syncWeeklyQuestionScope === 'function') syncWeeklyQuestionScope();
   const nav = $('#question-nav');
   if (!nav) return;
   const visible = !!cur && quizSource === 'weekly' && ITEMS.length > 0;
@@ -620,6 +674,7 @@ function saveWeeklyResumePosition(questionIndex = idx) {
       roundId: WEEKLY_ROUND.round_id,
       questionIndex,
       phase: WEEKLY_ROUND.public_status === 'revealed' ? 'post_reveal' : 'blind',
+      scope: weeklyQuestionScope,
     });
   } catch (error) {
     console.warn('Weekly refresh position was not saved:', error.message);
@@ -1063,19 +1118,22 @@ function startPendingQuestionPrefetch() {
 async function prepareFirstWeeklyQuestionAssets() {
   if (quizSource !== 'weekly' || !POOLS.weekly.length || isRetrospectiveReview()) return;
   const items = drawSession();
-  const item = items[0];
+  const indexes = weeklyScopeQuestionIndexes(items);
+  const initialQuestionIndex = indexes[0];
+  const item = items[initialQuestionIndex];
   if (!item) return;
   const clusters = buildQuestionClusters(item);
   const prefetchedClusters = new Map([[item.id, clusters]]);
-  for (const futureItem of items.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1)) {
+  for (const futureItem of indexes.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1).map(index => items[index])) {
     prefetchedClusters.set(futureItem.id, buildQuestionClusters(futureItem));
   }
   WEEKLY_PREPARED_SESSION = {
     items,
+    initialQuestionIndex,
     prefetchedClusters,
   };
   await prefetchWeeklyItemAssets(item, clusters, {
-    questionIndex: 0,
+    questionIndex: initialQuestionIndex,
     page: 0,
     mode: userView.displayMode,
     isClustered: userView.clustered,
@@ -1083,9 +1141,10 @@ async function prepareFirstWeeklyQuestionAssets() {
     stage: 'first-question-prefetch',
     priority: QUESTION_PREFETCH_LOOKAHEAD + 1,
   });
-  items.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1).forEach((futureItem, distance) => {
+  indexes.slice(1, QUESTION_PREFETCH_LOOKAHEAD + 1).forEach((questionIndex, distance) => {
+    const futureItem = items[questionIndex];
     void prefetchWeeklyItemAssets(futureItem, prefetchedClusters.get(futureItem.id), {
-      questionIndex: distance + 1,
+      questionIndex,
       page: 0,
       mode: userView.displayMode,
       isClustered: userView.clustered,
@@ -1788,7 +1847,7 @@ function discardPreparedFirstGrid() {
 async function buildPreparedGridScene(entry, paneIndex, generation, revision) {
   await waitForViewerPrewarmIdle();
   if (generation !== firstGridPrebuildGeneration) return null;
-  const paneId = `pane-0-${paneIndex}`;
+  const paneId = `pane-${WEEKLY_PREPARED_SESSION?.initialQuestionIndex || 0}-${paneIndex}`;
   const card = document.createElement('div');
   const head = document.createElement('button');
   let host = document.createElement('div');
@@ -1821,7 +1880,7 @@ async function buildPreparedGridScene(entry, paneIndex, generation, revision) {
     detachReplay: null,
     poseClickSubscription: null,
     spec: {
-      item: WEEKLY_PREPARED_SESSION?.items?.[0],
+      item: WEEKLY_PREPARED_SESSION?.items?.[WEEKLY_PREPARED_SESSION.initialQuestionIndex],
       proteinMode: userView.proteinMode,
       answer: false,
       clustered: userView.clustered,
@@ -1852,7 +1911,7 @@ async function buildPreparedGridScene(entry, paneIndex, generation, revision) {
 }
 async function prebuildFirstWeeklyGrid() {
   if (!FIRST_GRID_PREBUILD_ENABLED || displayMode !== 'grid' || isRetrospectiveReview()) return null;
-  const item = WEEKLY_PREPARED_SESSION?.items?.[0];
+  const item = WEEKLY_PREPARED_SESSION?.items?.[WEEKLY_PREPARED_SESSION.initialQuestionIndex];
   const clusters = item && WEEKLY_PREPARED_SESSION?.prefetchedClusters?.get(item.id);
   if (!item || !clusters) return null;
   const entries = firstGridEntries(item, clusters);
@@ -3613,9 +3672,10 @@ function requestQuestionCameraReset() {
 }
 
 async function loadQuestion(i) {
-  pendingQuestionPrefetchIndexes = Array.from(
-    { length: QUESTION_PREFETCH_LOOKAHEAD },
-    (_, distance) => i + distance + 1,
+  const sessionIndexes = weeklyScopeQuestionIndexes();
+  pendingQuestionPrefetchIndexes = sessionIndexes.slice(
+    sessionIndexes.indexOf(i) + 1,
+    sessionIndexes.indexOf(i) + 1 + QUESTION_PREFETCH_LOOKAHEAD,
   );
   const item = ITEMS[i];
   const loadStartedAt = Date.now();
@@ -3764,11 +3824,25 @@ async function loadQuestion(i) {
   }
 }
 
+function renderViewerInstruction() {
+  const displayWarning = cur.item.source === 'weekly'
+    ? [cur.item.alignment_warning?.message, cur.item.pocket_warning?.message]
+      .filter(message => typeof message === 'string' && message.trim())
+      .join(' ')
+    : '';
+  $('#instruction').textContent = displayWarning
+    || (cur.item.source === 'weekly'
+      ? weeklyViewerInstruction()
+      : 'Pick the pose that best fits the binding pocket.');
+  $('#instruction').classList.toggle('alignment-warning', !!displayWarning);
+  $('#instruction').style.display = displayWarning || !isRetrospectiveReview() ? '' : 'none';
+}
+
 function renderUI() {
   hideActivePoseInfoTooltip();
   const filteredIndexes = retrospectiveQuestionIndexes();
   const filteredPosition = filteredIndexes.indexOf(idx);
-  const questionOrdinal = isRetrospectiveReview() && filteredPosition >= 0
+  const questionOrdinal = (isRetrospectiveReview() || weeklyQuestionScope.mode === 'featured') && filteredPosition >= 0
     ? `${filteredPosition + 1} / ${filteredIndexes.length}`
     : `${idx + 1} / ${ITEMS.length}`;
   $('#progress').textContent = DEV ? `item ${questionOrdinal} · dev` : `question ${questionOrdinal}`;
@@ -3779,15 +3853,7 @@ function renderUI() {
       : `${rawPoseCount} predicted poses`)
     : `${cur.clusters.length} distinct pose clusters`;
   renderViewerQuestionTitle(poseSummary);
-  const alignmentWarning = cur.item.source === 'weekly'
-    ? cur.item.alignment_warning?.message
-    : null;
-  $('#instruction').textContent = alignmentWarning
-    || (cur.item.source === 'weekly'
-      ? weeklyViewerInstruction()
-      : 'Pick the pose that best fits the binding pocket.');
-  $('#instruction').classList.toggle('alignment-warning', !!alignmentWarning);
-  $('#instruction').style.display = alignmentWarning || !isRetrospectiveReview() ? '' : 'none';
+  renderViewerInstruction();
   const box = $('#choices'); box.innerHTML = '';
   const uiEntries = choiceEntriesForSidebar();
   const retrospectiveAnswer = retrospectiveAnswerActive();
@@ -3922,6 +3988,7 @@ function easyPlayable(choices, source) {
 }
 
 function showIntro() {
+  syncWeeklyQuestionScope();
   cur = null;                                  // leaving play: protmode/uncluster gate on cur in syncButtons
   const pool = filteredPool();
   $('#wrap').classList.add('intro');
@@ -3971,7 +4038,9 @@ function showIntro() {
           : 'Shown on the results leaderboard after release.');
       nameHint.classList.toggle('action-required', showRevealedModes);
     }
-    $('#ligand').innerHTML = isArchivePlayForFun()
+    $('#ligand').innerHTML = weeklyQuestionScope.mode === 'featured'
+      ? `${weeklyQuestionScope.item_ids.length} questions this week`
+      : isArchivePlayForFun()
       ? `${pool.length} historical weekly ensembles`
       : `${pool.length} prospective weekly ensembles`;
     $('#setuphint').innerHTML = isRetrospectiveReview()
@@ -4984,7 +5053,7 @@ function drawSession() {
     for (const item of shuffle(pool.slice())) { if (picked.length >= SESSION_SIZE) break; if (!used.has(item)) { picked.push(item); used.add(item); } }
   return shuffle(picked).slice(0, SESSION_SIZE);
 }
-function beginQuiz(initialQuestionIndex = 0) {
+function beginQuiz(initialQuestionIndex = null) {
   const prepared = quizSource === 'weekly' ? WEEKLY_PREPARED_SESSION : null;
   ITEMS = prepared?.items || drawSession();
   WEEKLY_ITEM_STATES = new Map();
@@ -5019,7 +5088,9 @@ function beginQuiz(initialQuestionIndex = 0) {
   $('#suggestion-open').disabled = WEEKLY_ROUND?.public_status === 'revealed'
     || !(remoteSessionId || isReadOnlyPreview());
   startWeeklyThinkingTrace();
-  const questionIndex = Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
+  const questionIndex = initialQuestionIndex == null
+    ? weeklyScopeQuestionIndexes()[0] || 0
+    : Math.min(Math.max(0, initialQuestionIndex), Math.max(0, ITEMS.length - 1));
   loadQuestion(questionIndex);
   if (isArchiveRetrospective()) window.foldariumRevealArchiveReview?.();
 }
@@ -5039,6 +5110,15 @@ async function resumeWeeklyQuizIfAvailable() {
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Quiz persistence is unavailable.');
+    if (token.scope.mode === 'featured') {
+      if (token.scope.blind_manifest_sha256 !== WEEKLY_ROUND.blind_manifest_sha256) {
+        throw new Error('The saved question selection belongs to a different manifest.');
+      }
+      const indexes = window.foldariumFeaturedQuestions.scopedWeeklyQuestionIndexes(POOLS.weekly, token.scope);
+      if (!indexes.includes(token.question_index)) throw new Error('The saved question is outside its selection.');
+      weeklyFeaturedScope = token.scope;
+    }
+    weeklyQuestionScope = token.scope;
     const resumed = await backend.resumeNamedWeeklySession({
       sessionId: token.session_id,
       roundId: token.round_id,
@@ -5083,10 +5163,12 @@ function syncStartGate() {
 }
 
 function beginStartPerformanceTiming() {
-  const item = WEEKLY_PREPARED_SESSION?.items?.[0] || null;
+  const pool = quizSource === 'weekly' ? POOLS.weekly : [];
+  const initialQuestionIndex = weeklyScopeQuestionIndexes(pool)[0] || 0;
+  const item = pool[initialQuestionIndex] || null;
   pendingQuestionPerformanceTiming = viewerPerformance.beginQuestion({
     itemId: item?.id || null,
-    questionIndex: 0,
+    questionIndex: initialQuestionIndex,
     requestedMode: userView.displayMode,
     clustered: userView.clustered,
     includesStart: true,
@@ -5163,7 +5245,7 @@ async function startQuiz() {
     [remoteSessionId] = await Promise.all([sessionPromise, firstGridReady]);
     if (!remoteSessionId) throw new Error('The quiz session was not created.');
     participantDisplayName = displayName;
-    saveWeeklyResumePosition(0);
+    saveWeeklyResumePosition(weeklyScopeQuestionIndexes(POOLS.weekly)[0] || 0);
     beginQuiz();
   } catch (error) {
     remoteSessionId = null;
@@ -5498,7 +5580,7 @@ function renderRevealedQuestionUi() {
   $('#answer-ai').textContent = afMsg;
   $('#answer-details').hidden = !cur.showAnswer;
   if (cur.showAnswer) $('#answer-details').open = false;
-  $('#next').style.display = ''; $('#next').textContent = idx + 1 < ITEMS.length ? 'Next question →' : 'View final score →';
+  $('#next').style.display = ''; $('#next').textContent = nextSessionQuestionIndex() !== null ? 'Next question →' : 'View final score →';
   $('#myview').style.display = '';
   $('#myview').textContent = cur.showAnswer
     ? '← Back to my view (hide answer)'
@@ -5508,6 +5590,7 @@ function renderRevealedQuestionUi() {
 }
 
 async function finalizeWeeklyVote({ postReveal = false } = {}) {
+  const nextIndex = nextSessionQuestionIndex();
   const picked = cur.selected;
   const choiceId = picked.none ? null : picked._weeklyChoiceId;
   const verdict = $('#verdict'); verdict.style.display = '';
@@ -5516,7 +5599,7 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
     cur.voteCommentHandled = false;
     cur.voteCommentText = null;
     rememberWeeklyItemState();
-    if (idx + 1 < ITEMS.length) await loadQuestion(idx + 1);
+    if (nextIndex !== null) await loadQuestion(nextIndex);
     else {
       renderUI();
       verdict.style.display = '';
@@ -5561,13 +5644,14 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
     setVoteStatus(`Vote was not recorded. ${error.message}`, 'error');
     return;
   }
-  setVoteStatus(idx + 1 < ITEMS.length
+  setVoteStatus(nextIndex !== null
     ? 'Vote saved. Loading next question…'
     : 'Vote saved.', 'saved');
   recordAppEvent('vote_recorded');
-  if (idx + 1 >= ITEMS.length) recordAppEvent('quiz_completed');
+  if (nextIndex === null) recordAppEvent(weeklyQuestionScope.mode === 'featured'
+    ? 'featured_questions_finished' : 'quiz_completed');
   viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
-  void weeklyTraceStream?.endVisit?.(idx + 1 < ITEMS.length ? 'vote' : 'completion');
+  void weeklyTraceStream?.endVisit?.(nextIndex !== null ? 'vote' : 'completion');
   WEEKLY_VOTES.set(cur.item.id, {
     item_id: cur.item.id,
     choice_id: choiceId,
@@ -5581,11 +5665,17 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
     return true;
   }
   rememberWeeklyItemState();
-  if (idx + 1 < ITEMS.length) await loadQuestion(idx + 1);
+  if (nextIndex !== null) await loadQuestion(nextIndex);
   else {
     renderUI();
     verdict.style.display = '';
-    verdict.innerHTML = '<b style="color:var(--good)">All votes recorded.</b> Review or revise them with the arrows.';
+    const scopeIndexes = weeklyScopeQuestionIndexes();
+    const answered = scopeIndexes.filter(index => WEEKLY_VOTES.has(ITEMS[index].id)).length;
+    verdict.textContent = `${answered} of ${scopeIndexes.length} ${
+      weeklyQuestionScope.mode === 'featured' ? 'featured ' : ''
+    }votes saved. ${answered === scopeIndexes.length
+      ? 'You’re done for now. Review your votes or explore all questions above.'
+      : 'Use the arrows to return to the remaining questions.'}`;
   }
   return true;
 }
@@ -5910,15 +6000,19 @@ function nextDev() { if (!viewerTransitionBusy) void loadQuestion((idx + 1) % IT
 function next() {
   if (viewerTransitionBusy) return;
   if (DEV) return nextDev();
-  (idx + 1 < ITEMS.length) ? void loadQuestion(idx + 1) : finish();
+  const nextIndex = nextSessionQuestionIndex();
+  nextIndex !== null ? void loadQuestion(nextIndex) : finish();
 }
 function finish() {
   hideGrid();
   const revisableForFunSession = quizSource === 'weekly'
     && WEEKLY_ROUND?.public_status === 'revealed';
-  if (!revisableForFunSession) researchBackend()?.completeSession(remoteSessionId);
+  if (!revisableForFunSession && !(quizSource === 'weekly' && weeklyQuestionScope.mode === 'featured')) {
+    researchBackend()?.completeSession(remoteSessionId);
+  }
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
-  $('#ligand').textContent = 'Quiz complete';
+  $('#ligand').textContent = quizSource === 'weekly' && weeklyQuestionScope.mode === 'featured'
+    ? 'Featured questions complete' : 'Quiz complete';
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
@@ -6132,6 +6226,7 @@ async function init() {
         has_correct: choices.some(choice => choice.correct === true),
         easyPlayable: true,
         alignment_warning: item.metadata?.display_alignment || null,
+        pocket_warning: item.metadata?.display_pocket || null,
       };
     }).filter(item => item.choices.length && item.protein_file);
   };
@@ -6363,6 +6458,8 @@ async function init() {
   } catch (error) {
     console.warn('Weekly quiz unavailable:', error.message);
   }
+  weeklyFeaturedScope = window.foldariumFeaturedQuestions.featuredQuestionScope(WEEKLY_ROUND);
+  weeklyQuestionScope = weeklyFeaturedScope || { mode: 'all' };
   const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
   if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
   if (WEEKLY_ONLY) {
@@ -6531,6 +6628,9 @@ async function init() {
   };
   $('#start').onclick = startQuiz;
   $('#play-for-fun-start').onclick = startQuiz;
+  $('#weekly-question-scope-select').addEventListener('change', event => {
+    void setWeeklyQuestionScope(event.target.value);
+  });
   $('#participant-name').addEventListener('input', syncStartGate);
   $('#performance-consent-checkbox')?.addEventListener('change', syncStartGate);
   $('#participant-name').addEventListener('keydown', event => {
