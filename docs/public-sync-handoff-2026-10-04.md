@@ -114,8 +114,9 @@ Completed: 665 JavaScript tests pass with one optional WebAssembly skip;
 optional-dependency skips). Real PostgreSQL checks cover private ACLs, exact
 attempt/lease/task binding, immutable private Storage URIs, expiry, and idempotence.
 The 2,454-file public-tree audit and eight-file credential/runtime scan pass.
-Pending: public CI, accepted symlink hardening, and operational deployment
-verification before public merge. The public source
+Completed: the symlink-hardening follow-up is accepted in the operational source,
+and the private catalog migration has been applied. Pending: public CI and
+operational worker deployment verification before public merge. The public source
 excludes the hosted failure hook and its wrapper test, private operational records,
 live profiles, credentials, logs, native artifacts, and schedules. Integrators
 must catch diagnostic failures and still publish the original scientific failure.

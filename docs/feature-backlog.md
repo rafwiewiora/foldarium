@@ -173,8 +173,9 @@ Prepared source remains **planned** until its production flow is verified.
 - **Prepared:** service-only append-only registration binds evidence to the exact
   run, claimed attempt, worker, task digest, and private content-addressed bucket.
   Discovery and upload phases are bounded; skipped links mark incomplete evidence.
-- **Pending:** accepted hardening/deployment verification and public CI. The public
-  library requires an explicit host hook and never retries scientific work.
+- **Verified:** accepted hardening and private catalog migration. Operational
+  worker deployment verification and public CI remain pending. The public library
+  requires an explicit host hook and never retries scientific work.
 
 ### Bounded inference and completed-work recovery
 
