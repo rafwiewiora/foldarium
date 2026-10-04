@@ -73,3 +73,28 @@ CI jobs, including clean Supabase startup/reset and repository-wide secrets.
 This follow-up excludes private operational records, deployment profiles and
 wrappers, SDK integration tests, and all live activation changes. No new migration
 or browser/API behavior is introduced.
+
+## Follow-up: bounded inference libraries and completed-work recovery
+
+Prepared source includes the SDK-free Messages API provider, isolated inference
+library, service-side recovery adapter, and synthetic tests. These require exact
+frozen configuration and job/kit provenance, durable precharge, and the existing
+one-time budget initialization grant. Rate-review expiry blocks new reservations
+and paid calls while preserving completed-work recovery and configuration hashes.
+
+The previous public exclusion of these libraries was an implementation choice;
+the public boundary permits the portable core. Hosting-specific isolation remains
+the caller's explicit obligation. The cloud-volume command-line entry point,
+provider SDKs, hosted sandbox launcher, private runtime documentation, profiles,
+credentials/account identifiers, and operational settings remain excluded. No
+module import enables spending, and no new schema or browser change is included.
+Production paid execution remains disabled.
+
+Completed: 23 focused no-network tests pass, including registration failure and
+post-expiry recovery without an additional paid request. Full validation passes
+665 JavaScript tests (one optional WebAssembly skip), 684 scientific Python tests,
+and 681 dependency-light Python tests (148 expected optional-dependency skips).
+The 2,449-file public-tree audit and six-file credential/runtime scan pass. The
+existing real PostgreSQL one-time budget initialization harness also passes.
+Pending: public CI, including clean database replay and repository-wide secrets,
+before merge.
