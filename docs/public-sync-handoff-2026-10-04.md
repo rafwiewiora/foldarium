@@ -55,3 +55,20 @@ policies, or hosting routing are copied. Public HTML remains password-free;
 local server behavior, environment defaults, and authenticated-proxy admin checks
 are preserved. Migration `20261005000000_read_verified_featured_cohorts.sql` adds
 only a service-role read of the existing immutable assignment catalog.
+
+## Follow-up: acknowledged dispatch observation
+
+Prepared portable source adds an SDK-injected observation guard and its
+provider-independent tests. A polling deadline can mean an accepted job is still
+pending; a worker timeout, expired output, or ambiguous call graph cannot silently
+become permission for a duplicate prediction. The original receipt remains for
+bounded recovery, and a genuine function-duration timeout rechecks the exact run
+before the existing unclaimed replacement path.
+
+Completed: 11 focused observation tests, 665 JavaScript tests (one optional
+WebAssembly skip), 661 scientific Python tests, and 658 dependency-light Python
+tests (148 optional-dependency skips). The 2,445-file public boundary audit and
+five-file credential/runtime scan pass. Public CI remains pending.
+This follow-up excludes private operational records, deployment profiles and
+wrappers, SDK integration tests, and all live activation changes. No new migration
+or browser/API behavior is introduced.
