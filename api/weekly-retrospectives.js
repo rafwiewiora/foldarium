@@ -62,7 +62,7 @@ export function createWeeklyRetrospectivesHandler({
       }
       if (mode.name === 'detail') {
         const publication = await client.fetchPublication(mode.roundId);
-        const [context, artifactBytes, adminBytes] = await Promise.all([
+        const [context, artifactBytes, adminBytes, sourceBytes] = await Promise.all([
           client.fetchVerifiedContext(publication),
           client.download(publication.descriptors[
             mode.admin ? 'admin_artifact' : 'public_artifact'
@@ -70,9 +70,11 @@ export function createWeeklyRetrospectivesHandler({
           mode.admin
             ? Promise.resolve(null)
             : client.download(publication.descriptors.admin_artifact),
+          client.download(publication.descriptors.source_snapshot),
         ]);
+        const { authorizedLlmIdentities } = verifySourceSnapshot(sourceBytes, publication);
         if (mode.admin) {
-          const adminArtifact = verifyAdminArtifact(artifactBytes, publication);
+          const adminArtifact = verifyAdminArtifact(artifactBytes, publication, { authorizedLlmIdentities });
           return send(response, 200, buildAdminDetail({
             publication,
             context,
@@ -81,8 +83,8 @@ export function createWeeklyRetrospectivesHandler({
         }
         const publicArtifact = publishHumanPseudonyms({
           publication,
-          publicArtifact: verifyPublicArtifact(artifactBytes, publication),
-          adminArtifact: verifyAdminArtifact(adminBytes, publication),
+          publicArtifact: verifyPublicArtifact(artifactBytes, publication, { authorizedLlmIdentities }),
+          adminArtifact: verifyAdminArtifact(adminBytes, publication, { authorizedLlmIdentities }),
         });
         const etag = `"weekly-retrospective-names-v1-${publication.digests.admin_artifact_sha256}"`;
         response.setHeader('ETag', etag);
@@ -117,11 +119,12 @@ export function createWeeklyRetrospectivesHandler({
             client.download(publication.descriptors.source_snapshot),
             client.download(publication.descriptors.public_artifact),
           ]);
+          const sourceSnapshot = verifySourceSnapshot(sourceBytes, publication);
           return {
             publication,
             context,
-            sourceSnapshot: verifySourceSnapshot(sourceBytes, publication),
-            publicArtifact: verifyPublicArtifact(publicBytes, publication),
+            sourceSnapshot,
+            publicArtifact: verifyPublicArtifact(publicBytes, publication, sourceSnapshot),
           };
           },
         );
@@ -140,11 +143,12 @@ export function createWeeklyRetrospectivesHandler({
           client.download(publication.descriptors.source_snapshot),
           client.download(publication.descriptors.public_artifact),
         ]);
+        const sourceSnapshot = verifySourceSnapshot(sourceBytes, publication);
         return {
           publication,
           context,
-          sourceSnapshot: verifySourceSnapshot(sourceBytes, publication),
-          publicArtifact: verifyPublicArtifact(publicBytes, publication),
+          sourceSnapshot,
+          publicArtifact: verifyPublicArtifact(publicBytes, publication, sourceSnapshot),
         };
         },
       );
@@ -260,15 +264,17 @@ async function listPublications(client, mode) {
     publications,
     ARTIFACT_LOAD_CONCURRENCY,
     async publication => {
-      const [context, publicBytes, adminBytes] = await Promise.all([
+      const [context, publicBytes, adminBytes, sourceBytes] = await Promise.all([
         client.fetchVerifiedContext(publication),
         client.download(publication.descriptors.public_artifact),
         client.download(publication.descriptors.admin_artifact),
+        client.download(publication.descriptors.source_snapshot),
       ]);
+      const { authorizedLlmIdentities } = verifySourceSnapshot(sourceBytes, publication);
       const publicArtifact = publishHumanPseudonyms({
         publication,
-        publicArtifact: verifyPublicArtifact(publicBytes, publication),
-        adminArtifact: verifyAdminArtifact(adminBytes, publication),
+        publicArtifact: verifyPublicArtifact(publicBytes, publication, { authorizedLlmIdentities }),
+        adminArtifact: verifyAdminArtifact(adminBytes, publication, { authorizedLlmIdentities }),
       });
       return publicationSummary(publication, {
         context,

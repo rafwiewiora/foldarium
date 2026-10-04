@@ -57,6 +57,40 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Planned
 
+### Historical Preview research archive
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** explicitly authorized expired Preview rounds retain their exact
+  original identity, manifests, and voting window. Separate immutable evaluation
+  and publication catalogs preserve all poses and exclude human ballots.
+- **Prepared:** a distinct archive page and API show verified research results,
+  exact model decisions, and scorable versus excluded populations. Frozen model
+  receipts are required before publication; this does not reopen voting.
+- **Verified:** portable API/server dispatch, database guards, and mobile/desktop
+  synthetic browser review. Live historical publication remains pending.
+
+### Receipt-bound API model identities
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** new archive model labels require exact frozen execution and
+  verified receipt proofs. Human display names cannot grant automated identity.
+  Private proofs stay outside responses, and legacy source bytes remain stable.
+- **Verified:** all archive API modes, isolated SQL joins, and mutation/forgery
+  rejection. Paid provider execution remains a separate operational decision.
+
+### Optional H-bond evidence availability
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** a parsed unknown receptor residue can make optional ProLIF
+  evidence explicitly unavailable. Original poses and successful Smina results
+  remain; missing evidence is never displayed as zero. Other science failures
+  remain fatal, and correctness denominators are unchanged.
+- **Verified:** strict blind marker, retained pose identities, database opening
+  guards, and both browser evidence labels. Recovery rollout is tracked separately.
+
 ### Audited incomplete-reference handling
 
 - **Status:** planned

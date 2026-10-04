@@ -166,3 +166,13 @@ test('reads host and port from the process-style environment', () => {
   });
   assert.throws(() => resolveServerConfig({ PORT: '4321x' }), /PORT/);
 });
+
+
+test('dispatches the historical research endpoint without treating it as a static file', async t => {
+  assert.equal(typeof DEFAULT_API_HANDLERS['historical-preview-research'], 'function');
+  const origin = await startServer(t, { rootDirectory: await fixtureRoot(t) });
+  const response = await fetch(`${origin}/api/historical-preview-research`, { method: 'POST' });
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get('allow'), 'GET');
+  assert.deepEqual(await response.json(), { error: 'Method not allowed' });
+});

@@ -233,6 +233,8 @@ def plan_reconciliation(
                 block(cid, "ambiguous-preview-identity")
                 continue
             source = previews[0]
+            if source.get("historical_scope"):
+                continue  # Explicit research scope never reopens a human voting window.
             if timestamp(source["closes_at"]) <= now:
                 block(cid, "expired-preview-needs-explicit-historical-recovery")
                 continue
@@ -247,14 +249,24 @@ def plan_reconciliation(
     production = sorted([r for r in rounds if r["environment"] == "production" and r["round_id"] in eligible_ids], key=lambda r: (timestamp(r["opens_at"]), r["round_id"]))
     for row in sorted(rounds, key=lambda r: (r["opens_at"], r["round_id"])):
         rid = row["round_id"]
-        if row["environment"] != "production" or row["round_id"] not in eligible_ids:
+        historical = row["environment"] == "preview" and bool(row.get("historical_scope"))
+        if not historical and (row["environment"] != "production" or row["round_id"] not in eligible_ids):
             continue
+        if historical:
+            scope = row["historical_scope"]
+            exact = all(scope.get(k) == row.get(k) for k in ("round_id", "campaign_id", "environment", "blind_manifest_sha256", "private_index_sha256"))
+            exact = exact and all(timestamp(scope[k]) == timestamp(row[k]) for k in ("opens_at", "closes_at"))
+            if not exact or row["status"] != "open" or row.get("revealed_at") or timestamp(row["closes_at"]) > now:
+                block(rid, "historical-source-binding-changed")
+                continue
+            if row.get("historical_published"):
+                continue
         binding = {"round_id": rid, "environment": row["environment"], "blind_manifest_sha256": row["blind_manifest_sha256"]}
         if row["status"] == "revealed":
             if not row.get("retrospective_published"):
                 add("publish_retrospective", rid, "retrospective", **binding)
             continue
-        if not row.get("featured_registered"):
+        if not historical and not row.get("featured_registered"):
             add("freeze_featured", rid, "featured", **binding)
         if not row.get("kit"):
             add("register_kit", rid, "kits", **binding)
@@ -292,6 +304,14 @@ def plan_reconciliation(
             elif timestamp(row["closes_at"]) <= now:
                 add("submit_benchmark", job["execution_id"], "benchmarks", **binding,
                     execution_id=job["execution_id"], artifact_sha256=job["artifact_sha256"])
+        if historical:
+            if not row.get("historical_evaluation_ready"):
+                add("evaluate_historical_preview", rid, "evaluation", **binding, scope_id=scope["scope_id"])
+            elif policy is not None and not missing_receipts:
+                add("publish_historical_preview", rid, "retrospective", **binding, scope_id=scope["scope_id"])
+            if missing_receipts:
+                block(rid, "awaiting-required-benchmark-receipts")
+            continue
         release_policy = delayed_retrospective_release(row)
         if release_policy and not release_policy.get("activated_by_round_id"):
             candidates = [r for r in production if timestamp(r["opens_at"]) > timestamp(row["opens_at"]) and timestamp(r["opens_at"]) <= now and r["status"] == "open"]

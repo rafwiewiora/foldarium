@@ -1151,3 +1151,63 @@ test('archive detail preserves the blind-safe zero-contact pocket warning', asyn
     assert.doesNotMatch(detail.serialized, /must-not-project/);
   }
 });
+
+function authorizeApiModelWeek(week) {
+  const publication = week.publication;
+  for (const kind of ['source_snapshot', 'public_artifact', 'admin_artifact']) {
+    const original = JSON.parse(week.objects.get(publication[`${kind}_sha256`]));
+    const value = JSON.parse(JSON.stringify(original).replaceAll('Claude Opus', 'fixture-api-model'));
+    if (kind === 'source_snapshot') {
+      value.format_version = 'foldarium.weekly-retrospective-source/v2';
+      const participant = value.participants.find(row => row.participant_kind === 'automated');
+      participant.current_session_count = 0;
+      participant.benchmark_authorization = {
+        policy: 'foldarium.frozen-benchmark-identity/v1',
+        round_id: publication.round_id, environment: 'production',
+        execution_id: participant.participant_link, provider: 'anthropic-api',
+        model_id: 'fixture-api-model', config_sha256: 'c'.repeat(64),
+        blind_manifest_sha256: publication.blind_manifest_sha256,
+        execution_sha256: 'd'.repeat(64), payload_digest: 'e'.repeat(64),
+        artifact_sha256: 'f'.repeat(64),
+      };
+    }
+    const bytes = Buffer.from(canonicalJson(value));
+    const record = stored(bytes);
+    week.objects.set(record.sha256, bytes);
+    for (const field of ['sha256', 'object_uri', 'size_bytes', 'media_type']) publication[`${kind}_${field}`] = record[field];
+  }
+  publication.publication_id = stableId('weekly_archive', Object.fromEntries([
+    'format_version', 'round_id', 'evaluation_id', 'evaluation_artifact_sha256',
+    'source_snapshot_sha256', 'public_artifact_sha256', 'admin_artifact_sha256',
+  ].map(key => [key, publication[key]])));
+  return week;
+}
+
+test('all archive API modes authorize future models from the exact private source without leaking proof', async () => {
+  const week = authorizeApiModelWeek(buildWeek());
+  const handler = createWeeklyRetrospectivesHandler({
+    env: env({ FOLDARIUM_ENV: 'preview', FOLDARIUM_WEEKLY_RETROSPECTIVE_ADMIN_ENABLED: '1',
+      FOLDARIUM_WEEKLY_RETROSPECTIVE_ADMIN_ACCESS: 'authenticated-proxy',
+      FOLDARIUM_WEEKLY_RETROSPECTIVE_PARTICIPANT_HMAC_KEY: HMAC_KEY }),
+    fetchImpl: archiveFetch([week]),
+  });
+  for (const query of [{}, { round_id: week.publication.round_id }, { all_time: '1' },
+    { admin: '1', round_id: week.publication.round_id }, { admin: '1', all_time: '1' }]) {
+    const result = await invoke(handler, { query });
+    assert.equal(result.statusCode, 200, JSON.stringify(query));
+    assert.match(result.serialized, /fixture-api-model/);
+    assert.doesNotMatch(result.serialized, /benchmark_authorization|execution_id|config_sha256|payload_digest/);
+  }
+});
+
+test('detail and list fail closed when private model authorization bytes differ from the catalog', async () => {
+  const week = authorizeApiModelWeek(buildWeek());
+  week.objects.set(week.publication.source_snapshot_sha256, Buffer.from('{}'));
+  const handler = createWeeklyRetrospectivesHandler({ env: env(), fetchImpl: archiveFetch([week]) });
+  for (const query of [{}, { round_id: week.publication.round_id }, { all_time: '1' }]) {
+    const result = await invoke(handler, { query });
+    assert.equal(result.statusCode, 404);
+    assert.deepEqual(result.body, { error: 'Not found' });
+    assert.equal(result.headers['Cache-Control'], 'no-store');
+  }
+});

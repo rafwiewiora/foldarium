@@ -33,7 +33,13 @@ function weeklyPoseEvidence(choice) {
     ? ` · smina ${smina.value.toFixed(1)} kcal/mol`
     : '';
   const interactions = choice._interactionCount;
-  const interactionValue = interactions?.metric === 'prolif_hbond_residue_count'
+  const interactionUnavailable = interactions?.metric === 'prolif_hbond_residue_count'
+    && interactions.value === null && interactions.status === 'unavailable'
+    && interactions.availability_policy === 'foldarium.prolif-availability/v1'
+    && interactions.reason === 'unsupported_receptor_residue'
+    && JSON.stringify(interactions.unsupported_residues) === '["UNK"]';
+  const interactionValue = interactionUnavailable ? ' · H-bonds unavailable'
+    : interactions?.metric === 'prolif_hbond_residue_count'
       && Number.isInteger(interactions.value) && interactions.value >= 0
     ? ` · H-bonds ${interactions.value}`
     : '';
@@ -56,6 +62,11 @@ function weeklyLigandPlddt(choice) {
 }
 function weeklyHbondCount(choice) {
   const interactions = choice?._interactionCount;
+  if (interactions?.metric === 'prolif_hbond_residue_count' && interactions.value === null
+      && interactions.status === 'unavailable'
+      && interactions.availability_policy === 'foldarium.prolif-availability/v1'
+      && interactions.reason === 'unsupported_receptor_residue'
+      && JSON.stringify(interactions.unsupported_residues) === '["UNK"]') return 'H-bonds unavailable';
   return interactions?.metric === 'prolif_hbond_residue_count'
       && Number.isInteger(interactions.value) && interactions.value >= 0
     ? `H-bonds ${interactions.value}`

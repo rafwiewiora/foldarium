@@ -187,21 +187,11 @@ def build_blind_manifest(
                 count = _object(
                     public_choice["interaction_count"], "choice.interaction_count"
                 )
-                value = count.get("value")
-                if (
-                    count.get("metric") != "prolif_hbond_residue_count"
-                    or isinstance(value, bool)
-                    or not isinstance(value, int)
-                    or value < 0
-                ):
-                    raise QuizManifestError("choice.interaction_count is invalid")
-                public_choice["interaction_count"] = {
-                    "metric": "prolif_hbond_residue_count",
-                    "value": value,
-                    "policy": _nonempty(
-                        count.get("policy"), "choice.interaction_count.policy"
-                    ),
-                }
+                from .interaction_metric import normalize_interaction_count
+                try:
+                    public_choice["interaction_count"] = normalize_interaction_count(count)
+                except ValueError as exc:
+                    raise QuizManifestError("choice.interaction_count is invalid") from exc
             if "cluster_id" in public_choice:
                 public_choice["cluster_id"] = _nonempty(
                     public_choice["cluster_id"], "choice.cluster_id"

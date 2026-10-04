@@ -26,12 +26,14 @@ from .private_evaluation import (
 )
 from .quiz import manifest_sha256
 from .reference_disposition import validate_reference_disposition
+from .retrospective_identity import validate_benchmark_authorization
 from .supabase import PRIVATE_WEEKLY_EVALUATION_FIELDS
 
 RETROSPECTIVE_PUBLICATION_FORMAT_VERSION = (
     "foldarium.weekly-retrospective-publication/v1"
 )
 RETROSPECTIVE_SOURCE_FORMAT_VERSION = "foldarium.weekly-retrospective-source/v1"
+RETROSPECTIVE_AUTHORIZED_SOURCE_FORMAT_VERSION = "foldarium.weekly-retrospective-source/v2"
 RETROSPECTIVE_PUBLIC_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v1"
 RETROSPECTIVE_ADMIN_FORMAT_VERSION = "foldarium.weekly-retrospective-admin/v1"
 RETROSPECTIVE_PUBLIC_UNSCORABLE_FORMAT_VERSION = "foldarium.weekly-retrospective-public/v2"
@@ -229,9 +231,19 @@ def _normalize_post_close_benchmark_rows(
         if row.get("run_class") != "post_close_benchmark":
             raise RetrospectiveArchiveError("post-close benchmark run_class is invalid")
         display_name = _text(row.get("display_name"), "benchmark display_name")
-        if display_name not in APPROVED_AUTOMATED_IDENTITIES:
+        authorization = row.get("benchmark_authorization")
+        if authorization is not None:
+            try:
+                authorization = validate_benchmark_authorization(
+                    authorization, round_id=round_id,
+                    execution_id=row.get("payload", {}).get("submission_id"),
+                    display_name=display_name,
+                )
+            except (ValueError, AttributeError) as exc:
+                raise RetrospectiveArchiveError(str(exc)) from exc
+        elif display_name not in APPROVED_AUTOMATED_IDENTITIES or row.get("provider") == "anthropic-api":
             raise RetrospectiveArchiveError(
-                "post-close benchmark identity is not code-approved"
+                "post-close benchmark identity is not code-approved or receipt-authorized"
             )
         if display_name in active_automated_identities:
             raise RetrospectiveArchiveError(
@@ -246,6 +258,11 @@ def _normalize_post_close_benchmark_rows(
         payload = _object(row.get("payload"), f"post_close_benchmarks[{row_index}].payload")
         if payload.get("round_id") != round_id:
             raise RetrospectiveArchiveError("benchmark payload round_id mismatch")
+        if authorization is not None and (
+            payload.get("environment") != authorization["environment"]
+            or payload.get("blind_manifest_sha256") != authorization["blind_manifest_sha256"]
+        ):
+            raise RetrospectiveArchiveError("benchmark payload differs from authorization")
         participant_link = _participant_link(
             payload.get("submission_id"), "benchmark submission_id"
         )
@@ -297,6 +314,7 @@ def _normalize_post_close_benchmark_rows(
                 "automated_identity": display_name,
                 "display_name": None,
                 "current_session_count": 0,
+                **({"benchmark_authorization": authorization} if authorization is not None else {}),
             }
         )
         seen_automated_names.add(display_name)
@@ -513,7 +531,9 @@ def build_retrospective_source_snapshot(
         )
     )
     return {
-        "format_version": RETROSPECTIVE_SOURCE_FORMAT_VERSION,
+        "format_version": (RETROSPECTIVE_AUTHORIZED_SOURCE_FORMAT_VERSION
+            if any("benchmark_authorization" in row for row in participants)
+            else RETROSPECTIVE_SOURCE_FORMAT_VERSION),
         "round_id": round_id,
         "participants": participants,
         "votes": normalized_votes,
@@ -522,10 +542,23 @@ def build_retrospective_source_snapshot(
 
 def encode_retrospective_source_snapshot(snapshot: Mapping[str, Any]) -> bytes:
     normalized = _object(snapshot, "source snapshot")
-    if normalized.get("format_version") != RETROSPECTIVE_SOURCE_FORMAT_VERSION:
+    expected_format = (RETROSPECTIVE_AUTHORIZED_SOURCE_FORMAT_VERSION
+        if any("benchmark_authorization" in row for row in normalized.get("participants", []) if isinstance(row, Mapping))
+        else RETROSPECTIVE_SOURCE_FORMAT_VERSION)
+    if normalized.get("format_version") != expected_format:
         raise RetrospectiveArchiveError("source snapshot format_version is invalid")
     _text(normalized.get("round_id"), "source snapshot round_id")
-    _rows(normalized.get("participants"), "source snapshot participants")
+    for participant in _rows(normalized.get("participants"), "source snapshot participants"):
+        if "benchmark_authorization" not in participant:
+            continue
+        if participant.get("participant_kind") != "automated" or participant.get("display_name") is not None or participant.get("current_session_count") != 0:
+            raise RetrospectiveArchiveError("human participant or ballot carries benchmark authorization")
+        try:
+            validate_benchmark_authorization(participant["benchmark_authorization"],
+                round_id=normalized["round_id"], execution_id=participant.get("participant_link"),
+                display_name=participant.get("automated_identity"))
+        except ValueError as exc:
+            raise RetrospectiveArchiveError(str(exc)) from exc
     _rows(normalized.get("votes"), "source snapshot votes")
     return canonical_json(normalized).encode("utf-8")
 
@@ -788,6 +821,8 @@ def build_retrospective_artifacts(
         kind = participant.get("participant_kind")
         automated_identity = participant.get("automated_identity")
         if kind == "human":
+            if "benchmark_authorization" in participant:
+                raise RetrospectiveArchiveError("human participant has benchmark authorization")
             if automated_identity is not None:
                 raise RetrospectiveArchiveError("human participant has automation identity")
             participant["display_name"] = _display_name(
@@ -795,7 +830,19 @@ def build_retrospective_artifacts(
             )
             human_links.append(link)
         elif kind == "automated":
-            if automated_identity not in APPROVED_AUTOMATED_IDENTITIES:
+            authorization = participant.get("benchmark_authorization")
+            if authorization is not None:
+                try:
+                    validate_benchmark_authorization(authorization,
+                        round_id=source_snapshot.get("round_id"), execution_id=link,
+                        display_name=automated_identity)
+                except ValueError as exc:
+                    raise RetrospectiveArchiveError(str(exc)) from exc
+                if participant.get("display_name") is not None or participant.get("current_session_count") != 0:
+                    raise RetrospectiveArchiveError("benchmark participant carries ballot provenance")
+                if authorization["blind_manifest_sha256"] != evaluation.get("blind_manifest_sha256"):
+                    raise RetrospectiveArchiveError("benchmark authorization differs from evaluation manifest")
+            elif automated_identity not in APPROVED_AUTOMATED_IDENTITIES:
                 raise RetrospectiveArchiveError(
                     "source contains an unapproved automated identity"
                 )
