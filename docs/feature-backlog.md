@@ -174,8 +174,8 @@ Prepared source remains **planned** until its production flow is verified.
   run, claimed attempt, worker, task digest, and private content-addressed bucket.
   Discovery and upload phases are bounded; skipped links mark incomplete evidence.
 - **Verified:** accepted hardening, applied private catalog migration, and full
-  public CI including clean database replay. Operational worker deployment
-  verification remains pending. The public library requires an explicit host
+  public CI including clean database replay. The operational worker bundle and
+  stored reconciliation schedule are verified deployed. The public library requires an explicit host
   hook and never retries scientific work.
 
 ### Bounded inference and completed-work recovery
@@ -205,6 +205,19 @@ Prepared source remains **planned** until its production flow is verified.
   work, schedules, deployment configuration, or budget changes are introduced.
 - **Verified:** portable tests cover nested call identity, uncertainty, terminal
   errors, receipt preservation, and the run-claim race. Deployment is separate.
+
+### Durable prediction handoffs
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** single submission grants bind exact run attempts, frozen tasks,
+  acknowledgements and worker identity. Uncertain outcomes cannot authorize a
+  duplicate prediction; proven loss preserves immutable private evidence.
+- **Prepared:** verified complete logs-only failures may use the existing single
+  retry. Native, missing or incomplete evidence requires artifact recovery.
+- **Verified:** production worker cutover and the additive migration. The
+  portable library and injected tests do not enable a hosted scheduler.
+- **Pending:** full public CI and unattended recovery observations.
 
 ### Durable weekly reconciliation
 

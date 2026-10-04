@@ -901,7 +901,7 @@ class SupabaseCoordinator(SupabasePublisher):
             {
                 "select": (
                     "run_id,target_id,method,status,attempt_count,max_attempts,"
-                    "error_code,task_payload,result"
+                    "error_code,task_payload,result,lease_owner,lease_expires_at"
                 ),
                 "target_id": "in.(" + ",".join(target_ids) + ")",
                 "order": "target_id.asc,method.asc,run_id.asc",
