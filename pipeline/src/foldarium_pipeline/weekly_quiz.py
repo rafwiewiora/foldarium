@@ -498,16 +498,14 @@ def _choice_scoring_fields(result: Any, *, expected_pose_id: str) -> dict[str, A
     interactions = result.get("interaction_summary")
     if not isinstance(interactions, Mapping) or interactions.get("engine") != "prolif":
         raise WeeklyQuizAssemblyError("pose scorer omitted its ProLIF interaction summary")
-    interaction_count = interactions.get("count")
-    interaction_policy = interactions.get("policy")
-    if (
-        isinstance(interaction_count, bool)
-        or not isinstance(interaction_count, int)
-        or interaction_count < 0
-        or not isinstance(interaction_policy, str)
-        or not interaction_policy
-    ):
-        raise WeeklyQuizAssemblyError("pose scorer returned an invalid ProLIF count")
+    from .interaction_metric import normalize_interaction_count, UNAVAILABLE_FIELDS
+    public_interactions = {"metric": PROLIF_COUNT_METRIC,
+        "value": interactions.get("count"), "policy": interactions.get("policy")}
+    public_interactions.update({key: interactions[key] for key in UNAVAILABLE_FIELDS if key in interactions})
+    try:
+        public_interactions = normalize_interaction_count(public_interactions)
+    except ValueError as exc:
+        raise WeeklyQuizAssemblyError("pose scorer returned an invalid ProLIF count") from exc
     return {
         "smina_score": {
             "metric": SMINA_SCORE_METRIC,
@@ -516,11 +514,7 @@ def _choice_scoring_fields(result: Any, *, expected_pose_id: str) -> dict[str, A
             "protocol": "score_only",
             "scoring_function": scoring_function,
         },
-        "interaction_count": {
-            "metric": PROLIF_COUNT_METRIC,
-            "value": interaction_count,
-            "policy": interaction_policy,
-        },
+        "interaction_count": public_interactions,
         "scoring": deepcopy(dict(result)),
     }
 

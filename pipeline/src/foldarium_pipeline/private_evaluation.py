@@ -469,11 +469,21 @@ def _answer_overlay_rows(
 
 
 def describe_private_evaluation_artifact(
+    content: bytes, *, expected_artifact_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Validate the unchanged production v5/v6 private evaluation contracts."""
+    return _describe_bound_evaluation_artifact(content,
+        expected_artifact_sha256=expected_artifact_sha256, expected_environment="production")
+
+
+def _describe_bound_evaluation_artifact(
     content: bytes,
     *,
     expected_artifact_sha256: str | None = None,
+    expected_environment: str,
+    expected_format_version: str | None = None,
 ) -> dict[str, Any]:
-    """Parse stored artifact bytes and recompute the Preview integrity descriptor."""
+    """Parse stored bytes and recompute the explicitly bound integrity descriptor."""
 
     if not isinstance(content, bytes) or not content:
         raise PrivateEvaluationError("artifact content is empty")
@@ -499,7 +509,7 @@ def describe_private_evaluation_artifact(
         raise PrivateEvaluationError("artifact bytes are not canonical JSON")
 
     format_version = decoded.get("format_version")
-    if format_version not in {PRIVATE_EVALUATION_FORMAT_VERSION, PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION}:
+    if format_version not in ({expected_format_version} if expected_format_version is not None else {PRIVATE_EVALUATION_FORMAT_VERSION, PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION}):
         raise PrivateEvaluationError("artifact format_version is invalid")
 
     round_block = decoded.get("round")
@@ -508,7 +518,7 @@ def describe_private_evaluation_artifact(
     round_id = _text(round_block.get("round_id"), "round_id")
     campaign_id = _text(round_block.get("campaign_id"), "campaign_id")
     environment = round_block.get("environment")
-    if environment != "production":
+    if environment != expected_environment:
         raise PrivateEvaluationError("artifact round environment is invalid")
     opens_at = _text(round_block.get("opens_at"), "opens_at")
     closes_at = _text(round_block.get("closes_at"), "closes_at")
@@ -540,7 +550,7 @@ def describe_private_evaluation_artifact(
     if not isinstance(reveal, Mapping):
         raise PrivateEvaluationError("artifact reveal manifest is missing")
     reveal = deepcopy(dict(reveal))
-    if format_version != _evaluation_format(reveal):
+    if format_version != (expected_format_version or _evaluation_format(reveal)):
         raise PrivateEvaluationError("artifact format does not match reference dispositions")
     blind_manifest = decoded.get("blind_manifest")
     blind_canonical = _artifact_manifest_canonical_json(
@@ -606,7 +616,7 @@ def describe_private_evaluation_artifact(
     if choice_count != len(prediction_bindings):
         raise PrivateEvaluationError("artifact choice_count is inconsistent")
 
-    if format_version == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION and "counts" in decoded:
+    if _evaluation_format(reveal) == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION and "counts" in decoded:
         excluded = sum(validate_reference_disposition(item) for item in reveal["items"])
         if counts.get("scorable_item_count") != item_count - excluded or counts.get("excluded_item_count") != excluded:
             raise PrivateEvaluationError("artifact scorable counts are inconsistent")
@@ -625,7 +635,7 @@ def describe_private_evaluation_artifact(
         ),
         "round_id": round_id,
         "campaign_id": campaign_id,
-        "environment": "production",
+        "environment": environment,
         "round_opens_at": opens_at,
         "round_closes_at": closes_at,
         "blind_manifest_sha256": blind_sha256,
@@ -682,15 +692,23 @@ def _reference_rows(result: Mapping[str, Any]) -> list[dict[str, str]]:
 
 
 def build_private_evaluation_artifact(
-    round_record: Mapping[str, Any], result: Mapping[str, Any]
+    round_record: Mapping[str, Any], result: Mapping[str, Any],
+) -> tuple[bytes, dict[str, Any]]:
+    """Build the unchanged production-only v5/v6 private evaluation formats."""
+    return _build_bound_evaluation_artifact(round_record, result, environment="production")
+
+
+def _build_bound_evaluation_artifact(
+    round_record: Mapping[str, Any], result: Mapping[str, Any],
+    *, environment: str, format_version_override: str | None = None,
 ) -> tuple[bytes, dict[str, Any]]:
     """Build deterministic private bytes and their catalog-ready integrity fields."""
 
     round_id = _text(round_record.get("round_id"), "round_id")
     if result.get("round_id") != round_id:
         raise PrivateEvaluationError("evaluation result belongs to another round")
-    if round_record.get("environment") != "production":
-        raise PrivateEvaluationError("private evaluation artifact requires production")
+    if round_record.get("environment") != environment:
+        raise PrivateEvaluationError(f"private evaluation artifact requires {environment}")
     if round_record.get("status") not in {"open", "revealed"}:
         raise PrivateEvaluationError("private evaluation artifact requires an eligible round")
     if result.get("status") not in {
@@ -794,13 +812,13 @@ def build_private_evaluation_artifact(
         canonical_json(answer_overlays).encode("utf-8")
     ).hexdigest()
 
-    format_version = _evaluation_format(reveal)
+    format_version = format_version_override or _evaluation_format(reveal)
     artifact = {
         "format_version": format_version,
         "round": {
             "round_id": round_id,
             "campaign_id": _text(round_record.get("campaign_id"), "campaign_id"),
-            "environment": "production",
+            "environment": environment,
             "opens_at": _text(round_record.get("opens_at"), "opens_at"),
             "closes_at": _text(round_record.get("closes_at"), "closes_at"),
             "blind_manifest_sha256": blind_sha256,
@@ -829,7 +847,7 @@ def build_private_evaluation_artifact(
         "reveal_manifest": reveal,
         "reveal_manifest_canonical_json": reveal_manifest_canonical_json,
     }
-    if format_version == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION:
+    if _evaluation_format(reveal) == PRIVATE_EVALUATION_DISPOSITION_FORMAT_VERSION:
         excluded = sum(validate_reference_disposition(item) for item in reveal["items"])
         artifact["counts"].update(scorable_item_count=item_count - excluded, excluded_item_count=excluded)
     # This is the exact finite canonical representation stored and hashed.  A
@@ -855,7 +873,7 @@ def build_private_evaluation_artifact(
         ),
         "round_id": round_id,
         "campaign_id": artifact["round"]["campaign_id"],
-        "environment": "production",
+        "environment": environment,
         "round_opens_at": artifact["round"]["opens_at"],
         "round_closes_at": artifact["round"]["closes_at"],
         "blind_manifest_sha256": blind_sha256,

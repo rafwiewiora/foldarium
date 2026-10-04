@@ -214,7 +214,7 @@ class InteractionSummaryTests(unittest.TestCase):
             ),
             Fingerprint=FakeFingerprint,
         )
-        raw_protein = object()
+        raw_protein = SimpleNamespace(GetAtoms=lambda: [])
         fake_chem = SimpleNamespace(
             MolFromPDBFile=lambda path, **kwargs: calls.setdefault(
                 "pdb", (path, kwargs)

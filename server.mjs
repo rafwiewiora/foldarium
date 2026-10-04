@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import configHandler from './api/config.js';
+import historicalPreviewResearchHandler from './api/historical-preview-research.js';
 import privateEvaluationHandler from './api/private-evaluation.js';
 import replayHandler from './api/replay.js';
 import weeklyPlayForFunResultsHandler from './api/weekly-play-for-fun-results.js';
@@ -19,6 +20,7 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 
 export const DEFAULT_API_HANDLERS = Object.freeze({
   config: configHandler,
+  'historical-preview-research': historicalPreviewResearchHandler,
   'private-evaluation': privateEvaluationHandler,
   replay: replayHandler,
   'weekly-play-for-fun-results': weeklyPlayForFunResultsHandler,

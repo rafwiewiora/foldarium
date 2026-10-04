@@ -3127,6 +3127,18 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError(
                 "weekly retrospective benchmark snapshot returned an invalid row set"
             )
+        from .retrospective_identity import LEGACY_APPROVED_IDENTITIES, validate_benchmark_authorization
+        dynamic_rows = [row for row in benchmark_rows
+            if row.get("provider") == "anthropic-api" or row.get("display_name") not in LEGACY_APPROVED_IDENTITIES]
+        authorizations = {}
+        if dynamic_rows:
+            authorized = self._rpc("get_weekly_retrospective_benchmark_authorizations_v1", {"p_round_id": round_id})
+            if not isinstance(authorized, list):
+                raise SupabasePublicationError("benchmark authorizations are unavailable")
+            for proof in authorized:
+                if not isinstance(proof, Mapping) or proof.get("execution_id") in authorizations:
+                    raise SupabasePublicationError("benchmark authorizations are invalid or duplicated")
+                authorizations[proof.get("execution_id")] = proof
         post_close_benchmarks: list[dict[str, Any]] = []
         for row in benchmark_rows:
             run_class = row.get("run_class")
@@ -3142,11 +3154,29 @@ class SupabaseCoordinator(SupabasePublisher):
                 raise SupabasePublicationError(
                     "weekly retrospective benchmark snapshot row is malformed"
                 )
+            authorization = None
+            if row in dynamic_rows:
+                try:
+                    authorization = validate_benchmark_authorization(
+                        authorizations.get(payload.get("submission_id")), round_id=round_id,
+                        execution_id=payload.get("submission_id"), display_name=display_name,
+                    )
+                except ValueError as exc:
+                    raise SupabasePublicationError(str(exc)) from exc
+                if (environment != authorization["environment"]
+                    or payload.get("environment") != authorization["environment"]
+                    or payload.get("blind_manifest_sha256") != authorization["blind_manifest_sha256"]
+                    or row.get("provider") != authorization["provider"]
+                    or row.get("requested_model_id") != authorization["model_id"]
+                    or row.get("config_sha256") != authorization["config_sha256"]
+                    or row.get("execution_sha256") != authorization["execution_sha256"]):
+                    raise SupabasePublicationError("benchmark authorization differs from exact receipt")
             post_close_benchmarks.append(
                 {
                     "run_class": run_class,
                     "display_name": display_name,
                     "payload": deepcopy(dict(payload)),
+                    **({"benchmark_authorization": authorization} if authorization is not None else {}),
                 }
             )
         return {

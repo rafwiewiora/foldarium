@@ -39,6 +39,10 @@ class InteractionFingerprintError(RuntimeError):
     """Raised when an exact pose cannot be fingerprinted reproducibly."""
 
 
+class UnsupportedReceptorResidueError(InteractionFingerprintError):
+    """The exact receptor contains UNK, for which no chemistry template exists."""
+
+
 def _dependencies() -> tuple[Any, Any, Any]:
     try:
         import prolif
@@ -123,6 +127,12 @@ def _hbond_summary(
         )
         if raw_protein is None:
             raise ValueError("RDKit could not parse predicted receptor coordinates")
+        # Never invent an amino-acid template or delete atoms for UNK. Its
+        # chemistry is unspecified, so this optional metric is unavailable.
+        if any(atom.GetPDBResidueInfo() is not None and
+               atom.GetPDBResidueInfo().GetResidueName().strip() == "UNK"
+               for atom in raw_protein.GetAtoms()):
+            raise UnsupportedReceptorResidueError("unsupported receptor residue UNK")
         protein = prolif.io.MoleculeStandardizer()(raw_protein)
         ligand_molecule = prolif.Molecule.from_rdkit(
             ligand,
@@ -137,6 +147,8 @@ def _hbond_summary(
             implicit_hydrogens=True,
         )
         ifp = fingerprint.generate(ligand_molecule, protein, metadata=True)
+    except UnsupportedReceptorResidueError:
+        raise
     except Exception as exc:
         detail = str(exc).replace("\n", " ").strip()[:500]
         raise InteractionFingerprintError(
@@ -242,7 +254,11 @@ def calculate_interaction_summary(
     ligand.RemoveAllConformers()
     ligand.AddConformer(conformer, assignId=True)
 
-    summary = _hbond_summary(prolif, Chem, path, ligand)
+    try:
+        summary = _hbond_summary(prolif, Chem, path, ligand)
+    except UnsupportedReceptorResidueError:
+        from .interaction_metric import UNAVAILABLE_FIELDS
+        summary = {"count": None, **{**UNAVAILABLE_FIELDS, "unsupported_residues": ["UNK"]}}
 
     return {
         "schema_version": 1,
