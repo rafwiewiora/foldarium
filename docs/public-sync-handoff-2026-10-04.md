@@ -96,5 +96,6 @@ post-expiry recovery without an additional paid request. Full validation passes
 and 681 dependency-light Python tests (148 expected optional-dependency skips).
 The 2,449-file public-tree audit and six-file credential/runtime scan pass. The
 existing real PostgreSQL one-time budget initialization harness also passes.
-Pending: public CI, including clean database replay and repository-wide secrets,
-before merge.
+Completed: the code revision passed all six public CI jobs, including clean
+Supabase startup/reset, both Python environments, JavaScript, Rust, and
+repository-wide secret scanning.
