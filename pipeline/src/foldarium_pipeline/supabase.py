@@ -20,7 +20,7 @@ import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -201,6 +201,7 @@ class SupabasePublisher:
         "storage_bucket",
         "_opener",
         "_timeout_seconds",
+        "_diagnostic_deadline",
     )
 
     def __init__(
@@ -316,6 +317,72 @@ class SupabasePublisher:
         ):
             return True
         raise SupabasePublicationError("claim_prediction_run returned an unexpected response")
+
+    def preserve_failure_diagnostics(
+        self, task: Mapping[str, Any], result: Mapping[str, Any],
+        task_root: Path, worker_id: str, *, secrets: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Store private attempt evidence; caller must still finish the failure."""
+        previous_deadline = getattr(self, "_diagnostic_deadline", None)
+        self._diagnostic_deadline = time.monotonic() + 90.0
+        try:
+            return self._preserve_failure_diagnostics(task, result, task_root, worker_id, secrets=secrets)
+        finally:
+            self._diagnostic_deadline = previous_deadline
+
+    def _preserve_failure_diagnostics(
+        self, task: Mapping[str, Any], result: Mapping[str, Any],
+        task_root: Path, worker_id: str, *, secrets: Sequence[str],
+    ) -> dict[str, Any]:
+        from .failure_diagnostics import build_failure_diagnostics, canonical_bytes
+        run_id = _safe_identifier(task.get("task_id"), "task_id")
+        worker_id = _safe_identifier(worker_id, "worker_id")
+        query = urlencode({"run_id": "eq." + run_id, "status": "eq.running",
+                           "lease_owner": "eq." + worker_id,
+                           "select": "run_id,attempt_count,lease_owner,task_sha256"})
+        body = self._request("/rest/v1/prediction_runs?" + query, None,
+                             operation="diagnostic claim identity", method="GET")
+        rows = json.loads(body or b"null")
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise SupabasePublicationError("diagnostic claim identity is unavailable")
+        claim = rows[0]
+        # Verify actual Storage privacy, not the bucket's suggestive name.
+        bucket = json.loads(self._request("/storage/v1/bucket/" + quote(self.storage_bucket, safe=""),
+                            None, operation="diagnostic storage privacy", method="GET") or b"null")
+        if not isinstance(bucket, dict) or bucket.get("id") != self.storage_bucket or bucket.get("public") is not False:
+            raise SupabasePublicationError("diagnostics require a private storage bucket")
+        descriptor, files = build_failure_diagnostics(task, result, task_root, claim,
+                                                      secrets=(*secrets, self._service_role_key),
+                                                      deadline=self._diagnostic_deadline - 60.0)
+        for record, content in files:
+            if time.monotonic() >= self._diagnostic_deadline - 30.0:
+                record["status"] = "upload_time_limit_omitted"
+                continue
+            overall_deadline = self._diagnostic_deadline
+            self._diagnostic_deadline = overall_deadline - 30.0
+            try:
+                self._store_immutable_bytes(content, record["sha256"], "application/octet-stream",
+                                            operation="private failure evidence", cache_control="private, no-store")
+            except Exception:
+                record["status"] = "upload_failed"
+                continue
+            finally:
+                self._diagnostic_deadline = overall_deadline
+            record["object_uri"] = f"supabase://{self.storage_bucket}/{self._object_path(record['sha256'])}"
+        content = canonical_bytes(descriptor)
+        if len(content) > 262144:
+            raise SupabasePublicationError("diagnostic descriptor exceeds size bound")
+        digest = hashlib.sha256(content).hexdigest()
+        self._store_immutable_bytes(content, digest, "application/json",
+                                    operation="private failure descriptor", cache_control="private, no-store")
+        uri = f"supabase://{self.storage_bucket}/{self._object_path(digest)}"
+        self._rpc("register_prediction_failure_diagnostics_v1", {
+            "p_run_id": run_id, "p_attempt_count": claim["attempt_count"], "p_worker_id": worker_id,
+            "p_registered_task_sha256": claim["task_sha256"], "p_descriptor_sha256": digest,
+            "p_descriptor_uri": uri, "p_descriptor_size_bytes": len(content),
+        })
+        return {"status": "preserved", "format_version": descriptor["format_version"],
+                "attempt_count": claim["attempt_count"], "descriptor_sha256": digest}
 
     def publish_result(
         self,
@@ -515,7 +582,11 @@ class SupabasePublisher:
                 transient = error.transport_failure or error.http_status in _TRANSIENT_STORAGE_HTTP_STATUSES
                 if not transient or attempt == len(_STORAGE_UPLOAD_RETRY_DELAYS):
                     raise
-                time.sleep(_STORAGE_UPLOAD_RETRY_DELAYS[attempt])
+                delay = _STORAGE_UPLOAD_RETRY_DELAYS[attempt]
+                deadline = getattr(self, "_diagnostic_deadline", None)
+                if deadline is not None and time.monotonic() + delay >= deadline:
+                    raise SupabasePublicationError("private diagnostic retry deadline reached") from None
+                time.sleep(delay)
 
     def _verify_existing_object(self, digest: str) -> None:
         object_path = self._object_path(digest)
@@ -584,7 +655,14 @@ class SupabasePublisher:
         headers.update(extra_headers or {})
         request = Request(self._base_url + endpoint, data=body, headers=headers, method=method)
         try:
-            response = self._opener(request, timeout=self._timeout_seconds)
+            timeout = self._timeout_seconds
+            diagnostic_deadline = getattr(self, "_diagnostic_deadline", None)
+            if diagnostic_deadline is not None:
+                remaining = diagnostic_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SupabasePublicationError("private diagnostic time limit reached")
+                timeout = min(timeout, 5.0, remaining)
+            response = self._opener(request, timeout=timeout)
         except HTTPError as exc:
             status = exc.code
             error_body = b""
