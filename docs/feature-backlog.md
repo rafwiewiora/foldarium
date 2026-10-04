@@ -162,6 +162,20 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** the subsequent Preview assembly completed with 39 questions and
   390 choices. Full evaluation and production publication remain separate work.
 
+### Acknowledged dispatch observation
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** an SDK-injected observation helper distinguishes polling
+  deadlines from terminal worker failures and expired output. Missing or
+  ambiguous state preserves the existing dispatch receipt without authorizing
+  a replacement prediction.
+- **Prepared:** a genuine function timeout rechecks the exact run before the
+  existing unclaimed-run replacement path. No retries of claimed scientific
+  work, schedules, deployment configuration, or budget changes are introduced.
+- **Verified:** portable tests cover nested call identity, uncertainty, terminal
+  errors, receipt preservation, and the run-claim race. Deployment is separate.
+
 ### Durable weekly reconciliation
 
 - **Status:** planned
