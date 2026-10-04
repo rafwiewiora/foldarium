@@ -43,11 +43,15 @@
       <section id="all-time-view" hidden aria-labelledby="all-time-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Cumulative automated performance</p>
+            <p class="eyebrow">Players, models, and baselines</p>
             <h1 id="all-time-heading">All-time rankings</h1>
           </div>
         </div>
         <div class="ranking-controls" aria-label="Ranking controls">
+          <div class="segmented" id="results-scope">
+            <button type="button" data-results-scope="featured">Featured assignments</button>
+            <button type="button" data-results-scope="full">Full-round history</button>
+          </div>
           <div class="segmented" id="ranking-view">
             <button type="button" data-ranking="total_correct">Total correct</button>
             <button type="button" data-ranking="weighted_average_accuracy">Average accuracy</button>

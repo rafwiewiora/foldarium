@@ -24,7 +24,7 @@ from .methods.openfold3 import (
     OPENFOLD3_OUTPUT_POLICY,
     OPENFOLD3_VERSION,
 )
-from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand
+from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand, validate_selection_policy_version
 from .sizing import SizingError, count_tokens, resolve_gpu_class, validate_gpu_class
 
 WWPDB_SEQUENCE_URL = "https://www.wwpdb.org/files/new_release_structure_sequence_canonical.tsv"
@@ -55,8 +55,10 @@ class WeeklyPolicy:
     msa_mode: str = "server"
     protein_only: bool = True
     gpu_class: str | None = None
+    selection_policy_version: str = SELECTION_POLICY_VERSION
 
     def validate(self) -> "WeeklyPolicy":
+        validate_selection_policy_version(self.selection_policy_version)
         for name in ("heavy_atom_minimum", "max_targets", "diffusion_samples", "timeout_seconds"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -181,7 +183,7 @@ def target_from_cameo(payload: Mapping[str, Any], policy: WeeklyPolicy) -> dict[
         for row in raw_entities
         if isinstance(row, Mapping) and row.get("entity_type") == "non_polymer"
     ]
-    selected = select_ligand(ligand_rows, heavy_atom_minimum=policy.heavy_atom_minimum)
+    selected = select_ligand(ligand_rows, heavy_atom_minimum=policy.heavy_atom_minimum, policy_version=policy.selection_policy_version)
     if not polymer_rows or selected is None:
         return None
 
@@ -226,7 +228,7 @@ def target_from_cameo(payload: Mapping[str, Any], policy: WeeklyPolicy) -> dict[
             },
             "cameo_label": target_row.get("labels_submission_3d"),
             "stoichiometry_policy": "one-copy-per-distinct-prerelease-entity/v1",
-            "selection_policy_version": SELECTION_POLICY_VERSION,
+            "selection_policy_version": policy.selection_policy_version,
         },
     }
     return validate_target(target)
@@ -256,7 +258,7 @@ def target_from_wwpdb(
     ligands = entry.get("ligands")
     if not isinstance(sequences, list) or not isinstance(ligands, list):
         raise IntakeError(f"wwPDB entry {pdb_id} has invalid sequence/ligand rows")
-    selected = select_ligand(ligands, heavy_atom_minimum=policy.heavy_atom_minimum)
+    selected = select_ligand(ligands, heavy_atom_minimum=policy.heavy_atom_minimum, policy_version=policy.selection_policy_version)
     if selected is None:
         return None
 
@@ -302,7 +304,7 @@ def target_from_wwpdb(
                 },
                 "stoichiometry_policy": "one-copy-per-distinct-prerelease-sequence/v1",
                 "polymer_type_policy": "reject-nucleic-alphabet-otherwise-protein/v1",
-                "selection_policy_version": SELECTION_POLICY_VERSION,
+                "selection_policy_version": policy.selection_policy_version,
             },
         }
     )
@@ -499,7 +501,7 @@ def build_weekly_plan(
                 else "wwPDB prerelease + CAMEO selected targets"
             ),
             "release_date": release_date.isoformat(),
-            "selection_policy_version": SELECTION_POLICY_VERSION,
+            "selection_policy_version": policy.selection_policy_version,
             "status": "intake",
             "configuration": {
                 "heavy_atom_minimum": policy.heavy_atom_minimum,

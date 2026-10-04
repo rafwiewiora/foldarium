@@ -373,7 +373,7 @@ test('detail filters scored and unscorable outcomes, safely renders admin names,
     `/weekly?retrospective_round=${roundId}`,
   );
   await expect(page.locator('.detail-section').filter({
-    has: page.getByRole('heading', { name: 'Weekly player leaderboard' }),
+    has: page.getByRole('heading', { name: 'Full-round player results' }),
   })).toContainText('Playful Player · For fun');
   await page.locator('#choose-round').click();
   await expect(page.locator('#round-chooser')).toBeVisible();
@@ -450,5 +450,58 @@ test('incomplete references remain visible without fabricated losses, None wins,
   await expect(page.locator('#round-detail')).toContainText('Not scored');
   await expect(page.locator('#round-detail')).not.toContainText('#null');
   expect(errors).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('featured assignments default to five completed questions and preserve a separate full-round history view', async ({ page }) => {
+  await mockApi(page);
+  const detail = structuredClone(detailPayload);
+  detail.round.item_count = 7;
+  detail.round.choice_count = 14;
+  detail.blind_manifest.items = Array.from({ length: 7 }, (_, i) => ({ ...structuredClone(blindItems[0]), id: `featured-${i}` }));
+  detail.reveal_manifest.items = Array.from({ length: 7 }, (_, i) => ({ ...structuredClone(detailPayload.reveal_manifest.items[0]), id: `featured-${i}` }));
+  detail.retrospective.questions = Array.from({ length: 7 }, (_, i) => ({ ...structuredClone(detailPayload.retrospective.questions[0]), item_id: `featured-${i}` }));
+  const reference = JSON.parse(readFileSync(new URL('./fixtures/private-evaluation-v6-unscorable.golden.json', import.meta.url)));
+  const { reference_sha256: _privateDigest, ...disposition } = reference.reveal_manifest.items[0].reference_disposition;
+  detail.round.scorable_item_count = 6;
+  detail.round.excluded_item_count = 1;
+  Object.assign(detail.reveal_manifest.items[4], { evaluation_status: 'unscorable', reference_disposition: disposition });
+  detail.reveal_manifest.items[4].choices.forEach(choice => Object.assign(choice, { correct: null, accepted_correct: null, rmsd: null }));
+  Object.assign(detail.retrospective.questions[4], { evaluation_status: 'unscorable', reference_disposition: disposition });
+  detail.retrospective.questions[4].automated_entries.forEach(row => { row.correct = null; });
+
+  const participant = { participant: 'PocketFox', participant_kind: 'human', correct: 4, answered: 4, total: 4,
+    accuracy: 100, assignment_total: 5, assignment_answered: 5, assignment_complete: true,
+    excluded_answered: 1, excluded_item_count: 1, full_round_answered: 5, full_round_total: 7 };
+  detail.featured_cohort = { format_version: 'foldarium.weekly-featured-results/v1', scope: 'featured', round_id: roundId,
+    selection_mode: 'uniform', item_ids: detail.blind_manifest.items.slice(0, 5).map(item => item.id),
+    assignment_total: 5, scorable_item_count: 4, full_round_item_count: 7,
+    participants: [participant, { ...participant, participant: 'Claude Opus', participant_kind: 'llm' },
+      { ...participant, participant: 'Smina', participant_kind: 'baseline' }] };
+  const featuredAllTime = { format_version: 'foldarium.weekly-featured-all-time/v1', scope: 'featured', eligible_week_count: 1,
+    participants: [{ participant: 'PocketFox', participant_kind: 'human', complete_weeks: 1, weeks_participated: 1,
+      total_correct: 4, total_questions: 4, weighted_average_accuracy: 100, rank: 1, provisional: true }] };
+  await page.route('**/api/weekly-retrospectives**', async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('admin') === '1') return route.fulfill({ status: 404, json: { error: 'Not found' } });
+    if (url.searchParams.has('round_id')) return route.fulfill({ json: detail });
+    if (url.searchParams.get('all_time') === '1') return route.fulfill({ json: url.searchParams.get('scope') === 'featured' ? featuredAllTime : publicAllTime });
+    return route.fulfill({ json: listPayload });
+  });
+  await unlock(page, `${baseUrl}/${roundId}`);
+  await expect(page.getByRole('heading', { name: 'Featured player results' })).toBeVisible();
+  await expect(page.locator('#round-detail')).toContainText('5/5 featured complete · 4/4 scored correct · 1 not scored');
+  await page.getByRole('button', { name: 'Full round', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Full-round player results' })).toBeVisible();
+  await page.getByRole('button', { name: '5 featured questions', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Featured automated results' })).toBeVisible();
+  await page.locator('#all-time-tab').click();
+  await expect(page.locator('#all-time-status')).toContainText('Featured assignments · 1 eligible weeks');
+  await expect(page.locator('#all-time-table')).toContainText('1/1 featured weeks complete');
+  await expect(page.locator('#all-time-table')).toContainText('4/4');
+  await expect(page.locator('#all-time-table')).not.toContainText('0/0');
+  await page.getByRole('button', { name: 'Full-round history', exact: true }).click();
+  await expect(page.locator('#all-time-status')).toContainText('Earlier completion history is unchanged');
+  await page.setViewportSize({ width: 375, height: 812 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

@@ -134,3 +134,24 @@ test('the fifth featured vote submits its full ordinal and ends with a revisable
   assert.ok(!events.includes('quiz_completed'));
   assert.equal(context.ITEMS.length, 7);
 });
+
+test('featured result display validates assignment and scored populations independently', async () => {
+  const { validateFeaturedResults, featuredResultText } = await import('../weekly-featured-questions.js');
+  const round = { round_id: 'fixture', blind_manifest: { items: Array.from({ length: 7 }, (_, i) => ({ id: String(i) })) } };
+  const row = { participant: 'PocketFox', participant_kind: 'human', assignment_total: 5, assignment_answered: 5,
+    assignment_complete: true, answered: 4, total: 4, correct: 4, accuracy: 100, excluded_answered: 1, excluded_item_count: 1 };
+  const result = { format_version: 'foldarium.weekly-featured-results/v1', round_id: 'fixture', scope: 'featured',
+    full_round_item_count: 7, item_ids: ['0', '1', '2', '3', '4'], assignment_total: 5, scorable_item_count: 4,
+    participants: [row] };
+  assert.equal(validateFeaturedResults(result, round), result);
+  assert.equal(featuredResultText(row), '5/5 featured complete · 4/4 scored correct · 1 not scored');
+  assert.equal(featuredResultText({ ...row, answered: 0, correct: 0, excluded_answered: 5 }), '5/5 featured complete · No scorable answers · 5 not scored');
+  for (const mutate of [
+    v => { v.item_ids[0] = '6'; v.item_ids[1] = '6'; },
+    v => { v.participants[0].assignment_complete = false; },
+    v => { v.participants[0].correct = 5; },
+    v => { v.participants[0].excluded_answered = 0; },
+    v => { v.scorable_item_count = 7; },
+    v => { v.round_id = 'different'; },
+  ]) { const copy = structuredClone(result); mutate(copy); assert.throws(() => validateFeaturedResults(copy, round)); }
+});

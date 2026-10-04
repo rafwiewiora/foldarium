@@ -276,6 +276,8 @@ let weeklyQuestionScope = { mode: 'all' };
 let weeklyFeaturedScope = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
+let WEEKLY_FEATURED_RESULTS = null;
+let weeklyResultsScope = 'featured';
 let WEEKLY_FOR_FUN_LEADERBOARD = null;
 let WEEKLY_QUESTION_RESULTS = null;
 let WEEKLY_ARCHIVE_DETAIL = null;
@@ -4866,6 +4868,12 @@ function renderWeeklyLeaderboard() {
   const localAccuracy = localAnswered ? Math.round(100 * localCorrect / localAnswered) : null;
   const localCoverage = total ? Math.round(100 * localAnswered / total) : null;
   const sections = [];
+  if (WEEKLY_FEATURED_RESULTS) {
+    sections.push(`<div class="weekly-scorecard-section"><div class="segmented" aria-label="Weekly result population">
+      <button type="button" data-weekly-result-scope="featured" aria-pressed="${weeklyResultsScope === 'featured'}">${WEEKLY_FEATURED_RESULTS.assignment_total} featured</button>
+      <button type="button" data-weekly-result-scope="full" aria-pressed="${weeklyResultsScope === 'full'}">Full round</button>
+    </div></div>`);
+  }
   if (!$('#wrap')?.classList.contains('intro')) {
     sections.push(`<div class="weekly-scorecard-section">
       <div class="weekly-scorecard-heading">Your session</div>
@@ -4880,6 +4888,22 @@ function renderWeeklyLeaderboard() {
       <p class="weekly-scorecard-note">For fun · recorded separately from blind-week rankings.</p>
     </div>`);
   }
+  if (WEEKLY_FEATURED_RESULTS && weeklyResultsScope === 'featured') {
+    sections.push('<p class="weekly-scorecard-note">Blind-week results on the same featured questions for every player, model, and baseline. Exact choices score the selected pose; cluster choices accept a correct member.</p>');
+    for (const [kind, heading] of [['human', 'Featured players'], ['automated', 'Featured models and baselines']]) {
+      const rows = WEEKLY_FEATURED_RESULTS.participants.filter(row => kind === 'human'
+        ? row.participant_kind === 'human' : row.participant_kind !== 'human');
+      sections.push(`<div class="weekly-scorecard-section"><div class="weekly-scorecard-heading">${heading}</div>${rows.length
+        ? rows.map(row => `<div class="weekly-scorecard-row"><b>${escapeLeaderboardText(row.participant)}</b> · ${escapeLeaderboardText(window.foldariumFeaturedQuestions.featuredResultText(row))}</div>`).join('')
+        : '<p class="weekly-scorecard-empty">No featured answers recorded.</p>'}</div>`);
+    }
+    host.innerHTML = `<div class="weekly-scorecard">${sections.join('')}</div>`;
+    bindWeeklyResultsScope(host);
+    return;
+  }
+  sections.push(`<p class="weekly-scorecard-note">${WEEKLY_FEATURED_RESULTS
+    ? 'Full-round coverage · optional questions beyond the featured assignment are included.'
+    : 'Full-round history · completion requires every scorable question in this round.'}</p>`);
   const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
   const partial = WEEKLY_LEADERBOARD?.partial_runs || [];
   if (!WEEKLY_LEADERBOARD) {
@@ -4901,11 +4925,11 @@ function renderWeeklyLeaderboard() {
         })}</div>`).join('')}
       </div>`);
     } else {
-      sections.push('<p class="weekly-scorecard-empty">No complete runs yet.</p>');
+      sections.push('<p class="weekly-scorecard-empty">No complete full-round runs yet.</p>');
     }
     if (partial.length) {
       sections.push(`<div class="weekly-scorecard-section">
-        <div class="weekly-scorecard-heading">Other players</div>
+        <div class="weekly-scorecard-heading">Partial full-round coverage</div>
         ${partial.map(row => `<div class="weekly-scorecard-row partial">${formatWeeklyScoreLine({
           displayName: row.display_name,
           correct: row.correct,
@@ -4936,6 +4960,13 @@ function renderWeeklyLeaderboard() {
     </div>`);
   }
   host.innerHTML = `<div class="weekly-scorecard">${sections.join('')}</div>`;
+  bindWeeklyResultsScope(host);
+}
+
+function bindWeeklyResultsScope(host) {
+  host.querySelectorAll('[data-weekly-result-scope]').forEach(button => {
+    button.addEventListener('click', () => { weeklyResultsScope = button.dataset.weeklyResultScope; renderWeeklyLeaderboard(); });
+  });
 }
 
 function weeklyLeaderboardFromRetrospectiveSummary(publication) {
@@ -5006,6 +5037,8 @@ async function loadWeeklyPlayForFunLeaderboard() {
 
 async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
   WEEKLY_LEADERBOARD_ERROR = '';
+  WEEKLY_FEATURED_RESULTS = null;
+  weeklyResultsScope = 'featured';
   if (bundleLeaderboard != null) {
     WEEKLY_RETROSPECTIVE_SUMMARY = null;
     WEEKLY_FOR_FUN_LEADERBOARD = null;
@@ -5030,17 +5063,15 @@ async function loadWeeklyLeaderboard({ bundleLeaderboard = null } = {}) {
     return;
   }
   try {
-    const response = await fetch('/api/weekly-retrospectives?limit=50');
+    const query = new URLSearchParams({ round_id: WEEKLY_ROUND.round_id, scope: 'featured', summary: '1' });
+    const response = await fetch(`/api/weekly-retrospectives?${query}`);
     const payload = await response.json().catch(() => null);
-    if (!response.ok
-        || payload?.format_version !== 'foldarium.weekly-retrospective-list/v1'
-        || !Array.isArray(payload.publications)) {
-      throw new Error('Published retrospective list is unavailable.');
+    if (!response.ok || payload?.format_version !== 'foldarium.weekly-retrospective-results/v1'
+      || payload.round?.round_id !== WEEKLY_ROUND.round_id) {
+      throw new Error('Published retrospective results are unavailable.');
     }
-    const publication = payload.publications.find(
-      row => row.round_id === WEEKLY_ROUND.round_id,
-    );
-    if (!publication) throw new Error('Published retrospective is unavailable.');
+    const publication = payload.round;
+    WEEKLY_FEATURED_RESULTS = window.foldariumFeaturedQuestions.validateFeaturedResults(payload.featured_cohort, WEEKLY_ROUND);
     WEEKLY_RETROSPECTIVE_SUMMARY = publication.summary;
     WEEKLY_LEADERBOARD = weeklyLeaderboardFromRetrospectiveSummary(publication);
     window.foldariumPrivateReview?.validateWeeklyLeaderboard?.(
@@ -6099,7 +6130,7 @@ function finish() {
     $('#verdict').innerHTML = isReadOnlyPreview()
       ? '<b>Read-only Preview complete.</b> No names or votes were saved.'
       : WEEKLY_ROUND?.public_status === 'revealed'
-      ? '<b>Weekly results complete.</b> These scores use the Wednesday released coordinates.'
+      ? `<b>${weeklyQuestionScope?.mode === 'featured' ? 'Featured questions complete.' : 'Full-round results complete.'}</b> These scores use the Wednesday released coordinates.`
       : '<b>Your weekly votes are saved.</b> Return Wednesday for released-coordinate results.';
     return;
   }

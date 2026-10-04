@@ -49,3 +49,41 @@ export function scopedWeeklyQuestionIndexes(items, scope) {
   if (indexes.length !== selected.size) throw new Error('Featured questions are unavailable in this round.');
   return indexes;
 }
+
+// Result scope is separate from navigation scope and never authorizes a vote.
+export function validateFeaturedResults(value, round) {
+  if (value == null) return null;
+  const items = round?.blind_manifest?.items;
+  if (value.format_version !== 'foldarium.weekly-featured-results/v1'
+    || value.scope !== 'featured' || value.round_id !== round?.round_id
+    || !Array.isArray(items) || value.full_round_item_count !== items.length
+    || !Array.isArray(value.item_ids) || value.assignment_total !== value.item_ids.length
+    || !Number.isSafeInteger(value.assignment_total) || value.assignment_total < 1 || value.assignment_total > 5
+    || new Set(value.item_ids).size !== value.assignment_total
+    || value.item_ids.some(id => !items.some(item => item.id === id))
+    || !Number.isSafeInteger(value.scorable_item_count) || value.scorable_item_count < 0
+    || value.scorable_item_count > value.assignment_total || !Array.isArray(value.participants)) {
+    throw new Error('Featured results are invalid.');
+  }
+  for (const row of value.participants) {
+    if (!row || typeof row.participant !== 'string' || !['human', 'llm', 'baseline'].includes(row.participant_kind)
+      || row.assignment_total !== value.assignment_total || row.total !== value.scorable_item_count
+      || !Number.isSafeInteger(row.assignment_answered) || row.assignment_answered < 1 || row.assignment_answered > row.assignment_total
+      || row.assignment_complete !== (row.assignment_answered === row.assignment_total)
+      || !Number.isSafeInteger(row.answered) || row.answered < 0 || row.answered > row.total
+      || !Number.isSafeInteger(row.correct) || row.correct < 0 || row.correct > row.answered
+      || row.excluded_answered !== row.assignment_answered - row.answered
+      || row.excluded_item_count !== row.assignment_total - row.total
+      || row.excluded_answered < 0 || row.excluded_answered > row.excluded_item_count
+      || row.accuracy !== (row.answered ? Math.round(10000 * row.correct / row.answered) / 100 : null)) {
+      throw new Error('Featured participant result is invalid.');
+    }
+  }
+  return value;
+}
+
+export function featuredResultText(row) {
+  const completion = `${row.assignment_answered}/${row.assignment_total} featured ${row.assignment_complete ? 'complete' : 'answered'}`;
+  const score = row.answered ? `${row.correct}/${row.answered} scored correct` : 'No scorable answers';
+  return `${completion} · ${score}${row.excluded_answered ? ` · ${row.excluded_answered} not scored` : ''}`;
+}

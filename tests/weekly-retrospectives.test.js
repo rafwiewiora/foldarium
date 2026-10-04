@@ -1211,3 +1211,77 @@ test('detail and list fail closed when private model authorization bytes differ 
     assert.equal(result.headers['Cache-Control'], 'no-store');
   }
 });
+function withFeaturedSelection(week, registeredAt = '2026-08-11T00:00:00Z') {
+  const blind = week.round.blind_manifest;
+  const audit = {
+    schema_version: 1, policy: 'foldarium-weekly-question-draw/v1', mode: 'uniform', seed: 'fixture',
+    source_round_id: week.round.round_id, source_blind_manifest_sha256: week.publication.blind_manifest_sha256,
+    source_private_index_sha256: week.publication.private_index_sha256, candidate_population_sha256: 'e'.repeat(64),
+    source_item_count: blind.items.length, candidate_count: blind.items.length,
+    requested_question_count: 5, selected_question_count: Math.min(5, blind.items.length),
+    included_item_ids: blind.items.slice(0, 5).map(item => item.id),
+  };
+  const bytes = Buffer.from(JSON.stringify(audit));
+  const sha256 = digest(bytes);
+  week.objects.set(sha256, bytes);
+  const row = {
+    round_id: week.round.round_id, environment: 'production', blind_manifest_sha256: audit.source_blind_manifest_sha256,
+    registered_at: registeredAt,
+    featured_questions: { ...audit, blind_manifest_sha256: audit.source_blind_manifest_sha256, selection_sha256: sha256, item_ids: audit.included_item_ids },
+    selection_artifact: { object_uri: `supabase://prediction-results/sha256/${sha256.slice(0, 2)}/${sha256}`, sha256, size_bytes: bytes.length, media_type: 'application/json' },
+  };
+  const downstream = archiveFetch([week]);
+  return { row, fetchImpl: async (url, options) => {
+    if (String(url).endsWith('/rpc/get_weekly_featured_cohort_source_v1')) {
+      assert.equal(options.method, 'POST');
+      assert.deepEqual(JSON.parse(options.body), { p_round_id: week.round.round_id });
+      return new Response(JSON.stringify(row), { status: 200 });
+    }
+    return downstream(url, options);
+  } };
+}
+
+test('featured result endpoints verify frozen selection and preserve explicit full-round legacy results', async () => {
+  const week = buildWeek();
+  const frozen = withFeaturedSelection(week);
+  const handler = createWeeklyRetrospectivesHandler({ env: env(), fetchImpl: frozen.fetchImpl });
+  const detail = await invoke(handler, { query: { round_id: week.round.round_id, scope: 'featured' } });
+  assert.equal(detail.statusCode, 200);
+  assert.equal(detail.body.featured_cohort.assignment_total, 1);
+  assert.equal(detail.body.featured_cohort.participants.find(r => r.participant_kind === 'human').assignment_complete, true);
+  assert.doesNotMatch(detail.serialized, /registered_at|selection_artifact|participant_link|[a-f0-9]{64}/);
+  const lean = await invoke(handler, { query: { round_id: week.round.round_id, scope: 'featured', summary: '1' } });
+  assert.equal(lean.statusCode, 200);
+  assert.equal(lean.body.format_version, 'foldarium.weekly-retrospective-results/v1');
+  assert.equal(lean.body.blind_manifest, undefined);
+  assert.equal(lean.body.answer_overlays, undefined);
+  assert.equal(lean.body.round.summary.human_entries.length, 1);
+  assert.notEqual(lean.headers.ETag, detail.headers.ETag);
+  const featured = await invoke(handler, { query: { all_time: '1', scope: 'featured' } });
+  assert.equal(featured.statusCode, 200);
+  assert.equal(featured.body.format_version, 'foldarium.weekly-featured-all-time/v1');
+  assert.equal(featured.body.eligible_week_count, 1);
+  assert.equal(featured.body.participants.find(r => r.participant_kind === 'human').complete_weeks, 1);
+  const legacy = await invoke(handler, { query: { all_time: '1' } });
+  assert.equal(legacy.statusCode, 200);
+  assert.equal(legacy.body.format_version, 'foldarium.weekly-retrospective-all-time/v1');
+  assert.equal(legacy.body.scope, 'public');
+});
+
+test('featured API excludes post-close draws and fails closed on forged bindings or pre-reveal data', async () => {
+  const week = buildWeek();
+  const frozen = withFeaturedSelection(week, week.round.closes_at);
+  const handler = createWeeklyRetrospectivesHandler({ env: env(), fetchImpl: frozen.fetchImpl });
+  let detail = await invoke(handler, { query: { round_id: week.round.round_id, scope: 'featured' } });
+  assert.equal(detail.statusCode, 200);
+  assert.equal(detail.body.featured_cohort, null);
+  frozen.row.featured_questions.selection_sha256 = 'f'.repeat(64);
+  detail = await invoke(handler, { query: { round_id: week.round.round_id, scope: 'featured' } });
+  assert.equal(detail.statusCode, 404);
+  week.round.status = 'open';
+  detail = await invoke(handler, { query: { round_id: week.round.round_id, scope: 'featured' } });
+  assert.equal(detail.statusCode, 404);
+  for (const query of [{ scope: 'featured' }, { all_time: '1', summary: '1' }, { cofolding: '1', scope: 'featured' }, { all_time: '1', scope: 'arbitrary' }]) {
+    assert.equal((await invoke(handler, { query })).statusCode, 400);
+  }
+});

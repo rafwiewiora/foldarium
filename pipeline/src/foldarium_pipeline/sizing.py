@@ -15,6 +15,7 @@ worker before treating them as a cost or capacity policy.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, NamedTuple
 
 from .contracts import ContractError, validate_target
@@ -59,7 +60,7 @@ GPU_LADDER: tuple[GpuClass, ...] = (
 GPU_CLASS_NAMES = frozenset(gpu.name for gpu in GPU_LADDER)
 
 
-def count_smiles_heavy_atoms(smiles: str) -> int:
+def _count_smiles_atoms(smiles: str, *, exclude_hydrogen: bool) -> int:
     """Approximate heavy-atom count without a chemistry dependency.
 
     The core is deliberately dependency-free, and sizing only needs an
@@ -75,7 +76,9 @@ def count_smiles_heavy_atoms(smiles: str) -> int:
             close = smiles.find("]", index)
             if close == -1:
                 break
-            count += 1
+            element = re.match(r"^[0-9]*([A-Z][a-z]?|[bcnops])", smiles[index + 1 : close])
+            if not exclude_hydrogen or element is None or element.group(1) != "H":
+                count += 1
             index = close + 1
             continue
         if smiles[index : index + 2] in ("Cl", "Br"):
@@ -88,12 +91,32 @@ def count_smiles_heavy_atoms(smiles: str) -> int:
     return count
 
 
-def _entity_tokens(entity: Mapping[str, Any]) -> int:
+def count_smiles_heavy_atoms(smiles: str) -> int:
+    """Frozen v4 estimate, including its historical bracket-hydrogen overcount.
+
+    Retained for reproducible old target/task provenance. New v5 intake uses
+    count_smiles_heavy_atoms_v5; never reinterpret an existing v4 count.
+    """
+    return _count_smiles_atoms(smiles, exclude_hydrogen=False)
+
+
+def count_smiles_heavy_atoms_v5(smiles: str) -> int:
+    """Dependency-free count excluding bracket H, isotope H, and mapped H.
+
+    Parse the element before charge, atom mapping, or attached-H annotations:
+    [2H] contributes zero; [NH4+], [He], [Hg], and [Hf] each contribute one.
+    This is a lexer count, not a SMILES chemistry validator.
+    """
+    return _count_smiles_atoms(smiles, exclude_hydrogen=True)
+
+
+def _entity_tokens(entity: Mapping[str, Any], *, hydrogen_aware: bool = False) -> int:
     copies = len(entity["chain_ids"])
     if entity["type"] in POLYMER_TYPES:
         return len(entity["sequence"]) * copies
     if entity.get("smiles"):
-        return max(1, count_smiles_heavy_atoms(entity["smiles"])) * copies
+        counter = count_smiles_heavy_atoms_v5 if hydrogen_aware else count_smiles_heavy_atoms
+        return max(1, counter(entity["smiles"])) * copies
     return len(entity.get("ccd_codes", [])) * CCD_ATOM_ESTIMATE * copies
 
 
@@ -101,7 +124,13 @@ def count_tokens(target: Mapping[str, Any]) -> int:
     """Return the token count of a target, counting each chain copy separately."""
 
     normalized = validate_target(target)
-    return sum(_entity_tokens(entity) for entity in normalized["entities"])
+    # Keep frozen v4/unversioned resource estimates reproducible. Only targets
+    # explicitly enrolled in the v5 policy get the corrected hydrogen count.
+    policy = normalized.get("metadata", {}).get("selection_policy_version", "cameo-drug-like/v4")
+    if not isinstance(policy, str) or policy not in {"cameo-drug-like/v4", "cameo-drug-like/v5"}:
+        raise SizingError("unsupported ligand selection policy for token sizing")
+    hydrogen_aware = policy == "cameo-drug-like/v5"
+    return sum(_entity_tokens(entity, hydrogen_aware=hydrogen_aware) for entity in normalized["entities"])
 
 
 def effective_tokens(
@@ -169,6 +198,7 @@ __all__ = [
     "GpuClass",
     "SizingError",
     "count_smiles_heavy_atoms",
+    "count_smiles_heavy_atoms_v5",
     "count_tokens",
     "derive_gpu_class",
     "effective_tokens",
