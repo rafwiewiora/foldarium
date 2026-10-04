@@ -33,7 +33,7 @@ from .evaluation import (
     released_partial_reference_override_for_item,
 )
 from .quiz import QUIZ_SCHEMA_VERSION, build_reveal_manifest, manifest_sha256
-from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION
+from .selection import HEAVY_ATOM_MINIMUM, LEGACY_SELECTION_POLICY_VERSION, SUPPORTED_SELECTION_POLICY_VERSIONS
 from .ligand_normalization import LIGAND_SMILES_HEAVY_ATOM_POLICY, remove_all_hydrogen_atoms
 from .weekly_quiz import (
     LEGACY_LIGAND_ORDER_POLICY,
@@ -228,7 +228,7 @@ def _validate_private_ligand_eligibility(
     smiles_sha256 = eligibility.get("smiles_sha256")
     eligibility_component = eligibility.get("component_id")
     eligibility_heavy_atoms = eligibility.get("heavy_atoms")
-    if policy != SELECTION_POLICY_VERSION:
+    if not isinstance(policy, str) or policy not in SUPPORTED_SELECTION_POLICY_VERSIONS:
         raise WednesdayRevealError("private ligand_eligibility policy is invalid")
     if passed is not True:
         raise WednesdayRevealError("private ligand_eligibility did not pass assembly policy")
@@ -240,6 +240,13 @@ def _validate_private_ligand_eligibility(
         raise WednesdayRevealError("private ligand_eligibility SMILES digest mismatch")
     if eligibility_component != component or eligibility_heavy_atoms != heavy_atoms:
         raise WednesdayRevealError("private ligand_eligibility disagrees with item ligand")
+    if policy != LEGACY_SELECTION_POLICY_VERSION:
+        try:
+            recomputed = _weekly_ligand_eligibility(component, heavy_atoms, smiles, policy_version=policy)
+        except Exception as exc:
+            raise WednesdayRevealError("private ligand_eligibility does not match its frozen policy") from exc
+        if recomputed["passed"] is not True or recomputed["smiles_sha256"] != smiles_sha256:
+            raise WednesdayRevealError("private ligand_eligibility does not pass its frozen policy")
     return {
         "policy": policy,
         "passed": True,
@@ -384,7 +391,8 @@ def _validate_item_ligand_eligibility(
     clustering = item.get("clustering")
     mapping = clustering.get("ligand_atom_mapping") if isinstance(clustering, Mapping) else None
     if (
-        not isinstance(mapping, Mapping)
+        eligibility.get("policy") != LEGACY_SELECTION_POLICY_VERSION
+        or not isinstance(mapping, Mapping)
         or type(source_count) is not int
         or type(normalized_count) is not int
         or source_count <= normalized_count
@@ -405,6 +413,7 @@ def _validate_item_ligand_eligibility(
     try:
         recomputed = _weekly_ligand_eligibility(
             eligibility["component_id"], source_count, eligibility["smiles"],
+            policy_version=LEGACY_SELECTION_POLICY_VERSION,
         )
         from rdkit import Chem
         source = Chem.MolFromSmiles(eligibility["smiles"])

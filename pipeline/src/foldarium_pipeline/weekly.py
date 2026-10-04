@@ -305,7 +305,8 @@ def deployment_weekly_hook() -> Mapping[str, Any]:
     try:
         plan, inputs = build_public_weekly_plan(
             release_date,
-            policy=WeeklyPolicy(max_targets=max_targets, gpu_class=gpu_class),
+            policy=WeeklyPolicy(max_targets=max_targets, gpu_class=gpu_class,
+                selection_policy_version=os.environ.get("FOLDARIUM_WEEKLY_SELECTION_POLICY", "cameo-drug-like/v4")),
             output_prefix=f"supabase://{bucket}/runs",
         )
     except WeeklyNotReady as exc:

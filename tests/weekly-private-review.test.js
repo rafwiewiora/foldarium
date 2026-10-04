@@ -187,7 +187,7 @@ test('weekly shell exposes preview-only private review UI and production guards 
   assert.match(app, /releasedCrystalMode/);
   assert.match(app, /applyAnswerRevealView/);
   assert.match(app, /renderWeeklyLeaderboard/);
-  assert.match(app, /\/api\/weekly-retrospectives\?limit=50/);
+  assert.match(app, /scope: 'featured', summary: '1'/);
   assert.match(app, /Best match/);
   assert.match(app, /applyRetrospectiveAnswer/);
   assert.doesNotMatch(app, /Crystal answer|Green means exact-correct|Private review complete/);

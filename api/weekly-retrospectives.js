@@ -21,6 +21,7 @@ import {
   verifyPublicArtifact,
   verifySourceSnapshot,
 } from '../lib/weekly-retrospectives.js';
+import { buildFeaturedResults, buildFeaturedAllTime, featuredSelectionDescriptor, verifyFeaturedSelection } from '../lib/weekly-featured-results.js';
 import { buildPublishedMethodStats } from '../method-performance.js';
 
 const PUBLIC_BRIEF_CACHE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=600';
@@ -72,7 +73,8 @@ export function createWeeklyRetrospectivesHandler({
             : client.download(publication.descriptors.admin_artifact),
           client.download(publication.descriptors.source_snapshot),
         ]);
-        const { authorizedLlmIdentities } = verifySourceSnapshot(sourceBytes, publication);
+        const sourceSnapshot = verifySourceSnapshot(sourceBytes, publication);
+        const { authorizedLlmIdentities } = sourceSnapshot;
         if (mode.admin) {
           const adminArtifact = verifyAdminArtifact(artifactBytes, publication, { authorizedLlmIdentities });
           return send(response, 200, buildAdminDetail({
@@ -86,15 +88,23 @@ export function createWeeklyRetrospectivesHandler({
           publicArtifact: verifyPublicArtifact(artifactBytes, publication, { authorizedLlmIdentities }),
           adminArtifact: verifyAdminArtifact(adminBytes, publication, { authorizedLlmIdentities }),
         });
-        const etag = `"weekly-retrospective-names-v1-${publication.digests.admin_artifact_sha256}"`;
+        const selection = mode.scope === 'featured'
+          ? await client.fetchFeaturedSelection(publication, context) : null;
+        const featuredCohort = mode.scope === 'featured'
+          ? buildFeaturedResults({ publication, context, sourceSnapshot, publicArtifact, selection }) : null;
+        const etag = `"weekly-retrospective-${mode.scope === 'featured' ? 'featured-v1' : 'names-v1'}${mode.summary ? '-summary' : ''}-${publication.digests.admin_artifact_sha256}"`;
         response.setHeader('ETag', etag);
         response.setHeader('Cache-Control', PUBLIC_DETAIL_CACHE);
         if (etagMatches(request.headers, etag)) return notModified(response);
-        return send(response, 200, buildPublicDetail({
-          publication,
-          context,
-          publicArtifact,
-        }));
+        if (mode.summary) return send(response, 200, {
+          format_version: 'foldarium.weekly-retrospective-results/v1',
+          round: publicationSummary(publication, { context, publicArtifact }),
+          ...(mode.scope === 'featured' ? { featured_cohort: featuredCohort } : {}),
+        });
+        return send(response, 200, {
+          ...buildPublicDetail({ publication, context, publicArtifact }),
+          ...(mode.scope === 'featured' ? { featured_cohort: featuredCohort } : {}),
+        });
       }
 
       const publications = await client.fetchAllPublications();
@@ -148,11 +158,12 @@ export function createWeeklyRetrospectivesHandler({
           publication,
           context,
           sourceSnapshot,
+          selection: mode.scope === 'featured' ? await client.fetchFeaturedSelection(publication, context) : null,
           publicArtifact: verifyPublicArtifact(publicBytes, publication, sourceSnapshot),
         };
         },
       );
-      const result = buildPublicHumanAllTime(weeks, {
+      const result = (mode.scope === 'featured' ? buildFeaturedAllTime : buildPublicHumanAllTime)(weeks, {
         ranking: mode.ranking,
         participantKind: mode.participantKind,
       });
@@ -204,6 +215,12 @@ function parseMode(query) {
   const limitRaw = optionalSingle(query.limit, 'limit');
   const ranking = optionalSingle(query.ranking, 'ranking') || 'total_correct';
   const participantKind = optionalSingle(query.participant_kind, 'participant_kind');
+  const scope = optionalSingle(query.scope, 'scope') || 'full';
+  const summary = optionalFlag(query.summary, 'summary');
+  if (summary && (!roundId || admin || allTime || cofolding)) throw new WeeklyRetrospectiveError('summary request is invalid');
+  if (!['full', 'featured'].includes(scope) || (query.scope != null && (admin || cofolding || (!allTime && !roundId)))) {
+    throw new WeeklyRetrospectiveError('result scope is invalid');
+  }
 
   if (cofolding) {
     if (admin || allTime || roundId || cursorRaw != null || limitRaw != null
@@ -232,10 +249,11 @@ function parseMode(query) {
     || (participantKind != null && !PARTICIPANT_KINDS.includes(participantKind)))) {
     throw new WeeklyRetrospectiveError('ranking request is invalid');
   }
-  if (roundId) return { name: 'detail', admin, roundId };
+  if (roundId) return { name: 'detail', admin, roundId, scope, summary };
   if (allTime) {
     return {
       name: 'all-time',
+      scope,
       admin,
       ranking,
       participantKind,
@@ -412,6 +430,17 @@ function createArchiveClient(config, fetchImpl) {
         if (page.length < pageSize) return rows.map(verifyPublicationCatalogRow);
       }
       throw new WeeklyRetrospectiveError('publication catalog limit exceeded');
+    },
+    async fetchFeaturedSelection(publication, context) {
+      const upstream = await fetchImpl(`${config.url}/rest/v1/rpc/get_weekly_featured_cohort_source_v1`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_round_id: publication.roundId }),
+      });
+      if (!upstream.ok) throw new WeeklyRetrospectiveError('featured selection catalog request failed');
+      const row = await upstream.json();
+      if (row === null) return null;
+      const bytes = await download(featuredSelectionDescriptor(row));
+      return verifyFeaturedSelection(row, bytes, publication, context);
     },
     fetchVerifiedContext,
     download,

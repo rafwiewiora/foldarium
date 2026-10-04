@@ -12,9 +12,13 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Mapping
 
-from .sizing import count_smiles_heavy_atoms
+from .sizing import count_smiles_heavy_atoms, count_smiles_heavy_atoms_v5
 
-SELECTION_POLICY_VERSION = "cameo-drug-like/v4"
+# Existing deployments stay on v4 until an explicit reviewed intake opt-in.
+LEGACY_SELECTION_POLICY_VERSION = "cameo-drug-like/v4"
+HYDROGEN_AWARE_SELECTION_POLICY_VERSION = "cameo-drug-like/v5"
+SELECTION_POLICY_VERSION = LEGACY_SELECTION_POLICY_VERSION
+SUPPORTED_SELECTION_POLICY_VERSIONS = frozenset({LEGACY_SELECTION_POLICY_VERSION, HYDROGEN_AWARE_SELECTION_POLICY_VERSION})
 HEAVY_ATOM_MINIMUM = 15
 
 # Pose quizzes need one drug-like organic molecule, not a disconnected salt,
@@ -80,22 +84,40 @@ def _smiles_contains_metal(smiles: str) -> bool:
     return False
 
 
-def ligand_heavy_atoms(ligand: Mapping[str, Any]) -> int:
+def validate_selection_policy_version(value: Any) -> str:
+    if not isinstance(value, str) or value not in SUPPORTED_SELECTION_POLICY_VERSIONS:
+        raise SelectionError("unsupported ligand selection policy version")
+    return value
+
+
+def target_selection_policy_version(target: Mapping[str, Any]) -> str:
+    """Read frozen target provenance; unstamped historical targets mean v4."""
+    metadata = target.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise SelectionError("target metadata must be an object")
+    return validate_selection_policy_version(metadata.get("selection_policy_version", LEGACY_SELECTION_POLICY_VERSION))
+
+
+def ligand_heavy_atoms(ligand: Mapping[str, Any], *, policy_version: str = SELECTION_POLICY_VERSION) -> int:
     """Return a dependency-free heavy-atom estimate from a public SMILES string."""
 
     smiles = ligand.get("smiles")
     if not isinstance(smiles, str) or not smiles.strip():
         raise SelectionError("ligand SMILES must be a non-empty string")
-    return count_smiles_heavy_atoms(smiles)
+    policy_version = validate_selection_policy_version(policy_version)
+    counter = count_smiles_heavy_atoms_v5 if policy_version == HYDROGEN_AWARE_SELECTION_POLICY_VERSION else count_smiles_heavy_atoms
+    return counter(smiles)
 
 
 def ligand_rejection_reason(
     ligand: Mapping[str, Any],
     *,
     heavy_atom_minimum: int = HEAVY_ATOM_MINIMUM,
+    policy_version: str = SELECTION_POLICY_VERSION,
 ) -> str | None:
     """Return the current versioned rejection code for one ligand, if any."""
 
+    policy_version = validate_selection_policy_version(policy_version)
     if isinstance(heavy_atom_minimum, bool) or not isinstance(heavy_atom_minimum, int):
         raise SelectionError("heavy_atom_minimum must be a positive integer")
     if heavy_atom_minimum < 1:
@@ -113,7 +135,7 @@ def ligand_rejection_reason(
         return "disconnected-smiles"
     if _smiles_contains_metal(smiles):
         return "metal-containing-smiles"
-    if ligand_heavy_atoms({"smiles": smiles}) < heavy_atom_minimum:
+    if ligand_heavy_atoms({"smiles": smiles}, policy_version=policy_version) < heavy_atom_minimum:
         return "below-heavy-atom-minimum"
     return None
 
@@ -122,21 +144,23 @@ def select_ligand(
     ligands: Iterable[Mapping[str, Any]],
     *,
     heavy_atom_minimum: int = HEAVY_ATOM_MINIMUM,
+    policy_version: str = SELECTION_POLICY_VERSION,
 ) -> dict[str, Any] | None:
     """Select the largest eligible ligand, preserving the historical TEP rule."""
 
+    policy_version = validate_selection_policy_version(policy_version)
     candidates: list[dict[str, Any]] = []
     for raw in ligands:
         ligand = dict(raw)
         component = ligand.get("component_id")
         smiles = ligand.get("smiles")
         if ligand_rejection_reason(
-            ligand, heavy_atom_minimum=heavy_atom_minimum
+            ligand, heavy_atom_minimum=heavy_atom_minimum, policy_version=policy_version
         ) is not None:
             continue
         component = component.strip().upper()
         smiles = smiles.strip()
-        heavy_atoms = ligand_heavy_atoms(ligand)
+        heavy_atoms = ligand_heavy_atoms(ligand, policy_version=policy_version)
         ligand.update(component_id=component, smiles=smiles, heavy_atoms=heavy_atoms)
         candidates.append(ligand)
 
@@ -155,6 +179,11 @@ __all__ = [
     "METAL_ELEMENTS",
     "PREFER_ALTERNATIVE_TO",
     "SELECTION_POLICY_VERSION",
+    "LEGACY_SELECTION_POLICY_VERSION",
+    "HYDROGEN_AWARE_SELECTION_POLICY_VERSION",
+    "SUPPORTED_SELECTION_POLICY_VERSIONS",
+    "validate_selection_policy_version",
+    "target_selection_policy_version",
     "SelectionError",
     "ligand_heavy_atoms",
     "ligand_rejection_reason",

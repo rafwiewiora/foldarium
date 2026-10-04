@@ -44,6 +44,9 @@ from .weekly_selector import (
 from .selection import (
     HEAVY_ATOM_MINIMUM,
     SELECTION_POLICY_VERSION,
+    SUPPORTED_SELECTION_POLICY_VERSIONS,
+    target_selection_policy_version,
+    validate_selection_policy_version,
     ligand_rejection_reason,
     select_ligand,
 )
@@ -193,8 +196,11 @@ def _weekly_ligand_eligibility(
     component_id: str,
     heavy_atoms: int,
     smiles: str,
+    *, policy_version: str = SELECTION_POLICY_VERSION,
 ) -> dict[str, Any]:
-    """Revalidate historical prediction tasks against the current shared policy."""
+    """Revalidate tasks under their frozen selection policy, never the latest alias."""
+
+    policy_version = validate_selection_policy_version(policy_version)
 
     if not isinstance(component_id, str) or not component_id.strip():
         raise WeeklyQuizAssemblyError("weekly ligand component ID is invalid")
@@ -208,18 +214,20 @@ def _weekly_ligand_eligibility(
     selected = select_ligand(
         [{"component_id": component_id, "smiles": smiles}],
         heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+        policy_version=policy_version,
     )
     passed = selected is not None
     rejection_reason = ligand_rejection_reason(
         {"component_id": component_id, "smiles": smiles},
         heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+        policy_version=policy_version,
     )
     if passed and selected["heavy_atoms"] != heavy_atoms:
         raise WeeklyQuizAssemblyError(
             "selected ligand heavy-atom metadata disagrees with the current policy"
         )
     return {
-        "policy": SELECTION_POLICY_VERSION,
+        "policy": policy_version,
         "passed": passed,
         "component_id": component_id,
         "heavy_atoms": heavy_atoms,
@@ -233,7 +241,7 @@ def ligand_eligibility_from_target(target: Mapping[str, Any]) -> dict[str, Any]:
     """Derive weekly ligand eligibility from one canonical target package."""
 
     component_id, heavy_atoms, _chain_ids, smiles = _selected_ligand(target)
-    return _weekly_ligand_eligibility(component_id, heavy_atoms, smiles)
+    return _weekly_ligand_eligibility(component_id, heavy_atoms, smiles, policy_version=target_selection_policy_version(target))
 
 
 def _legacy_ligand_topology_graph(
@@ -1460,6 +1468,13 @@ def stage_weekly_quiz(
     root.mkdir(parents=True, exist_ok=True)
     gemmi, numpy, Chem = _dependencies()
     grouped = _normalized_runs(runs, required_methods)
+    source_policies = {
+        target_selection_policy_version(row["task_payload"]["target"])
+        for target_runs in grouped.values() for row in target_runs
+    }
+    if len(source_policies) > 1:
+        raise WeeklyQuizAssemblyError("one stage cannot mix frozen ligand selection policies")
+    stage_policy = next(iter(source_policies), SELECTION_POLICY_VERSION)
     artifact_paths: dict[str, Path] = {}
     precomputed_medoids: dict[str, dict[str, Any]] = {}
     if target_workers > 1 or artifact_cache_directory is not None:
@@ -1522,6 +1537,7 @@ def stage_weekly_quiz(
             component_id,
             metadata_heavy_atom_count,
             ligand_smiles,
+            policy_version=stage_policy,
         )
         if not ligand_eligibility["passed"]:
             ligand_eligibility_rejections.append(
@@ -1954,7 +1970,7 @@ def stage_weekly_quiz(
         "round_id": round_id,
         "campaign_id": campaign_id,
         "required_methods": sorted(required_methods),
-        "ligand_eligibility_policy": SELECTION_POLICY_VERSION,
+        "ligand_eligibility_policy": stage_policy,
         "ligand_eligibility_rejections": ligand_eligibility_rejections,
         "presentation_policy": WEEKLY_PRESENTATION_POLICY,
         "items": staged_items,
@@ -1982,7 +1998,8 @@ def _validate_staged_ligand_eligibility(
 ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
     """Recompute current ligand eligibility before publication touches storage."""
 
-    if stage.get("ligand_eligibility_policy") != SELECTION_POLICY_VERSION:
+    stage_policy = stage.get("ligand_eligibility_policy")
+    if not isinstance(stage_policy, str) or stage_policy not in SUPPORTED_SELECTION_POLICY_VERSIONS:
         raise WeeklyQuizAssemblyError("stage ligand eligibility policy is not current")
     if stage.get("presentation_policy") != WEEKLY_PRESENTATION_POLICY:
         raise WeeklyQuizAssemblyError("stage weekly presentation policy is not current")
@@ -2007,6 +2024,7 @@ def _validate_staged_ligand_eligibility(
             eligibility.get("component_id"),
             eligibility.get("heavy_atoms"),
             eligibility.get("smiles"),
+            policy_version=stage_policy,
         )
         if dict(eligibility) != recomputed or recomputed["passed"] is not True:
             raise WeeklyQuizAssemblyError(
@@ -2042,6 +2060,7 @@ def _validate_staged_ligand_eligibility(
             rejection.get("component_id"),
             rejection.get("heavy_atoms"),
             rejection.get("smiles"),
+            policy_version=stage_policy,
         )
         expected = {"target_id": target_id, **recomputed}
         if dict(rejection) != expected or recomputed["passed"] is not False:
@@ -3217,7 +3236,7 @@ def publish_staged_weekly_quiz(
             {
                 "schema_version": 1,
                 "round_id": stage["round_id"],
-                "policy": SELECTION_POLICY_VERSION,
+                "policy": stage["ligand_eligibility_policy"],
                 "rejections": ligand_eligibility_rejections,
             }
         ).encode("utf-8"),
@@ -3247,7 +3266,7 @@ def publish_staged_weekly_quiz(
             for row in alignment_warnings
             if isinstance(row, Mapping) and isinstance(row.get("target_id"), str)
         ),
-        "ligand_eligibility_policy": SELECTION_POLICY_VERSION,
+        "ligand_eligibility_policy": stage["ligand_eligibility_policy"],
         "ligand_eligibility_rejections": eligibility_rejection_object,
         "ligand_eligibility_rejected_target_ids": (
             ligand_eligibility_rejected_target_ids

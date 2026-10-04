@@ -1,61 +1,50 @@
-# Public mirror: historical research and evidence — 2026-10-04
+# Public mirror: featured comparisons and selection evidence — 2026-10-04
 
-This update starts from public main `39ffd94`, after pull request 21, and mirrors
-accepted portable historical-research, optional-evidence, and archive-identity
-changes. Earlier audited incomplete-reference handling remains intact.
+This update starts from public main `ba825ef`, after pull request 22. It prepares
+accepted portable featured-assignment results, versioned intake correction, and a
+reproducible analysis of previously published Foldseek evidence.
 
-## Completed source
+## Prepared source
 
-- A separate historical Preview research service preserves the original closed
-  identity, full population, and exact source windows. It never reopens voting or
-  copies a Preview benchmark into a production human cohort. Explicit immutable
-  authorization, verified private evaluation, and all frozen receipts gate its
-  separate publication catalog.
-- A separate read-only archive API and page verify published bytes and expose
-  research results without human ballots, prompts, reasoning, or object URIs.
-  Research hashes and exact execution identifiers are deliberate provenance in
-  this separate format. Local server routing includes the new endpoint.
-- Future API model labels in production retrospectives require exact frozen-job
-  and verified-receipt proofs. The private source snapshot carries authorization;
-  public/admin responses do not. Browser verification binds authority to one
-  round, blind digest, and source digest. Legacy source/v1 bytes remain unchanged.
-- An unknown receptor residue can make optional H-bond evidence explicitly
-  unavailable. Every original pose and successful Smina score remains. The exact
-  blind marker distinguishes unavailable from measured zero; arbitrary failures
-  still fail. Scientific correctness and benchmark populations are unchanged.
-- Additive migrations preserve service-only mutations, immutable provenance,
-  source/window checks, receipt guards, and legacy numeric metrics.
+- Featured results require an immutable selection registered strictly before
+  voting closed, verified against the exact published source and private audit.
+  Humans, authorized models, and both baselines use the same selected questions.
+  Exact choices use raw correctness, explicit cluster choices use cluster
+  acceptance, and None succeeds only when no raw pose passes.
+- Assignment completion includes verified unscorable references; accuracy does
+  not. Completed assignments feed separate featured all-time totals. Full-round
+  history, full scientific populations, original ballots, and legacy formulas
+  remain intact. The API and UI offer explicit featured/full views.
+- Opt-in intake v5 excludes explicit/isotopic hydrogen from heavy-atom counts.
+  Default and unstamped historical inputs remain v4. Frozen policy provenance
+  survives staging, publication, and evaluation; invalid/mixed policies fail.
+- The offline Foldseek report retains all 1,000 raw poses from 100 targets across
+  three already public revealed rounds. Its compact snapshot contains only
+  scientific identifiers, public source URLs/digests, windows, metrics, and
+  correctness labels. No participants, ballots, structure bytes, or private
+  artifacts are included. It does not validate a blind interestingness score or
+  change the uniform five-question default.
 
-## Verification
+## Verification status
 
-- Completed: 650 JavaScript tests passed with one optional WebAssembly skip;
-  636 scientific Python tests passed; dependency-light Python passed with 146
-  expected skips.
-- Completed: actual PostgreSQL behavioral harnesses cover historical scored and
-  unscorable publication with frozen benchmark receipts, optional metric guards,
-  and exact model identity authorization including legacy source/v1 parity.
-- Completed: synthetic historical archive list/detail browser navigation at
-  390px and 1440px renders an all-unscorable model cohort without fabricated
-  accuracy, browser errors, or horizontal page overflow. No production requests
-  or votes are used by that browser check.
-- Completed: public-tree audit passed for 2,431 tracked files; all 42 changed
-  files passed credential and private-runtime scans. All seven shared browser
-  modules and public configuration matched production.
-- Completed: the public pull request 22 code revision passed all six CI jobs,
-  including Supabase startup and clean migration reset, both Python environments,
-  JavaScript tests, Rust mapper tests, and repository-wide secret scanning.
-- Pending: live historical publication and recovery completion. This source
-  handoff does not authorize new scopes or paid inference and does not claim
-  that historical research has already been published.
+- Completed: 665 JavaScript tests passed with one optional WebAssembly skip;
+  650 scientific Python tests passed; dependency-light Python passed 647 tests
+  with 148 expected optional-dependency skips.
+- Completed: offline analysis reproduced exact result bytes; the public v4 plan
+  fixture independently matched the unchanged public baseline, including IDs.
+- Completed: real PostgreSQL service-role ACL, pre-reveal, production-environment,
+  and manifest-binding checks; public-tree audit of 2,442 tracked files and
+  credential/private-runtime scans of all 30 changed files.
+- Pending: production browser parity and public CI, including full clean Supabase
+  migration replay and repository-wide secret scanning.
+- Pending: production feature verification and any future v5 activation. Source
+  inclusion does not claim deployment or authorize inference or experiments.
 
 ## Intentional exclusions
 
-No deployment SDKs, provider launchers, schedules, live scope/profile settings,
-credentials, private artifacts/ballots, operational logs, local fixture data,
-access gates, or hosting-specific routing are copied. The public shell remains
-password-free, and local execution defaults and authenticated-proxy admin checks
-remain intact. Future intake policy v5 and featured-cohort ranking remain separate.
-
-New schema source comprises migrations `20261004210000`, `20261004230000`, and
-`20261004240000`. Git source and applied database/runtime state are independently
-versioned; including a migration does not claim it is applied anywhere.
+No deployment SDKs, provider launchers/profiles, schedules, deployment tests,
+private handoffs, credentials, operational logs, live configuration, access
+policies, or hosting routing are copied. Public HTML remains password-free;
+local server behavior, environment defaults, and authenticated-proxy admin checks
+are preserved. Migration `20261005000000_read_verified_featured_cohorts.sql` adds
+only a service-role read of the existing immutable assignment catalog.

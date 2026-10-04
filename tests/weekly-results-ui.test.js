@@ -30,7 +30,7 @@ function block(source, signature) {
 
 function evaluateDeclaration(source, signature, sandbox) {
   const { start, end } = block(source, signature);
-  const context = vm.createContext(Object.assign(sandbox, { cur: sandbox.cur ?? null }));
+  const context = vm.createContext(Object.assign(sandbox, { WEEKLY_FEATURED_RESULTS: sandbox.WEEKLY_FEATURED_RESULTS ?? null, bindWeeklyResultsScope: sandbox.bindWeeklyResultsScope ?? (() => {}), cur: sandbox.cur ?? null }));
   const helper = block(source, 'function weeklyItemUnscorable(item = cur?.item)');
   vm.runInContext(source.slice(helper.start, helper.end), context);
   return vm.runInContext(`(${source.slice(start, end)})`, context);
@@ -619,7 +619,7 @@ test('index exposes leaderboard name copy and scorecard shell', async () => {
   assert.match(html, /id="weekly-leaderboard"/);
   assert.match(html, /app\.js\?v=2026090201/);
   assert.match(html, /id="weekly-results-heading"/);
-  assert.match(app, /fetch\('\/api\/weekly-retrospectives\?limit=50'\)/);
+  assert.match(app, /scope: 'featured', summary: '1'/);
   assert.doesNotMatch(app, /void loadWeeklySelectorResults\(\)/);
   assert.match(app, /Published results are temporarily unavailable/);
   assert.match(html, /\.grid-head\{[^}]*width:calc\(100% - 16px\)[^}]*overflow:hidden[^}]*white-space:nowrap/);
@@ -686,7 +686,7 @@ test('renderWeeklyLeaderboard renders complete and partial sections from API dat
   renderWeeklyLeaderboard();
   assert.equal(host.hidden, false);
   assert.match(host.innerHTML, /Leaderboard/);
-  assert.match(host.innerHTML, /Other players/);
+  assert.match(host.innerHTML, /Partial full-round coverage/);
   assert.match(host.innerHTML, /Claude Opus/);
   assert.match(host.innerHTML, /Codex GPT-5\.6/);
   assert.match(host.innerHTML, /Reviewer/);
@@ -1365,4 +1365,38 @@ test('interaction overlays render only ligand-to-pocket contacts', async () => {
     /for \(const ligand of ligands\)[\s\S]*mergeRetrospectiveInteractionPdb\(\{ pocketPdb, \.\.\.ligand \}\)/,
     'predicted and crystal interactions must be computed independently',
   );
+});
+
+test('featured weekly results report assignment completion and explicit full-round coverage without false zero totals', async () => {
+  const { featuredResultText } = await import('../weekly-featured-questions.js');
+  const app = await read('app.js');
+  const host = { hidden: true, innerHTML: '', replaceChildren() {} };
+  const wrap = { classList: { contains: () => true } };
+  const escapeLeaderboardText = evaluateDeclaration(app, 'function escapeLeaderboardText(value)', {});
+  const formatWeeklyScoreLine = evaluateDeclaration(app,
+    'function formatWeeklyScoreLine({ displayName, correct, answered, total, accuracy, coverage, rank = null })', { escapeLeaderboardText });
+  const sandbox = {
+    WEEKLY_ONLY: true, WEEKLY_ROUND: { public_status: 'revealed' },
+    WEEKLY_LEADERBOARD: { complete_runs: [], partial_runs: [] }, WEEKLY_LEADERBOARD_ERROR: '',
+    WEEKLY_FEATURED_RESULTS: { assignment_total: 5, participants: [{ participant: '<img src=x onerror=bad()>',
+      participant_kind: 'human', assignment_answered: 5, assignment_total: 5, assignment_complete: true,
+      correct: 4, answered: 4, excluded_answered: 1 }] },
+    weeklyResultsScope: 'featured', WEEKLY_FOR_FUN_LEADERBOARD: null,
+    ITEMS: Array(7).fill({}), participantDisplayName: '', localWeeklyScore: { correct: 0, answered: 0 },
+    isPrivatePrecloseReview: () => false, isArchiveRetrospective: () => false, isRetrospectiveReview: () => false,
+    formatWeeklyScoreLine, escapeLeaderboardText,
+    window: { foldariumFeaturedQuestions: { featuredResultText } },
+    $: selector => selector === '#weekly-leaderboard' ? host : selector === '#wrap' ? wrap : null,
+  };
+  const render = evaluateDeclaration(app, 'function renderWeeklyLeaderboard()', sandbox);
+  render();
+  assert.match(host.innerHTML, /Exact choices score the selected pose; cluster choices accept a correct member/);
+  assert.match(host.innerHTML, /5\/5 featured complete/);
+  assert.match(host.innerHTML, /4\/4 scored correct/);
+  assert.match(host.innerHTML, /1 not scored/);
+  assert.doesNotMatch(host.innerHTML, /<img|0\/0|No complete/);
+  sandbox.weeklyResultsScope = 'full'; render();
+  assert.match(host.innerHTML, /Full-round coverage/);
+  sandbox.WEEKLY_ROUND.public_status = 'open'; render();
+  assert.equal(host.hidden, true, 'blind voting never renders correctness');
 });

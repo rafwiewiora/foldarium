@@ -57,6 +57,43 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Planned
 
+### Featured assignment comparisons
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** a separate featured leaderboard compares humans, authorized
+  models, Smina, and ligand-pLDDT on the same immutable pre-close assignment.
+  Exact choices score the raw pose; explicit cluster choices accept a correct
+  member. Optional full-round answers do not change featured scores.
+- **Prepared:** every selected question counts toward completion, while verified
+  unscorable references stay outside accuracy. Only completed assignments enter
+  featured all-time totals; legacy full-round history remains separately visible.
+- **Verified:** accepted operational source, focused scoring and provenance
+  tests, and database permission guards. Production verification is pending.
+
+### Versioned hydrogen-aware intake
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** opt-in policy v5 excludes explicit and isotopic hydrogen from
+  heavy-atom counts, preserving helium and other two-letter elements. Frozen v4
+  targets, identities, and replay behavior remain unchanged; mixed or unknown
+  policies fail closed. The default remains v4.
+- **Verified:** boundary, chemistry, and immutable v4 replay tests. Future intake
+  activation is a separate operational decision.
+
+### Paired Foldseek evidence
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** reproducible offline analysis joins 100 targets and 1,000 raw
+  poses from three already published rounds, separating crystal-defined
+  familiarity, oracle pose availability, and actual selected-pose correctness.
+- **Conclusion:** available evidence does not establish a validated blind
+  interestingness score. Retain the uniform five-question default; the report
+  proposes a bounded prospective experiment without activating it.
+
+
 ### Historical Preview research archive
 
 - **Status:** planned

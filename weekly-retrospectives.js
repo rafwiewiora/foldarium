@@ -1,3 +1,4 @@
+import { validateFeaturedResults, featuredResultText } from './weekly-featured-questions.js';
 import {
   fetchWeeklyTrainingSimilarityReport,
   sortWeeklySimilarityRows,
@@ -167,6 +168,8 @@ const state = {
   questionSort: 'default',
   similarityReport: null,
   ranking: 'total_correct',
+  detailScope: null,
+  allTimeScope: 'auto',
   participantKind: '',
   adminAllTimeAvailable: false,
   cofoldingView: 'overall',
@@ -496,17 +499,43 @@ export function answerCorrectnessLabel(value) {
   return value === null ? 'not scored' : value === true ? 'correct' : 'wrong';
 }
 
+function activeFeaturedCohort(detail) {
+  return state.detailScope === 'featured' ? detail.featured_cohort : null;
+}
+
+function renderResultScopeControls(host, detail) {
+  if (!detail.featured_cohort) {
+    host.append(element('p', 'status', 'Full-round history. This week had no featured assignment frozen before voting closed.'));
+    return;
+  }
+  const controls = element('div', 'segmented');
+  controls.setAttribute('aria-label', 'Weekly result population');
+  for (const [scope, label] of [['featured', `${detail.featured_cohort.assignment_total} featured questions`], ['full', 'Full round']]) {
+    const button = element('button', '', label);
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String(state.detailScope === scope));
+    button.addEventListener('click', () => { state.detailScope = scope; renderDetail(); });
+    controls.append(button);
+  }
+  host.append(controls, element('p', 'status', state.detailScope === 'featured'
+    ? 'Everyone is compared on the same featured questions. Exact choices score the selected pose; cluster choices accept a correct member. Complete all selected questions; unscorable references do not affect accuracy.'
+    : 'Full-round coverage includes optional exploration beyond the featured assignment.'));
+}
+
 function renderAutomatedLeaderboard(host, detail) {
   const section = element('section', 'detail-section');
-  section.append(element('h3', '', 'Weekly automated leaderboard'));
+  section.append(element('h3', '', activeFeaturedCohort(detail) ? 'Featured automated results' : 'Full-round automated results'));
   const list = element('div', 'admin-list');
-  const rows = [...(detail.retrospective?.automated_entries || [])].sort((left, right) => (
-    right.correct - left.correct || right.accuracy - left.accuracy
+  const cohort = activeFeaturedCohort(detail);
+  const rows = [...(cohort ? cohort.participants.filter(row => row.participant_kind !== 'human') : detail.retrospective?.automated_entries || [])].sort((left, right) => (
+    (cohort ? Number(right.assignment_complete) - Number(left.assignment_complete) : 0)
+      || right.correct - left.correct || right.accuracy - left.accuracy
   ));
   rows.forEach((row, index) => {
     list.append(answerLine(
-      `${row.total > 0 ? index + 1 : '—'}. ${row.participant}`,
-      `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
+      `${row.total > 0 && (!cohort || row.assignment_complete) ? index + 1 : '—'}. ${row.participant}`,
+      cohort ? featuredResultText(row) : `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
+
     ));
   });
   section.append(list);
@@ -515,16 +544,19 @@ function renderAutomatedLeaderboard(host, detail) {
 
 function renderHumanLeaderboard(host, detail) {
   const section = element('section', 'detail-section');
-  section.append(element('h3', '', 'Weekly player leaderboard'));
+  section.append(element('h3', '', activeFeaturedCohort(detail) ? 'Featured player results' : 'Full-round player results'));
   const list = element('div', 'admin-list');
-  const rows = [...(detail.retrospective?.human_entries || [])].sort(
-    (left, right) => right.correct - left.correct
+  const cohort = activeFeaturedCohort(detail);
+  const rows = [...(cohort ? cohort.participants.filter(row => row.participant_kind === 'human') : detail.retrospective?.human_entries || [])].sort(
+    (left, right) => (cohort ? Number(right.assignment_complete) - Number(left.assignment_complete) : 0)
+      || right.correct - left.correct
       || left.participant.localeCompare(right.participant),
   );
   rows.forEach((row, index) => {
     list.append(answerLine(
-      `${row.total > 0 ? index + 1 : '—'}. ${row.participant}`,
-      `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
+      `${row.total > 0 && (!cohort || row.assignment_complete) ? index + 1 : '—'}. ${row.participant}`,
+      cohort ? featuredResultText(row) : `${row.correct}/${row.total} · ${formatAccuracy(row.accuracy)}`,
+
     ));
   });
   if (rows.length) {
@@ -536,7 +568,7 @@ function renderHumanLeaderboard(host, detail) {
     ...(state.playForFunLeaderboard?.complete_runs || []),
     ...(state.playForFunLeaderboard?.partial_runs || []),
   ];
-  list.append(element('div', 'answer-section-label', 'Play for fun'));
+  list.append(element('div', 'answer-section-label', 'Play for fun · full-round coverage'));
   for (const row of forFunRows) {
     list.append(answerLine(
       `${row.display_name} · For fun`,
@@ -619,6 +651,7 @@ function renderDetail() {
       overviewCell('Not scored', round.excluded_item_count));
   }
   host.append(head, overview);
+  renderResultScopeControls(host, detail);
   renderHumanLeaderboard(host, detail);
   renderAutomatedLeaderboard(host, detail);
 
@@ -655,7 +688,7 @@ async function loadArchive() {
       fetchWeeklyTrainingSimilarityReport().catch(() => null),
     ];
     if (state.route.roundId) {
-      requests.push(api({ round_id: state.route.roundId }));
+      requests.push(api({ round_id: state.route.roundId, scope: 'featured' }));
       requests.push(api({ admin: true, round_id: state.route.roundId }).catch(() => null));
       requests.push(playForFunLeaderboard(state.route.roundId).catch(() => null));
     }
@@ -669,6 +702,8 @@ async function loadArchive() {
     state.publications = archive.publications || [];
     state.nextCursor = archive.next_cursor || null;
     state.similarityReport = similarityReport;
+    if (detail?.featured_cohort) validateFeaturedResults(detail.featured_cohort, { ...detail.round, blind_manifest: detail.blind_manifest });
+    state.detailScope = detail?.featured_cohort ? 'featured' : 'full';
     state.detail = detail;
     state.adminDetail = adminDetail;
     state.playForFunLeaderboard = forFunLeaderboard;
@@ -724,8 +759,9 @@ function renderAllTime(payload) {
     line.append(
       element('span', 'rank', Number.isInteger(row.rank) ? `#${row.rank}` : '—'),
       participant,
-      element('span', 'metric', `${row.complete_weeks}/${row.weeks_participated} complete`),
-      element('span', 'metric', `${row.total_correct}/${row.total_questions}`),
+      element('span', 'metric', `${row.complete_weeks}/${row.weeks_participated} ${payload.scope === 'featured' ? 'featured weeks' : 'full weeks'} complete`),
+      element('span', 'metric', payload.scope === 'featured' && !row.total_questions
+        ? (row.complete_weeks ? 'Not scored' : 'No completed assignment') : `${row.total_correct}/${row.total_questions}`),
       element('span', 'metric', row.weighted_average_accuracy == null
         ? '—' : `${row.weighted_average_accuracy}%`),
     );
@@ -948,14 +984,21 @@ async function loadAllTime() {
   status.textContent = 'Loading rankings…';
   const humanButton = document.querySelector('#participant-filter [data-kind="human"]');
   try {
-    const payload = await api({
+    const parameters = {
       all_time: true,
       ranking: state.ranking,
       participant_kind: state.participantKind || null,
-    });
+      scope: state.allTimeScope === 'full' ? 'full' : 'featured',
+    };
+    let payload = await api(parameters);
+    if (state.allTimeScope === 'auto' && !payload.eligible_week_count) payload = await api({ ...parameters, scope: 'full' });
+    const featured = payload.scope === 'featured';
+    document.querySelectorAll('#results-scope [data-results-scope]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.resultsScope === (featured ? 'featured' : 'full'))));
     humanButton.disabled = false;
     humanButton.title = 'Show player pseudonyms';
-    status.textContent = '';
+    status.textContent = featured
+      ? `Featured assignments · ${payload.eligible_week_count} eligible weeks. Complete the selected questions; unscorable references are excluded from accuracy.`
+      : 'Full-round history · only complete full-round weeks contribute to totals. Earlier completion history is unchanged.';
     renderAllTime(payload);
   } catch (error) {
     status.textContent = error.message;
@@ -979,6 +1022,9 @@ function navigateToView(view, href) {
 }
 
 function bindControls() {
+  document.querySelectorAll('#results-scope [data-results-scope]').forEach(button => {
+    button.addEventListener('click', () => { state.allTimeScope = button.dataset.resultsScope; void loadAllTime(); });
+  });
   document.getElementById('load-more').addEventListener('click', loadMore);
   const chooser = document.getElementById('round-chooser');
   document.getElementById('choose-round').addEventListener('click', () => chooser.showModal());

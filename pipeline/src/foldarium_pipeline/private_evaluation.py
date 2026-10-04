@@ -26,7 +26,7 @@ from .quiz import manifest_sha256
 from .weekly_quiz import (
     _selected_ligand,
 )
-from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, ligand_rejection_reason
+from .selection import HEAVY_ATOM_MINIMUM, LEGACY_SELECTION_POLICY_VERSION, ligand_rejection_reason, target_selection_policy_version, ligand_heavy_atoms
 from .wednesday_reveal import (
     ACCEPTANCE_POLICY_VERSION,
     CORRECT_RMSD_ANGSTROM,
@@ -996,6 +996,7 @@ def _legacy_recovered_ligand_eligibility(
     component_id: str,
     heavy_atoms: int,
     smiles: str,
+    *, policy_version: str = LEGACY_SELECTION_POLICY_VERSION,
 ) -> dict[str, Any]:
     """Rebuild eligibility for legacy rounds using immutable item ligand binding."""
 
@@ -1010,12 +1011,17 @@ def _legacy_recovered_ligand_eligibility(
     rejection_reason = ligand_rejection_reason(
         {"component_id": normalized_component, "smiles": normalized_smiles},
         heavy_atom_minimum=HEAVY_ATOM_MINIMUM,
+        policy_version=policy_version,
     )
+    if policy_version != LEGACY_SELECTION_POLICY_VERSION and ligand_heavy_atoms(
+        {"smiles": normalized_smiles}, policy_version=policy_version,
+    ) != heavy_atoms:
+        raise PrivateEvaluationError("recovered ligand count does not match its frozen selection policy")
     passed = rejection_reason is None and heavy_atoms >= HEAVY_ATOM_MINIMUM
     if passed is False and rejection_reason is None and heavy_atoms < HEAVY_ATOM_MINIMUM:
         rejection_reason = "below-heavy-atom-minimum"
     return {
-        "policy": SELECTION_POLICY_VERSION,
+        "policy": policy_version,
         "passed": passed,
         "component_id": normalized_component,
         "heavy_atoms": heavy_atoms,
@@ -1062,6 +1068,7 @@ def _recovered_ligand_eligibility_for_legacy_items(
             binding["component_id"],
             binding["heavy_atoms"],
             smiles,
+            policy_version=target_selection_policy_version(package),
         )
     return recovered
 
