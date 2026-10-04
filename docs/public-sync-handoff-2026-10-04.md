@@ -68,7 +68,8 @@ before the existing unclaimed replacement path.
 Completed: 11 focused observation tests, 665 JavaScript tests (one optional
 WebAssembly skip), 661 scientific Python tests, and 658 dependency-light Python
 tests (148 optional-dependency skips). The 2,445-file public boundary audit and
-five-file credential/runtime scan pass. Public CI remains pending.
+five-file credential/runtime scan pass. The code revision passed all six public
+CI jobs, including clean Supabase startup/reset and repository-wide secrets.
 This follow-up excludes private operational records, deployment profiles and
 wrappers, SDK integration tests, and all live activation changes. No new migration
 or browser/API behavior is introduced.
