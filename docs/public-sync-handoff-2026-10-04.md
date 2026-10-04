@@ -99,3 +99,25 @@ existing real PostgreSQL one-time budget initialization harness also passes.
 Completed: the code revision passed all six public CI jobs, including clean
 Supabase startup/reset, both Python environments, JavaScript, Rust, and
 repository-wide secret scanning.
+
+## Follow-up: portable private failure evidence
+
+Prepared source includes the bounded collector, private publisher method,
+append-only service-only catalog migration, portable tests, and PostgreSQL
+behavioral harness. Original failures and native bytes remain authoritative:
+logs are redacted, sensitive native files omitted, and failed outputs never enter
+successful prediction artifacts or quiz projections. Any skipped output link
+marks incomplete evidence; an empty partial inventory is not proof of no outputs.
+
+Completed: 665 JavaScript tests pass with one optional WebAssembly skip;
+703 scientific Python tests and 700 dependency-light tests pass (148 expected
+optional-dependency skips). Real PostgreSQL checks cover private ACLs, exact
+attempt/lease/task binding, immutable private Storage URIs, expiry, and idempotence.
+The 2,454-file public-tree audit and eight-file credential/runtime scan pass.
+Pending: public CI, accepted symlink hardening, and operational deployment
+verification before public merge. The public source
+excludes the hosted failure hook and its wrapper test, private operational records,
+live profiles, credentials, logs, native artifacts, and schedules. Integrators
+must catch diagnostic failures and still publish the original scientific failure.
+Migration `20261005010000_preserve_prediction_failure_diagnostics.sql` is included
+as source; its presence alone does not claim any database is migrated.

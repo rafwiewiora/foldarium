@@ -162,6 +162,20 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** the subsequent Preview assembly completed with 39 questions and
   390 choices. Full evaluation and production publication remain separate work.
 
+### Private failure evidence preservation
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** bounded private logs and exact native output bytes can be
+  preserved after a returned prediction failure. Sensitive or oversized native
+  files are omitted; logs redact known/escaped credentials and entire HTTP URLs,
+  including interrupted quoted credential values.
+- **Prepared:** service-only append-only registration binds evidence to the exact
+  run, claimed attempt, worker, task digest, and private content-addressed bucket.
+  Discovery and upload phases are bounded; skipped links mark incomplete evidence.
+- **Pending:** accepted hardening/deployment verification and public CI. The public
+  library requires an explicit host hook and never retries scientific work.
+
 ### Bounded inference and completed-work recovery
 
 - **Status:** planned

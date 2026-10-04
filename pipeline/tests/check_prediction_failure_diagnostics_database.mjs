@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const { PGlite }=await import(process.argv[2]);
+const db=new PGlite();
+await db.exec(`create schema private; create schema auth; create schema storage;
+create role anon; create role authenticated; create role service_role;
+create function auth.role() returns text language sql as $$select current_setting('request.jwt.claim.role',true)$$;
+create table storage.buckets(id text primary key,public boolean);
+insert into storage.buckets values('private-evidence',false),('public-output',true);
+create table public.prediction_runs(run_id text primary key,status text,lease_owner text,attempt_count integer,task_sha256 text,lease_expires_at timestamptz);
+insert into public.prediction_runs values('run','running','worker',2,repeat('a',64),now()+interval '10 minutes');`);
+await db.exec(fs.readFileSync(new URL('../../supabase/migrations/20261005010000_preserve_prediction_failure_diagnostics.sql',import.meta.url),'utf8'));
+const digest='b'.repeat(64), uri=`supabase://private-evidence/sha256/bb/${digest}`;
+const rpc=(overrides={})=>{
+ const args={run:'run',attempt:2,worker:'worker',task:'a'.repeat(64),digest,uri,size:123,...overrides};
+ return db.query('select public.register_prediction_failure_diagnostics_v1($1,$2,$3,$4,$5,$6,$7) as value',Object.values(args)).then(r=>r.rows[0].value);
+};
+for(const role of ['anon','authenticated']){
+ await db.exec(`set role ${role}; set request.jwt.claim.role='${role}'`);
+ await assert.rejects(rpc(),/permission denied/);
+ await assert.rejects(db.query('select * from private.prediction_failure_diagnostics'),/permission denied/);
+ await db.exec('reset role');
+}
+await db.exec("set role service_role; set request.jwt.claim.role='authenticated'");
+await assert.rejects(rpc(),/service role required/);
+await db.exec("set request.jwt.claim.role='service_role'");
+await assert.rejects(rpc({worker:'other'}),/not leased/);
+await assert.rejects(rpc({attempt:1}),/not leased/);
+await assert.rejects(rpc({task:'c'.repeat(64)}),/not leased/);
+await assert.rejects(rpc({uri:`supabase://public-output/sha256/bb/${digest}`}),/private immutable/);
+await assert.rejects(rpc({uri:`supabase://private-evidence/sha256/bb/${'c'.repeat(64)}`}),/private immutable/);
+await assert.rejects(rpc({size:262145}),/invalid/);
+await db.exec("reset role; update public.prediction_runs set lease_expires_at=now()-interval '1 second'; set role service_role");
+await assert.rejects(rpc(),/not leased/);
+await db.exec("reset role; update public.prediction_runs set lease_expires_at=now()+interval '10 minutes'; set role service_role");
+assert.deepEqual(await rpc(),{status:'registered'});
+assert.deepEqual(await rpc(),{status:'already-registered'});
+await assert.rejects(rpc({size:124}),/immutable/);
+await assert.rejects(rpc({worker:'other'}),/immutable/);
+await assert.rejects(db.query("update private.prediction_failure_diagnostics set descriptor_size_bytes=124"),/permission denied/);
+await db.exec("reset role; update public.prediction_runs set status='failed',lease_owner=null; set role service_role");
+assert.deepEqual(await rpc(),{status:'already-registered'},'ambiguous receipt retry after finish is idempotent');
+await db.exec('reset role');
+assert.equal((await db.query('select count(*)::int as n from private.prediction_failure_diagnostics')).rows[0].n,1);
+await db.close();
+console.log('Failure diagnostics DB: private ACL, exact attempt/lease/task, private SHA storage, expiry, immutable idempotence passed.');
