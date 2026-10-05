@@ -20,6 +20,16 @@ REVEAL_ONLY_FIELDS = frozenset(
         "score",
         "reference",
         "reference_uri",
+        "receptor_alignment_policy",
+        "reference_receptor_model_number",
+        "reference_receptor_entity_id",
+        "reference_receptor_label_asym_id",
+        "reference_entity_sequence_sha256",
+        "receptor_label_seq_mapping_sha256",
+        "reference_receptor_residues_expected",
+        "reference_receptor_residues_observed",
+        "reference_receptor_unobserved_residues",
+        "receptor_aligned_ca_count",
         "run_id",
     }
 )

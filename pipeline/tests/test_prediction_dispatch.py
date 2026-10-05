@@ -75,6 +75,19 @@ class DurableDispatchTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][1]['p_expected_lease_owner'],'modal:ta-one')
         self.assertEqual(self.calls[-1][1]['p_expected_attempt_count'],1)
         self.spawn.assert_called_once()
+    def test_claimed_generic_failure_requires_review_even_with_expired_lease(self):
+        self.execute()
+        self.row.update(status='running',attempt_count=1,lease_owner='modal:ta-one',lease_expires_at='2000-01-01T00:00:00Z')
+        for status in ('FAILURE','INIT_FAILURE'):
+            self.node.status.name=status
+            with self.assertRaises(PredictionNativeRecoveryRequired):self.execute()
+        self.assertFalse(any(n=='record_weekly_prediction_worker_loss_v1' for n,_ in self.calls))
+        self.spawn.assert_called_once()
+    def test_unclaimed_generic_failure_can_consume_only_intended_slot(self):
+        self.execute();self.node.status.name='FAILURE'
+        self.assertEqual(self.execute()['status'],'worker-loss-recorded')
+        self.assertEqual(self.calls[-1][1]['p_expected_attempt_count'],0)
+        self.spawn.assert_called_once()
     def test_missing_graph_output_expiry_or_transport_cannot_authorize_loss(self):
         self.execute()
         for graph in ([],[self.node,self.node]):

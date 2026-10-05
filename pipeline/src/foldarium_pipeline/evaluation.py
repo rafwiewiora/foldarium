@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 import math
 import re
 from pathlib import Path
@@ -18,6 +19,8 @@ from types import SimpleNamespace
 from typing import Any
 
 EVALUATOR_VERSION = "foldarium-receptor-aligned-symmetry-rmsd/v4"
+DEPOSITED_RECEPTOR_EVALUATOR_VERSION = "foldarium-receptor-aligned-symmetry-rmsd/v5"
+DEPOSITED_RECEPTOR_ALIGNMENT_POLICY = "deposited-full-entity-label-seq/v1"
 REFERENCE_POCKET_RADIUS_ANGSTROM = 8.0
 # Released partial references must retain at least 80% of the CCD heavy-atom count.
 # This general floor covers observed de-reacted terminal groups such as 15/18 R06
@@ -384,6 +387,130 @@ def _sequence_superposition(reference: Any, predicted: Any, gemmi: Any) -> Any:
     transform.mat.fromlist(rotation.tolist())
     transform.vec.fromlist(translation.tolist())
     return SimpleNamespace(transform=transform, rmsd=rmsd)
+
+
+def _deposited_receptor_superposition(
+    reference_structure: Any, reference_polymer: Any, predicted_polymer: Any,
+    reference_path: Path, reference_chain: str, gemmi: Any, numpy: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Fit a sparsely observed receptor only from exact deposited sequence proof.
+
+    No missing coordinates are synthesized. This path is deliberately narrower
+    than a generic subsequence match: every observed and unobserved label position
+    must account for the exact full deposited entity and the complete prediction.
+    """
+    def reject(message: str):
+        raise EvaluationError("deposited receptor proof: " + message)
+
+    if len(reference_structure) < 1 or reference_structure[0].num != 1:
+        reject("selected reference model is not deposited model one")
+    entity = reference_structure.get_entity_of(reference_polymer)
+    if entity is None or not entity.full_sequence:
+        reject("full entity sequence is missing")
+    full_sequence = gemmi.one_letter_code(entity.full_sequence)
+    if not full_sequence or any(letter not in "ACDEFGHIKLMNPQRSTVWY" for letter in full_sequence):
+        reject("entity contains unknown or unsupported residue identities")
+    if _sequence(predicted_polymer, gemmi) != full_sequence:
+        reject("predicted receptor does not equal the full entity sequence")
+    if len(predicted_polymer) != len(full_sequence):
+        reject("prediction is not a complete entity")
+    for index, residue in enumerate(predicted_polymer, 1):
+        if residue.label_seq != index:
+            reject("prediction label sequence is incomplete or ambiguous")
+    subchains = {residue.subchain for residue in reference_polymer}
+    if len(subchains) != 1 or not next(iter(subchains)):
+        reject("observed receptor spans ambiguous label chains")
+    subchain = next(iter(subchains))
+    if subchain not in entity.subchains:
+        reject("observed chain does not belong to deposited entity")
+    observed: dict[int, Any] = {}
+    for residue in reference_polymer:
+        label = residue.label_seq
+        if not isinstance(label, int) or not 1 <= label <= len(full_sequence) or label in observed:
+            reject("reference label sequence is absent, duplicate or out of range")
+        if gemmi.one_letter_code([residue.name]) != full_sequence[label - 1]:
+            reject("observed residue identity contradicts deposited sequence")
+        observed[label] = residue
+    if not observed or len(observed) >= len(full_sequence):
+        reject("reference is not a sparsely observed entity")
+    try:
+        block = gemmi.cif.read_file(str(reference_path)).sole_block()
+        asym = block.get_mmcif_category("_struct_asym.")
+        chains = [i for i, label in enumerate(asym.get("id", [])) if label == subchain]
+        if len(chains) != 1 or asym.get("entity_id", [])[chains[0]] != entity.name:
+            reject("deposited label chain does not bind the full entity")
+        entity_rows = block.get_mmcif_category("_entity_poly_seq.")
+        sequence_positions: dict[int, str] = {}
+        for i, entity_id in enumerate(entity_rows.get("entity_id", [])):
+            if entity_id != entity.name:
+                continue
+            position = int(entity_rows["num"][i])
+            if position in sequence_positions or not 1 <= position <= len(full_sequence):
+                reject("deposited full-sequence positions are ambiguous")
+            sequence_positions[position] = gemmi.one_letter_code([entity_rows["mon_id"][i]])
+        if sequence_positions != dict(enumerate(full_sequence, 1)):
+            reject("deposited full-sequence labels contradict the parsed entity")
+        category = block.get_mmcif_category("_pdbx_unobs_or_zero_occ_residues.")
+        keys = ("PDB_model_num", "polymer_flag", "occupancy_flag", "auth_asym_id",
+                "label_asym_id", "label_comp_id", "label_seq_id")
+        if any(key not in category for key in keys):
+            reject("deposited missing-residue ledger is absent")
+        missing: set[int] = set()
+        for index, chain in enumerate(category["label_asym_id"]):
+            if chain != subchain or str(category["PDB_model_num"][index]) != "1":
+                continue
+            if category["polymer_flag"][index] != "Y" or category["auth_asym_id"][index] != reference_chain:
+                reject("missing-residue chain/entity binding differs")
+            # Both explicitly unobserved and zero-occupancy residues are deposited
+            # absences; observed coordinates must still be disjoint from them.
+            if str(category["occupancy_flag"][index]) not in {"0", "1"}:
+                reject("missing-residue occupancy status is unknown")
+            label = int(category["label_seq_id"][index])
+            if label in missing or label in observed or not 1 <= label <= len(full_sequence):
+                reject("missing-residue labels overlap or are invalid")
+            if gemmi.one_letter_code([category["label_comp_id"][index]]) != full_sequence[label - 1]:
+                reject("missing-residue identity contradicts deposited sequence")
+            missing.add(label)
+        if set(observed) | missing != set(range(1, len(full_sequence) + 1)):
+            reject("deposited ledger does not account for every absent residue")
+    except EvaluationError:
+        raise
+    except Exception as exc:
+        raise EvaluationError("deposited receptor proof: malformed missing-residue ledger") from exc
+    reference_positions, predicted_positions, labels = [], [], []
+    for label, residue in sorted(observed.items()):
+        reference_cas = [atom.pos for atom in residue if atom.name.strip() == "CA"]
+        predicted_cas = [atom.pos for atom in predicted_polymer[label - 1] if atom.name.strip() == "CA"]
+        if len(reference_cas) > 1 or len(predicted_cas) > 1:
+            reject("observed C-alpha alternate positions are ambiguous")
+        reference_ca = reference_cas[0] if reference_cas else None
+        predicted_ca = predicted_cas[0] if predicted_cas else None
+        if reference_ca is not None and predicted_ca is not None:
+            reference_positions.append(reference_ca)
+            predicted_positions.append(predicted_ca)
+            labels.append(label)
+    if len(labels) < 5:
+        reject("fewer than five observed C-alpha pairs")
+    for positions in (reference_positions, predicted_positions):
+        coordinates = numpy.asarray([[p.x, p.y, p.z] for p in positions], dtype=float)
+        if not numpy.isfinite(coordinates).all() or numpy.linalg.matrix_rank(coordinates - coordinates.mean(axis=0)) < 2:
+            reject("observed C-alpha geometry does not identify a finite alignment")
+    fit = gemmi.superpose_positions(reference_positions, predicted_positions)
+    if not math.isfinite(fit.rmsd):
+        reject("observed C-alpha alignment is non-finite")
+    audit = {
+        "receptor_alignment_policy": DEPOSITED_RECEPTOR_ALIGNMENT_POLICY,
+        "reference_receptor_model_number": 1,
+        "reference_receptor_entity_id": entity.name,
+        "reference_receptor_label_asym_id": subchain,
+        "reference_entity_sequence_sha256": hashlib.sha256(full_sequence.encode("ascii")).hexdigest(),
+        "receptor_label_seq_mapping_sha256": hashlib.sha256(json.dumps(labels, separators=(",", ":")).encode()).hexdigest(),
+        "reference_receptor_residues_expected": len(full_sequence),
+        "reference_receptor_residues_observed": len(observed),
+        "reference_receptor_unobserved_residues": len(missing),
+        "receptor_aligned_ca_count": len(labels),
+    }
+    return fit, audit
 
 
 def _robust_position_superposition(
@@ -1773,12 +1900,17 @@ def evaluate_ligand_pose(
             similarity = difflib.SequenceMatcher(
                 None, reference_sequence, predicted_sequence, autojunk=False
             ).ratio()
-            if similarity < 0.5:
-                continue
+            receptor_audit: dict[str, Any] = {}
             try:
-                superposition = _sequence_superposition(
-                    reference_polymer, predicted_polymer, gemmi
-                )
+                if similarity < 0.5:
+                    superposition, receptor_audit = _deposited_receptor_superposition(
+                        reference, reference_polymer, predicted_polymer,
+                        Path(reference_path), reference_chain, gemmi, numpy,
+                    )
+                else:
+                    superposition = _sequence_superposition(
+                        reference_polymer, predicted_polymer, gemmi
+                    )
             except Exception:
                 continue
             if not math.isfinite(superposition.rmsd):
@@ -1865,7 +1997,8 @@ def evaluate_ligand_pose(
                     if best is None or rmsd < best["rmsd"]:
                         plddt_values = [float(atom.b_iso) for atom in predicted_atoms]
                         candidate = {
-                            "evaluator_version": EVALUATOR_VERSION,
+                            "evaluator_version": (DEPOSITED_RECEPTOR_EVALUATOR_VERSION if receptor_audit else EVALUATOR_VERSION),
+                            **receptor_audit,
                             "rmsd": rmsd,
                             "receptor_rmsd": float(superposition.rmsd),
                             "sequence_similarity": similarity,

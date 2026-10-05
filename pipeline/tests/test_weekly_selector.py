@@ -16,6 +16,7 @@ from foldarium_pipeline.contracts import SCHEMA_VERSION, canonical_json
 from foldarium_pipeline.quiz import build_blind_manifest
 from foldarium_pipeline.weekly_selector import (
     CLIENT_TEMPLATE,
+    FORBIDDEN_KEYS,
     KIT_SCHEMA_VERSION,
     MAX_SUBMISSION_PAYLOAD_BYTES,
     SUBMISSION_SCHEMA_VERSION,
@@ -332,6 +333,50 @@ class WeeklySelectorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(WeeklySelectorError, "forbidden"):
             assert_no_forbidden_content({"payload": [[1.0, 2.0, 3.0]]})
+
+    def test_deposited_reference_proof_is_rejected_at_each_kit_boundary(self) -> None:
+        # These are released-reference facts, even when buried inside an otherwise
+        # valid normalized target. They must never reach a blind selector model.
+        proof = {
+            "receptor_alignment_policy": "deposited-reference-fixture/v1",
+            "reference_receptor_model_number": 1,
+            "reference_receptor_entity_id": "1",
+            "reference_receptor_label_asym_id": "A",
+            "reference_entity_sequence_sha256": "a" * 64,
+            "receptor_label_seq_mapping_sha256": "b" * 64,
+            "reference_receptor_residues_expected": 100,
+            "reference_receptor_residues_observed": 25,
+            "reference_receptor_unobserved_residues": 75,
+            "receptor_aligned_ca_count": 25,
+        }
+        client: dict[str, Any] = {"__name__": "generated_selector_client"}
+        exec(compile(CLIENT_TEMPLATE, "foldarium_selector_client.py", "exec"), client)
+        valid_zip, _descriptor, valid_kit = self._build()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "kit.zip"
+            path.write_bytes(valid_zip)
+            self.assertEqual(client["verify_kit"](path), valid_kit)
+            for field, value in proof.items():
+                with self.subTest(field=field):
+                    targets = deepcopy(self.targets)
+                    targets["target-1"]["metadata"] = {"nested": [{field: value}]}
+                    kwargs = dict(round_id=self.round_id, environment="preview",
+                        blind_manifest=self.blind, targets_by_item_id=targets,
+                        assets_by_choice=self.assets)
+                    with self.assertRaisesRegex(WeeklySelectorError, field):
+                        build_selector_kit(**kwargs)
+                    # Reproduce the formerly accepted archive with canonical
+                    # digests/files intact. Verification must reject its content,
+                    # not merely a broken hash or ZIP shape.
+                    with mock.patch("foldarium_pipeline.weekly_selector.FORBIDDEN_KEYS",
+                                    FORBIDDEN_KEYS - proof.keys()):
+                        contaminated_zip, _ = build_selector_kit(**kwargs)
+                        verify_selector_kit_zip(contaminated_zip)
+                    with self.assertRaisesRegex(WeeklySelectorError, field):
+                        verify_selector_kit_zip(contaminated_zip)
+                    path.write_bytes(contaminated_zip)
+                    with self.assertRaisesRegex(ValueError, field):
+                        client["verify_kit"](path)
 
     def test_validate_complete_submission_with_independent_none_modes(self) -> None:
         _zip_bytes, _descriptor, kit = self._build()

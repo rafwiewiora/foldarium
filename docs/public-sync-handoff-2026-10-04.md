@@ -151,5 +151,27 @@ Prepared: the public web/API test and boundary-audit job runs on Node 22 and 24,
 with independent results; selector parity explicitly uses Node 24. These are
 supported LTS releases in the [official release table](https://nodejs.org/en/about/previous-releases),
 while the previous Node 20 CI runtime is end-of-life. Local `npm test` passes 665 tests with one optional WebAssembly skip and the
-2,459-file public audit. Both supported-version CI results remain pending. Deployment runtime, runtime compatibility
+2,459-file public audit. Both supported-version checks and all five other public CI jobs passed. Deployment runtime, runtime compatibility
 metadata, provider integrations, credentials and access policies are unchanged.
+
+## Follow-up: conditional receptor proof and unpublished-science protection
+
+Prepared source includes the proof-bound conditional v5 receptor evaluator,
+private audit validation, blind/selector denylist parity, claimed generic-failure
+guards, additive migration `20261005030000`, portable tests and documentation.
+The accepted read-only full-round replay preserves all 37 items and 370 choices:
+300 ordinary results remain byte-identical, 60 existing unscorable results match,
+and ten choices receive the new conditional score. All other 36 items are unchanged.
+
+The selector regression checks each proof field across kit creation, verification
+of internally consistent archives and the actual bundled standalone client. No
+existing frozen kit or scientific artifact is rewritten. Public projections retain
+their explicit allowlists; detailed reference proof remains private.
+
+Completed: 665 JavaScript tests (one optional WebAssembly skip), 740 scientific
+Python tests, 737 dependency-light tests (163 optional skips), real PostgreSQL
+publication guards, the 2,462-file public audit and 14-file credential/runtime
+scan. Pending: public CI and production deployment/migration verification.
+No hosted worker wrapper/tests, cutover scripts, private operation or hosting
+proposal records, runtime configuration, credentials or scientific artifacts are
+copied. Public defaults, shell and CI retain their existing boundaries.

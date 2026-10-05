@@ -206,13 +206,30 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** portable tests cover nested call identity, uncertainty, terminal
   errors, receipt preservation, and the run-claim race. Deployment is separate.
 
+### Sparse deposited receptor proof and publication protection
+
+- **Status:** planned
+- **Added:** 2026-10-04
+- **Prepared:** a conditional evaluator aligns sparse released receptors only
+  with complete deposited sequence/label/missing-residue proof. Ordinary v4
+  results remain byte-identical; the conditional path records explicit v5 proof.
+- **Verified:** the preserved 37-item/370-choice replay retains 300 identical v4
+  scores and 60 existing unscorable choices, while ten choices gain the proven
+  conditional evaluation. All 36 other items remain unchanged.
+- **Prepared:** all ten reference-proof fields are rejected throughout blind
+  manifests and selector kits, including the standalone verifier.
+- **Prepared:** generic claimed-worker failure cannot authorize a retry while
+  completed native science may await publication. SQL and Python preserve the
+  exact run/attempt for artifact recovery.
+- **Pending:** production deployment/migration verification and public CI.
+
 ### Supported Node CI coverage
 
 - **Status:** planned
 - **Added:** 2026-10-04
 - **Prepared:** web and API tests plus the public boundary audit run independently
   on Node 22 and 24; selector parity explicitly uses Node 24.
-- **Pending:** both supported runtime checks in CI. This changes test runners only,
+- **Verified:** both supported runtime jobs and all other public CI checks pass. This changes test runners only,
   without altering runtime configuration, hosting integration or access policy.
 
 ### Durable prediction handoffs

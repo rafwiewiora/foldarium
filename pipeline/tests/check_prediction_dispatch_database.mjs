@@ -13,6 +13,7 @@ create table private.prediction_failure_diagnostics(run_id text,attempt_count in
 create function public.weekly_automation_snapshot_v1() returns jsonb language sql as $$select '{"campaigns":[{"campaign_id":"campaign","runs":[]}],"rounds":[]}'::jsonb$$;
 `);
 await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261005020000_durable_prediction_dispatch.sql',import.meta.url),'utf8'));
+await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261005030000_guard_unpublished_prediction_science.sql',import.meta.url),'utf8'));
 const rpc=async(name,args)=>(await pg.query(`select public.${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) as value`,args)).rows[0].value;
 const task=id=>({task_id:id,target:{target_id:'target'},method:'boltz2',method_version:'pinned',container_image:'pinned-image',resources:{gpu_class:'l4',timeout_seconds:1800},config:{seed:0}});
 const insert=async(id)=>pg.query(`insert into public.prediction_runs(run_id,target_id,method,method_version,image_ref,status,attempt_count,max_attempts,task_payload) values($1,'target','boltz2','pinned','pinned-image','pending',0,1,$2)`,[id,task(id)]);
@@ -36,6 +37,10 @@ await assert.rejects(loss(d,'fc-one','ta-other'),/not bound/);
 await assert.rejects(loss(d,'fc-one','ta-one','PENDING'),/proof mismatch/);
 await assert.rejects(loss(d,'fc-one','ta-one','SUCCESS'),/proof mismatch/);
 await assert.rejects(loss(d,'fc-one','ta-one','TIMEOUT',0),/claim changed/);
+await assert.rejects(loss(d,'fc-one','ta-one','FAILURE'),/native artifact recovery/);
+await assert.rejects(loss(d,'fc-one','ta-one','INIT_FAILURE'),/native artifact recovery/);
+assert.equal((await pg.query("select status from public.prediction_runs where run_id='one'")).rows[0].status,'running');
+assert.equal((await pg.query('select count(*)::integer as n from private.weekly_prediction_lost_attempts')).rows[0].n,0);
 await pg.exec(`insert into public.prediction_artifacts values('one')`);
 assert.equal((await rpc('get_prediction_failure_diagnostics_v1',['one',1])).scientific_artifacts_registered,true);
 await assert.rejects(loss(d),/scientific artifacts/);
@@ -68,6 +73,8 @@ await insert('legacy');await pg.exec("update public.prediction_runs set created_
 await assert.rejects(prepare('legacy'),/prior call evidence/);assert.equal((await prepare('legacy',task('legacy'),null,'fc-legacy')).call_id,'fc-legacy');
 await insert('unclaimed');const unclaimed=await prepare('unclaimed');await claim(unclaimed);await ack(unclaimed,'fc-unclaimed');
 assert.equal((await loss(unclaimed,'fc-unclaimed',null,'INIT_FAILURE',0,null,null)).attempt_number,1);
+await insert('unclaimed-failure');const uf=await prepare('unclaimed-failure');await claim(uf);await ack(uf,'fc-unclaimedfailure');
+assert.equal((await loss(uf,'fc-unclaimedfailure',null,'FAILURE',0,null,null)).attempt_number,1);
 const snapshot=await rpc('weekly_automation_snapshot_v1',[]);assert.equal(snapshot.campaigns[0].runs.find(r=>r.run_id==='one').dispatch.attempt_number,2);
 assert.equal(snapshot.campaigns[0].runs.find(r=>r.run_id==='one').dispatch.execution_task,undefined);
 for(const role of ['anon','authenticated','service_role'])assert.equal((await pg.query(`select has_table_privilege($1,'private.weekly_prediction_dispatches','SELECT,INSERT,UPDATE,DELETE') as allowed`,[role])).rows[0].allowed,false);

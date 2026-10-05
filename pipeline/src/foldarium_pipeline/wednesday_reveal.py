@@ -29,6 +29,8 @@ from .contracts import canonical_json, stable_id
 from .evaluation import (
     UnscorableReferenceError,
     EVALUATOR_VERSION,
+    DEPOSITED_RECEPTOR_EVALUATOR_VERSION,
+    DEPOSITED_RECEPTOR_ALIGNMENT_POLICY,
     evaluate_ligand_pose,
     released_partial_reference_override_for_item,
 )
@@ -669,6 +671,33 @@ def _evaluation_fields(score: Mapping[str, Any]) -> dict[str, Any]:
     evaluator_version = score.get("evaluator_version", EVALUATOR_VERSION)
     if not isinstance(evaluator_version, str) or not evaluator_version:
         raise WednesdayRevealError("evaluator result has no evaluator_version")
+    receptor_fields = {
+        "receptor_alignment_policy", "reference_receptor_model_number", "reference_receptor_entity_id", "reference_receptor_label_asym_id",
+        "reference_entity_sequence_sha256", "receptor_label_seq_mapping_sha256",
+        "reference_receptor_residues_expected", "reference_receptor_residues_observed",
+        "reference_receptor_unobserved_residues", "receptor_aligned_ca_count",
+    }
+    if evaluator_version == DEPOSITED_RECEPTOR_EVALUATOR_VERSION or receptor_fields.intersection(score):
+        if evaluator_version != DEPOSITED_RECEPTOR_EVALUATOR_VERSION or not receptor_fields.issubset(score):
+            raise WednesdayRevealError("deposited receptor audit/version binding is incomplete")
+        if type(score["reference_receptor_model_number"]) is not int or score["reference_receptor_model_number"] != 1:
+            raise WednesdayRevealError("deposited receptor model identity is invalid")
+        if score["receptor_alignment_policy"] != DEPOSITED_RECEPTOR_ALIGNMENT_POLICY:
+            raise WednesdayRevealError("deposited receptor alignment policy is invalid")
+        for field in ("reference_entity_sequence_sha256", "receptor_label_seq_mapping_sha256"):
+            if not isinstance(score[field], str) or not _SHA256.fullmatch(score[field]):
+                raise WednesdayRevealError("deposited receptor audit digest is invalid")
+        for field in ("reference_receptor_entity_id", "reference_receptor_label_asym_id"):
+            if not isinstance(score[field], str) or not score[field].strip():
+                raise WednesdayRevealError("deposited receptor identity is invalid")
+        expected, observed, missing, aligned = (
+            _positive_int(score[field], field) for field in (
+                "reference_receptor_residues_expected", "reference_receptor_residues_observed",
+                "reference_receptor_unobserved_residues", "receptor_aligned_ca_count"))
+        if expected != observed + missing or not 5 <= aligned <= observed:
+            raise WednesdayRevealError("deposited receptor audit counts are inconsistent")
+        if "sequence_similarity" not in score or not _finite_number(score["sequence_similarity"], "sequence_similarity") < 0.5:
+            raise WednesdayRevealError("deposited receptor fallback is outside its conditional policy")
     result: dict[str, Any] = {"evaluator_version": evaluator_version}
     for field in ("receptor_rmsd", "sequence_similarity", "reference_coverage"):
         if field in score:
@@ -678,6 +707,11 @@ def _evaluation_fields(score: Mapping[str, Any]) -> dict[str, Any]:
         "reference_heavy_atoms_observed",
         "reference_heavy_atoms_scored",
         "reference_heavy_atoms_minimum_observed",
+        "reference_receptor_model_number",
+        "reference_receptor_residues_expected",
+        "reference_receptor_residues_observed",
+        "reference_receptor_unobserved_residues",
+        "receptor_aligned_ca_count",
     ):
         if field in score:
             result[field] = _positive_int(score[field], f"evaluator result {field}")
@@ -695,6 +729,11 @@ def _evaluation_fields(score: Mapping[str, Any]) -> dict[str, Any]:
         "reference_ligand_altloc",
         "predicted_ligand_altloc",
         "released_partial_reference_override_policy",
+        "receptor_alignment_policy",
+        "reference_receptor_entity_id",
+        "reference_receptor_label_asym_id",
+        "reference_entity_sequence_sha256",
+        "receptor_label_seq_mapping_sha256",
     ):
         if isinstance(score.get(field), str) and score[field]:
             result[field] = score[field]

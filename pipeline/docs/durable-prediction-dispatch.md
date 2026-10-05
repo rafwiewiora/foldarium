@@ -59,3 +59,24 @@ Portable tests use injected SDK records and real PostgreSQL semantics in PGlite.
 They cover single grants, uncertainty, immutable science, exact lease checks,
 private permissions, loss evidence, retry exhaustion and incomplete inventories.
 Hosted SDK integration tests remain with the deployment implementation.
+
+## Uncertain publication failures
+
+Migration `20261005030000_guard_unpublished_prediction_science.sql` preserves a
+claimed worker's exact run, lease and attempt when a generic `FAILURE` or
+contradictory `INIT_FAILURE` may follow completed native inference. Both the
+injected Python observer and locked SQL transition require artifact recovery
+review even after lease expiry and when private archival was unavailable.
+Unclaimed terminal failures can consume only their already authorized invocation
+slot, with exact attempt and absent-lease proof.
+
+The caller must preserve native outputs when its execution wrapper or durable
+publication raises, re-raise the original error if diagnostics also fail, and
+avoid a second finish RPC after an ambiguous response. A successful local
+scientific result must not become a fabricated failed result. The hosted wrapper
+implementing these obligations and its deployment tests are excluded here.
+
+Proven hard `TIMEOUT`/`TERMINATED` loss retains the existing exact-call and expired
+lease policy. Registered science or any private attempt descriptor still blocks
+loss disposition. Hard container loss may leave unrecoverable scratch output;
+this never authorizes a third attempt or claims that no native science occurred.

@@ -90,6 +90,8 @@ def reconcile_prediction_dispatch(private: Any, store: Any, action: Mapping[str,
         if row['attempt_count'] > attempt or (row['attempt_count'] == attempt and row['status'] in {'succeeded', 'failed', 'cancelled'}):
             return {'status': 'attempt-already-terminal'}
         if row['status'] == 'running':
+            if evidence['terminal_status'] in {'FAILURE', 'INIT_FAILURE'}:
+                raise PredictionNativeRecoveryRequired('claimed worker failure may have unpublished native outputs; artifact recovery review required')
             if not row.get('lease_expires_at') or timestamp(row['lease_expires_at']) >= now():
                 return {'status': 'terminal-worker-awaits-lease-expiry'}
             if not evidence['task_id'] or row.get('lease_owner') != 'modal:' + evidence['task_id']:
