@@ -57,6 +57,15 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Planned
 
+### Reusable offline acceptance bootstrap
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** extract the composed lifecycle test's local PostgreSQL bootstrap,
+  fixture SHA/HMAC adapters and external-network denial into one portable helper.
+  The existing scenario, migrations and seven CI jobs remain unchanged.
+- **Pending:** public review and CI acceptance; no runtime behavior changes.
+
 ### Featured assignment comparisons
 
 - **Status:** planned

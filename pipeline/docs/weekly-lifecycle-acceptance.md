@@ -12,7 +12,9 @@ actual guards accepted the same artifacts throughout a completed lifecycle.
 It applies the complete migration directory, in order, to a disposable persistent
 PGlite PostgreSQL database. It uses the real Python artifact builders, actual
 catalog/RPC guards, the real desired-state planner, and the JavaScript archive,
-featured-result and cofold benchmark consumers.
+featured-result and cofold benchmark consumers. The local database bootstrap,
+SHA/HMAC fixture adapters and external-network denial checks live in
+`tests/acceptance_database.mjs`; application SQL remains unchanged.
 
 The scenario retains six fixture questions throughout Preview promotion,
 production, selector kit, evaluation and benchmarks. The human assignment freezes

@@ -196,6 +196,21 @@ ACLs. Both checks join the scientific CI job; existing seven checks remain intac
 Completed: 665 JavaScript tests (one optional WebAssembly skip), 743 scientific
 Python tests, 740 dependency-light tests (163 optional skips), the 2,469-file
 public audit and 14-file credential/runtime scan. Node 24 real PostgreSQL scope
-guards and composed lifecycle pass all 47 migrations. Pending: private release
-and deployment acceptance before public push, followed by full public CI. No private operations records, deployment wrappers, schedules,
+guards and composed lifecycle pass all 47 migrations. Completed: all seven exact-head public CI checks passed and the portable
+change was merged. No private operations records, deployment wrappers, schedules,
 credentials, environment values or live artifacts are copied.
+
+## Prepared follow-up: reusable offline acceptance bootstrap
+
+The existing composed lifecycle test imports a portable local PostgreSQL and
+network-denial helper. Its application contracts and CI invocation are unchanged.
+The helper imports only Node standard modules and the existing pinned PGlite
+dependency; it needs no deployment SDK or credentials.
+
+Completed: 665 JavaScript tests pass with one optional WebAssembly skip.
+The refactored composed lifecycle passes all 47 migrations with Node 24,
+Python 3.11 and PGlite 0.3.14. All five changed files pass the credential/runtime
+scan; the public-tree boundary audit passes. Pending: public review and CI.
+The separate hosted-intake
+scenario, deployment-dependent fixtures and CI step, operational documentation,
+provider settings and live receipts are intentionally excluded.
