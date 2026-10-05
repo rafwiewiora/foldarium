@@ -210,7 +210,8 @@ dependency; it needs no deployment SDK or credentials.
 Completed: 665 JavaScript tests pass with one optional WebAssembly skip.
 The refactored composed lifecycle passes all 47 migrations with Node 24,
 Python 3.11 and PGlite 0.3.14. All five changed files pass the credential/runtime
-scan; the public-tree boundary audit passes. Pending: public review and CI.
+scan; the public-tree boundary audit passes. Completed: public review and all
+seven CI checks in merged PR31.
 The separate hosted-intake
 scenario, deployment-dependent fixtures and CI step, operational documentation,
 provider settings and live receipts are intentionally excluded.
@@ -229,6 +230,32 @@ with one optional WebAssembly skip; 750 scientific Python tests pass, and the
 dependency-light suite passes 747 tests with 163 optional skips. Scoped enrollment,
 typed-vote provenance and composed lifecycle database checks pass across all
 48 migrations. Independent import/boundary review and shared browser parity pass.
-Pending: public review and CI. No deployment
+Completed: public review and all seven checks in merged PR31. No deployment
 adapter/profile, activation policy, hosted-intake fixture, private operational
 record, credential, provider receipt or live artifact is included.
+
+
+## Prepared follow-up: new live intake readiness
+
+Starting from public main `27edf9a`, this mirror adds the accepted portable
+source-window and prior-snapshot guards. Existing campaigns are acknowledged
+before source checks. New live inputs require an immediately preceding canonical
+snapshot, both changed file hashes, and checks before and after acquisition.
+Zero eligible targets and unavailable or unchanged inputs are dependency waits.
+Saved-byte replay and all frozen scientific provenance remain unchanged.
+
+The new date/window helper uses only Python standard-library types. Public
+`deployment_weekly_hook` naming and coordinator defaults remain unchanged.
+No hosted intake/dispatch acceptance harness, cloud verifier or its tests,
+deployment adapter/profile, private operation document, credential, live receipt,
+or production configuration is copied. No migration or browser runtime change
+is introduced.
+
+Completed: 665 JavaScript tests (one optional WebAssembly skip), 763 scientific
+Python tests, 760 dependency-light tests (163 optional skips), all 48 migrations
+in composed offline lifecycle acceptance, the 2,477-file public audit, and a
+credential/private-runtime scan of all ten changed files. The broad shared-source
+review found no omitted accepted portable implementation; existing public
+provider-neutral defaults, local development support and access boundaries are
+preserved. A pre-existing public-side prepared-evaluation concurrency guard is
+retained unchanged. Pending: exact-head public review and all seven CI checks.

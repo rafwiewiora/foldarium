@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Mapping
 
 from .weekly_lifecycle import delayed_retrospective_release
+from .weekly_intake_recovery import live_intake_window_block
 
 
 @dataclass(frozen=True)
@@ -262,7 +263,11 @@ def plan_reconciliation(
     campaign_ids = {c["campaign_id"] for c in campaigns}
     current_campaign = f"wwpdb-{saturday.isoformat()}"
     if current_campaign not in campaign_ids:
-        add("intake", current_campaign, "intake", release_date=saturday.isoformat())
+        intake_block = live_intake_window_block(saturday, now=now)
+        if intake_block:
+            block(current_campaign, intake_block)
+        else:
+            add("intake", current_campaign, "intake", release_date=saturday.isoformat())
     for campaign in sorted(campaigns, key=lambda c: c["release_date"]):
         cid = campaign["campaign_id"]
         release = campaign["release_date"]

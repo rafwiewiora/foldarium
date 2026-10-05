@@ -13,7 +13,7 @@ import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -35,6 +35,7 @@ from .intake import (
     parse_wwpdb_snapshot,
 )
 from .supabase import SupabaseCoordinator, SupabasePublicationError
+from .weekly_intake_recovery import live_intake_window_block
 
 USER_AGENT = "Foldarium weekly benchmark/0.2 (public scientific data intake)"
 DEFAULT_FETCH_WORKERS = 12
@@ -264,14 +265,14 @@ def build_public_weekly_plan(
     return plan, inputs
 
 
-def _environment_release_date() -> date:
+def _environment_release_date(*, now: datetime | None = None) -> date:
     override = os.environ.get("FOLDARIUM_RELEASE_DATE")
     if override:
         try:
             return date.fromisoformat(override)
         except ValueError as exc:
             raise WeeklyNotReady("FOLDARIUM_RELEASE_DATE must be an ISO date") from exc
-    today = datetime.now(timezone.utc).date()
+    today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
     if today.weekday() != 5:
         raise WeeklyNotReady(
             "automatic intake only runs on Saturday UTC; set FOLDARIUM_RELEASE_DATE for a replay"
@@ -282,33 +283,63 @@ def _environment_release_date() -> date:
 def deployment_weekly_hook() -> Mapping[str, Any]:
     """Plan, optionally register, and return guarded task metadata."""
 
-    release_date = _environment_release_date()
+    now = datetime.now(timezone.utc)
+    release_date = _environment_release_date(now=now)
     try:
         max_targets = int(os.environ.get("FOLDARIUM_WEEKLY_MAX_TARGETS", "8"))
     except ValueError as exc:
         raise WeeklyNotReady("FOLDARIUM_WEEKLY_MAX_TARGETS must be an integer") from exc
     bucket = os.environ.get("FOLDARIUM_STORAGE_BUCKET", "foldarium-predictions")
     gpu_class = os.environ.get("FOLDARIUM_WEEKLY_GPU_CLASS") or None
-    coordinator: SupabaseCoordinator | None = None
     register = os.environ.get("FOLDARIUM_WEEKLY_REGISTER") == "1"
     campaign_id = f"wwpdb-{release_date.isoformat()}"
-    if register:
-        coordinator = SupabaseCoordinator.from_env()
-        if coordinator.weekly_campaign_exists(campaign_id):
-            return {
-                "tasks": [],
-                "status": "already-registered",
-                "release_date": release_date.isoformat(),
-                "campaign_id": campaign_id,
-                "registration": {"status": "already-registered"},
-            }
+    coordinator = SupabaseCoordinator.from_env()
+    if coordinator.weekly_campaign_exists(campaign_id):
+        return {
+            "tasks": [],
+            "status": "already-registered",
+            "release_date": release_date.isoformat(),
+            "campaign_id": campaign_id,
+            "registration": {"status": "already-registered"},
+        }
     try:
+        # Existing immutable campaigns returned above before either clock/source
+        # check. New live acquisition must never relabel an arbitrary old week.
+        window_block = live_intake_window_block(release_date, now=now)
+        if window_block:
+            raise WeeklyNotReady(window_block)
+        # Even a live dry run needs a read-only baseline. The pure saved-byte
+        # builder/manual registration remain available for explicit bootstrap.
+        prior = coordinator.latest_prior_prerelease_snapshot(release_date.isoformat())
+        if prior is None:
+            raise WeeklyNotReady("prior-prerelease-baseline-unavailable")
+        if prior["release_date"] != (release_date - timedelta(days=7)).isoformat():
+            raise WeeklyNotReady("immediate-prior-prerelease-baseline-unavailable",
+                availability={"prior_release_date": prior["release_date"]})
         plan, inputs = build_public_weekly_plan(
             release_date,
             policy=WeeklyPolicy(max_targets=max_targets, gpu_class=gpu_class,
                 selection_policy_version=os.environ.get("FOLDARIUM_WEEKLY_SELECTION_POLICY", "cameo-drug-like/v4")),
             output_prefix=f"supabase://{bucket}/runs",
         )
+        unchanged = [name for name in ("sequence", "nonpolymer")
+            if inputs["snapshot"][f"{name}_sha256"] == prior[f"{name}_sha256"]]
+        if unchanged:
+            raise WeeklyNotReady("prior-prerelease-source-unchanged",
+                availability={**inputs.get("availability", {}), "unchanged_sources": unchanged,
+                    "prior_release_date": prior["release_date"]})
+        if not plan["tasks"]:
+            raise WeeklyNotReady("the complete public intake contains no eligible bounded targets",
+                availability=inputs.get("availability", {}))
+        # Downloads/planning may cross the Wednesday deadline. Preserve an
+        # acknowledged concurrent registration, otherwise do not write late.
+        window_block = live_intake_window_block(release_date, now=datetime.now(timezone.utc))
+        if window_block:
+            if coordinator.weekly_campaign_exists(campaign_id):
+                return {"tasks": [], "status": "already-registered",
+                    "release_date": release_date.isoformat(), "campaign_id": campaign_id,
+                    "registration": {"status": "already-registered"}}
+            raise WeeklyNotReady(window_block, availability=inputs.get("availability", {}))
     except WeeklyNotReady as exc:
         return {
             "tasks": [],
@@ -319,9 +350,6 @@ def deployment_weekly_hook() -> Mapping[str, Any]:
             "availability": exc.availability,
             "registration": {"status": "not-requested"},
         }
-    if not plan["tasks"]:
-        raise WeeklyNotReady("the complete public intake contains no eligible bounded targets")
-
     registration: Any = {"status": "not-requested"}
     if register:
         assert coordinator is not None
