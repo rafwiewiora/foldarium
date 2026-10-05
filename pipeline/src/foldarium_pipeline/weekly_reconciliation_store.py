@@ -64,7 +64,16 @@ def reconcile_weekly(
             available_drivers=available_drivers, benchmark_policy=benchmark_policy, lifecycle_scope=lifecycle_scope), snapshot
 
     initial, snapshot = plan()
-    result = {**initial, "apply": apply, "executed": [], "failed_actions": snapshot.get("failed_actions", [])}
+    def health(state: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "failed_actions": state.get("failed_actions", []),
+            "expired_running_actions": state.get("expired_running_actions", []),
+            "expired_running_actions_count": state.get("expired_running_actions_count", 0),
+            "expired_running_actions_truncated": state.get("expired_running_actions_truncated", False),
+            "lease_diagnostics_observed_at": state.get("lease_diagnostics_observed_at"),
+        }
+
+    result = {**initial, "apply": apply, "executed": [], **health(snapshot)}
     if not apply:
         return result
     history = snapshot.get("action_history", {})
@@ -94,6 +103,14 @@ def reconcile_weekly(
             continue
         status = store.finish(claim, outcome)
         result["executed"].append({"action_key": action["action_key"], "kind": action["kind"], "outcome": outcome, "state": status})
+    # An executor may reach its final failure during this pass. Report current
+    # health without resetting state or interpreting an expired lease as failure.
+    try:
+        result.update(health(store.snapshot()))
+    except Exception as error:
+        # Successful action effects and finish receipts remain authoritative if
+        # this optional observation fails; never retry execution just to report.
+        result["health_refresh_error_type"] = type(error).__name__
     return result
 
 

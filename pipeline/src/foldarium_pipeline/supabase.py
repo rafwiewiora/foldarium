@@ -1327,6 +1327,8 @@ class SupabaseCoordinator(SupabasePublisher):
                 "closes_at": f"eq.{expected.isoformat()}",
                 "reveal_manifest": "is.null",
                 "revealed_at": "is.null",
+                # This PATCH replaces metadata; compare the complete value read.
+                "metadata": "eq." + canonical_json(row["metadata"]),
             }
         )
         response = self._request(
@@ -1457,7 +1459,12 @@ class SupabaseCoordinator(SupabasePublisher):
                 "closes_at": f"eq.{row.get('closes_at')}",
                 "reveal_manifest": "is.null",
                 "revealed_at": "is.null",
+                # This PATCH replaces metadata; compare the complete value read.
+                "metadata": "eq." + canonical_json(row["metadata"]),
+                # A late activation can preserve closes_at at the safety close.
+                # Neither its metadata nor another prepared artifact may be lost.
                 "metadata->retrospective_release->>activated_by_round_id": "is.null",
+                "metadata->retrospective_release->>prepared_evaluation": "is.null",
             }
         )
         response = self._request(
@@ -1573,6 +1580,8 @@ class SupabaseCoordinator(SupabasePublisher):
                 "closes_at": f"eq.{safety.isoformat()}",
                 "reveal_manifest": "is.null",
                 "revealed_at": "is.null",
+                # This PATCH replaces metadata; compare the complete value read.
+                "metadata": "eq." + canonical_json(row["metadata"]),
                 "metadata->retrospective_release->>activated_by_round_id": "is.null",
             }
         )
