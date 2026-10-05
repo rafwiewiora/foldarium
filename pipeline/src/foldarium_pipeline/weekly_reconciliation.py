@@ -6,7 +6,8 @@ identities/digests, never manifests, answers, task payloads, or credentials.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -58,9 +59,12 @@ def validate_benchmark_policy(policy: Mapping[str, Any] | None) -> dict[str, Any
     """Validate an explicit deployment policy; absent is distinct from empty."""
     if policy is None:
         return None
-    if not isinstance(policy, Mapping) or set(policy) != {"schema", "policy_id", "required_methods"}:
+    if not isinstance(policy, Mapping):
         raise ValueError("invalid benchmark policy fields")
-    if policy["schema"] != "foldarium.weekly-benchmark-policy/v1" or not isinstance(policy["policy_id"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", policy["policy_id"]):
+    scoped = policy.get("schema") == "foldarium.weekly-benchmark-policy/v2"
+    if set(policy) != {"schema", "policy_id", "required_methods"} | ({"enrollment_scope"} if scoped else set()):
+        raise ValueError("invalid benchmark policy fields")
+    if policy["schema"] not in {"foldarium.weekly-benchmark-policy/v1", "foldarium.weekly-benchmark-policy/v2"} or not isinstance(policy["policy_id"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", policy["policy_id"]):
         raise ValueError("invalid benchmark policy identity")
     methods = policy["required_methods"]
     if not isinstance(methods, list) or len(methods) > 20:
@@ -85,7 +89,55 @@ def validate_benchmark_policy(policy: Mapping[str, Any] | None) -> dict[str, Any
         seen.add(identity)
         normalized.append(dict(method))
     normalized.sort(key=lambda m: (m["driver"], m["model_id"], m["config_sha256"]))
-    return {"schema": policy["schema"], "policy_id": policy["policy_id"], "required_methods": normalized}
+    result = {"schema": policy["schema"], "policy_id": policy["policy_id"], "required_methods": normalized}
+    if scoped:
+        scope = policy["enrollment_scope"]
+        if not isinstance(scope, Mapping) or set(scope) != {"kind", "first_release_date", "production_round_suffix", "max_weekly_cost_usd"}:
+            raise ValueError("invalid benchmark enrollment scope fields")
+        if scope["kind"] != "canonical-production-weekly" or not isinstance(scope["production_round_suffix"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,79}", scope["production_round_suffix"]):
+            raise ValueError("invalid benchmark enrollment scope identity")
+        first = scope["first_release_date"]
+        if not isinstance(first, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", first) or date.fromisoformat(first).weekday() != 5:
+            raise ValueError("benchmark first release must be an exact Saturday date")
+        cap = scope["max_weekly_cost_usd"]
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
+            raise ValueError("benchmark weekly cap must be finite and positive")
+        if not normalized or sum(Decimal(str(m["max_cost_usd"])) for m in normalized) > Decimal(str(cap)):
+            raise ValueError("scoped benchmark methods require a nonempty set within the weekly cap")
+        result["enrollment_scope"] = dict(scope)
+    return result
+
+
+def benchmark_enrollment_block(
+    row: Mapping[str, Any], snapshot: Mapping[str, Any], policy: Mapping[str, Any], *, now: datetime,
+) -> str | None:
+    """Restrict NEW v2 enrollment; already frozen obligations bypass this check.
+
+    The scope is part of the canonical policy digest and derived execution UUID.
+    No wall-clock or round-name guess selects a sibling or a historical Preview.
+    """
+    scope = policy.get("enrollment_scope")
+    if scope is None:  # Preserve the explicitly configured legacy v1 contract.
+        return None
+    if row.get("environment") != "production" or row.get("historical_scope"):
+        return "benchmark-enrollment-outside-production-scope"
+    campaigns = [c for c in snapshot["campaigns"] if c["campaign_id"] == row["campaign_id"]]
+    if len(campaigns) != 1:
+        return "benchmark-enrollment-campaign-unavailable"
+    release = campaigns[0].get("release_date")
+    try:
+        valid_release = isinstance(release, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", release) and date.fromisoformat(release).weekday() == 5
+    except ValueError:
+        valid_release = False
+    if not valid_release or row["campaign_id"] != f"wwpdb-{release}" or row["round_id"] != f"weekly-{release}-{scope['production_round_suffix']}":
+        return "benchmark-enrollment-outside-canonical-week"
+    if release < scope["first_release_date"]:
+        return "benchmark-enrollment-before-first-release"
+    if row.get("status") != "open" or not row.get("opened_at") or row.get("revealed_at") or not (timestamp(row["opens_at"]) <= now < timestamp(row["closes_at"])):
+        return "benchmark-enrollment-outside-open-window"
+    if any(r["campaign_id"] == row["campaign_id"] and r["round_id"] != row["round_id"] and r.get("automation_policy") is not None for r in snapshot["rounds"]):
+        return "benchmark-enrollment-week-already-enrolled"
+    return None
 
 
 def validate_lifecycle_scope(scope: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -304,9 +356,13 @@ def plan_reconciliation(
             if deployment_policy is None:
                 block(rid, "benchmark-expectations-not-frozen")
             else:
-                policy_digest, expected_jobs = benchmark_expectations(row, deployment_policy)
-                add("freeze_policy", rid, "benchmarks", **binding,
-                    policy_sha256=policy_digest, expected_executions=expected_jobs)
+                enrollment_block = benchmark_enrollment_block(row, snapshot, deployment_policy, now=now)
+                if enrollment_block:
+                    block(rid, enrollment_block)
+                else:
+                    policy_digest, expected_jobs = benchmark_expectations(row, deployment_policy)
+                    add("freeze_policy", rid, "benchmarks", **binding,
+                        policy_sha256=policy_digest, expected_executions=expected_jobs)
         elif policy["blind_manifest_sha256"] != row["blind_manifest_sha256"]:
             raise ValueError(f"automation policy manifest mismatch for {rid}")
         jobs = row.get("benchmark_jobs", [])

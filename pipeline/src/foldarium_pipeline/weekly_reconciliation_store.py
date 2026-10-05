@@ -105,6 +105,41 @@ def verified_round(coordinator: Any, parameters: Mapping[str, Any]) -> Mapping[s
     return row
 
 
+def freeze_expected_benchmarks(
+    coordinator: Any, action: Mapping[str, Any], *, benchmark_policy: Mapping[str, Any] | None,
+    lifecycle_scope: Mapping[str, Any] | None, preview_version: str, production_suffix: str,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> Any:
+    """Re-authorize the entire action against the current policy and exact state.
+
+    Stale outbox entries cannot enroll under a changed deployment policy. The
+    scoped SQL RPC additionally binds the manifest and locks the campaign while
+    checking the open window and one-enrollment-per-week authority.
+    """
+    from .weekly_reconciliation import validate_benchmark_policy
+    policy = validate_benchmark_policy(benchmark_policy)
+    snapshot = ReconciliationStore(coordinator).snapshot()
+    planned = plan_reconciliation(snapshot, now=clock(), gates=Gates(benchmarks=True),
+        preview_version=preview_version, production_suffix=production_suffix,
+        benchmark_policy=policy, lifecycle_scope=lifecycle_scope)
+    if action.get("kind") != "freeze_policy" or dict(action) not in planned["actions"]:
+        raise ValueError("benchmark enrollment action is stale or outside reviewed scope")
+    p = action["parameters"]
+    if policy["schema"] == "foldarium.weekly-benchmark-policy/v2":
+        row = next(r for r in snapshot["rounds"] if r["round_id"] == p["round_id"])
+        return coordinator._rpc("freeze_weekly_automation_policy_v2", {
+            "p_round_id": p["round_id"], "p_campaign_id": row["campaign_id"],
+            "p_blind_manifest_sha256": p["blind_manifest_sha256"],
+            "p_expected_executions": p["expected_executions"],
+            "p_policy_json": json.dumps(policy, sort_keys=True, separators=(",", ":")),
+            "p_source_policy_sha256": p["policy_sha256"],
+        })
+    return coordinator._rpc("freeze_weekly_automation_policy_v1", {
+        "p_round_id": p["round_id"], "p_expected_executions": p["expected_executions"],
+        "p_source_policy_sha256": p["policy_sha256"],
+    })
+
+
 def submit_expected_benchmark(coordinator: Any, public_coordinator: Any, parameters: Mapping[str, Any]) -> Mapping[str, Any]:
     """Ingest an existing, fully verified artifact before reveal, without inference."""
     from .weekly_llm_contract import digest_post_close_benchmark, sha256_hex, validate_post_close_benchmark
