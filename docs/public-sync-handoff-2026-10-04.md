@@ -171,7 +171,31 @@ their explicit allowlists; detailed reference proof remains private.
 Completed: 665 JavaScript tests (one optional WebAssembly skip), 740 scientific
 Python tests, 737 dependency-light tests (163 optional skips), real PostgreSQL
 publication guards, the 2,462-file public audit and 14-file credential/runtime
-scan. Pending: public CI and production deployment/migration verification.
+scan. Completed: all seven public CI jobs, production worker deployment and migration
+through `20261005030000`. The preserved evaluation completed with 37 items,
+370 choices, 31 scorable items and six explicit reference exclusions.
 No hosted worker wrapper/tests, cutover scripts, private operation or hosting
 proposal records, runtime configuration, credentials or scientific artifacts are
 copied. Public defaults, shell and CI retain their existing boundaries.
+
+## Follow-up: typed vote archival and composed acceptance
+
+Prepared source makes validated typed vote scope authoritative over optional
+application telemetry, with a service-only manifest-bound getter and exact final
+vote comparisons. Legacy normalized source bytes remain unchanged. Proof fields
+stay private; broken typed provenance never falls back to a guess.
+
+The offline composed acceptance uses all migrations, real PostgreSQL RPCs and
+Python/JavaScript consumers. It preserves six full questions and five persisted
+human votes, reuses completed model responses after a registration failure and
+process restart, and proves ingestion/reveal/publication convergence. Geometry,
+provider responses and external authentication are explicit fixtures. Dedicated
+real database tests cover wrong proof, typed None, SQL NULL accounting and private
+ACLs. Both checks join the scientific CI job; existing seven checks remain intact.
+
+Completed: 665 JavaScript tests (one optional WebAssembly skip), 743 scientific
+Python tests, 740 dependency-light tests (163 optional skips), the 2,469-file
+public audit and 14-file credential/runtime scan. Node 24 real PostgreSQL scope
+guards and composed lifecycle pass all 47 migrations. Pending: private release
+and deployment acceptance before public push, followed by full public CI. No private operations records, deployment wrappers, schedules,
+credentials, environment values or live artifacts are copied.

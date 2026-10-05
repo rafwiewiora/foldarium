@@ -331,6 +331,67 @@ def _normalize_post_close_benchmark_rows(
     return participants, votes
 
 
+_TYPED_SCOPE_FIELDS = frozenset({
+    "user_id", "item_id", "choice_id", "picked_none", "selection_kind", "selection_id",
+    "selection_source", "selection_source_attempt_id", "selection_resolution_id", "submitted_at",
+})
+
+
+def _verified_typed_vote_scopes(round_id, votes, envelope, expected_digest):
+    """Consume only the service getter's exact, manifest-bound validated scopes.
+
+    The SQL getter verifies immutable source attempts and reviewed resolutions.
+    Comparing all final-row proof fields here catches mixed read snapshots.
+    Optional application telemetry is never an authority for typed votes.
+    """
+    typed = {(row.get("user_id"), row.get("item_id")): row for row in votes
+             if row.get("selection_kind") is not None}
+    if envelope is None:
+        if typed:
+            raise RetrospectiveArchiveError("typed votes require verified selection provenance")
+        return {}
+    if (not isinstance(envelope, Mapping) or set(envelope) != {
+            "schema_version", "round_id", "blind_manifest_sha256", "votes"}
+            or envelope.get("schema_version") != "foldarium.retrospective-vote-scopes/v1"
+            or envelope.get("round_id") != round_id
+            or not isinstance(expected_digest, str) or not _SHA256.fullmatch(expected_digest)
+            or envelope.get("blind_manifest_sha256") != expected_digest):
+        raise RetrospectiveArchiveError("typed vote scope round/manifest binding is invalid")
+    scopes = {}
+    for scope in _rows(envelope.get("votes"), "verified vote scopes"):
+        if set(scope) != _TYPED_SCOPE_FIELDS:
+            raise RetrospectiveArchiveError("typed vote scope fields are invalid")
+        key = (scope.get("user_id"), scope.get("item_id"))
+        if key in scopes or key not in typed:
+            raise RetrospectiveArchiveError("typed vote scope does not bind one exact final vote")
+        vote = typed[key]
+        for field in _TYPED_SCOPE_FIELDS - {"submitted_at"}:
+            if scope.get(field) != vote.get(field):
+                raise RetrospectiveArchiveError("typed vote scope differs from final vote")
+        if (_timestamp_sort_key(scope["submitted_at"], "typed scope submitted_at")[0]
+                != _timestamp_sort_key(vote.get("submitted_at"), "typed vote submitted_at")[0]):
+            raise RetrospectiveArchiveError("typed vote scope timestamp differs from final vote")
+        kind = scope["selection_kind"]
+        if kind not in {"none", "exact", "cluster"} or type(scope["picked_none"]) is not bool:
+            raise RetrospectiveArchiveError("typed vote selection kind is invalid")
+        if kind == "none":
+            if not scope["picked_none"] or scope["choice_id"] is not None or scope["selection_id"] is not None:
+                raise RetrospectiveArchiveError("typed none scope is inconsistent")
+        elif (scope["picked_none"] or not isinstance(scope["choice_id"], str) or not scope["choice_id"]
+              or not isinstance(scope["selection_id"], str) or not scope["selection_id"]
+              or (kind == "exact" and scope["selection_id"] != scope["choice_id"])):
+            raise RetrospectiveArchiveError("typed pose scope is inconsistent")
+        if (scope["selection_source"] not in {"submit_v2", "resolution"}
+                or not scope["selection_source_attempt_id"]
+                or (scope["selection_source"] == "submit_v2" and scope["selection_resolution_id"] is not None)
+                or (scope["selection_source"] == "resolution" and not scope["selection_resolution_id"])):
+            raise RetrospectiveArchiveError("typed vote source proof is incomplete")
+        scopes[key] = kind
+    if set(scopes) != set(typed):
+        raise RetrospectiveArchiveError("typed vote scopes are incomplete")
+    return scopes
+
+
 def build_retrospective_source_snapshot(
     round_id: str,
     *,
@@ -340,6 +401,8 @@ def build_retrospective_source_snapshot(
     automated_identities: list[Mapping[str, Any]],
     post_close_benchmarks: list[Mapping[str, Any]] | None = None,
     item_count: int | None = None,
+    verified_vote_scopes: Mapping[str, Any] | None = None,
+    expected_blind_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Normalize final ballots and minimal session lineage into stable input.
 
@@ -349,6 +412,8 @@ def build_retrospective_source_snapshot(
 
     round_id = _text(round_id, "round_id")
     vote_rows = _rows(votes, "votes")
+    typed_scopes = _verified_typed_vote_scopes(
+        round_id, vote_rows, verified_vote_scopes, expected_blind_manifest_sha256)
     attempt_rows = _rows(vote_attempts, "vote_attempts")
     session_rows = _rows(current_sessions, "current_sessions")
     identity_rows = _rows(automated_identities, "automated_identities")
@@ -404,6 +469,8 @@ def build_retrospective_source_snapshot(
             choice_id = None
         else:
             choice_id = _text(choice_id, "vote attempt choice_id")
+        if (participant, item_id) in typed_scopes:
+            continue
         app_state = row.get("app_state")
         selection_kind = (
             app_state.get("selection_kind")
@@ -450,7 +517,9 @@ def build_retrospective_source_snapshot(
             attempt = attempts_by_vote.get(
                 (participant, item_id, choice_id, picked_none)
             )
-            if attempt is not None:
+            if identity in typed_scopes:
+                selection_kind = typed_scopes[identity]
+            elif attempt is not None:
                 selection_kind = attempt[1]
             elif round_id == LEGACY_EXACT_SCOPE_ROUND_ID:
                 # This beta round presented unclustered poses to every participant.
@@ -1232,6 +1301,8 @@ def materialize_retrospective_publication(
         current_sessions=source_rows["current_sessions"],
         automated_identities=source_rows["automated_identities"],
         post_close_benchmarks=source_rows.get("post_close_benchmarks"),
+        verified_vote_scopes=source_rows.get("verified_vote_scopes"),
+        expected_blind_manifest_sha256=round_record.get("blind_manifest_sha256"),
         item_count=_positive_int(evaluation.get("item_count"), "item_count"),
     )
     source_content = encode_retrospective_source_snapshot(source_snapshot)
