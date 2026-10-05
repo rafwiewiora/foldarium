@@ -3146,11 +3146,12 @@ class SupabaseCoordinator(SupabasePublisher):
 
     def weekly_retrospective_source_rows(
         self, round_id: str, *, environment: str = "production"
-    ) -> dict[str, list[dict[str, Any]]]:
+    ) -> dict[str, Any]:
         """Snapshot the bounded rows used by retrospective aggregation.
 
-        Raw application state is fetched only to extract the approved
-        ``selection_kind`` field in the deterministic core helper. It is never
+        Typed vote scopes come from the manifest-bound service getter, which
+        verifies exact immutable attempt/resolution provenance. Raw application
+        state is fetched only for legacy untyped ``selection_kind`` fallback in the deterministic core helper. It is never
         copied into either publication artifact or the normalized source object.
         Post-close benchmark rows are fetched separately from ballots via the
         reveal-gated selector benchmark RPC and reduced to ``display_name`` plus
@@ -3162,7 +3163,8 @@ class SupabaseCoordinator(SupabasePublisher):
         round_filter = f"eq.{round_id}"
         votes_query = urlencode(
             {
-                "select": "round_id,user_id,item_id,choice_id,picked_none",
+                "select": ("round_id,user_id,item_id,choice_id,picked_none,selection_kind,selection_id,"
+                           "selection_source,selection_source_attempt_id,selection_resolution_id,submitted_at"),
                 "round_id": round_filter,
                 "order": "user_id.asc,item_id.asc",
             }
@@ -3257,6 +3259,16 @@ class SupabaseCoordinator(SupabasePublisher):
                     **({"benchmark_authorization": authorization} if authorization is not None else {}),
                 }
             )
+        verified_vote_scopes = self._rpc(
+            "get_weekly_retrospective_vote_scopes_v1", {"p_round_id": round_id})
+        if (not isinstance(verified_vote_scopes, Mapping)
+                or set(verified_vote_scopes) != {"schema_version", "round_id", "blind_manifest_sha256", "votes"}
+                or verified_vote_scopes.get("schema_version") != "foldarium.retrospective-vote-scopes/v1"
+                or verified_vote_scopes.get("round_id") != round_id
+                or not isinstance(verified_vote_scopes.get("blind_manifest_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", verified_vote_scopes["blind_manifest_sha256"])
+                or not isinstance(verified_vote_scopes.get("votes"), list)):
+            raise SupabasePublicationError("typed retrospective vote scope response is invalid")
         return {
             "votes": self._get_all_json_rows(
                 f"/rest/v1/weekly_quiz_votes?{votes_query}",
@@ -3278,6 +3290,7 @@ class SupabaseCoordinator(SupabasePublisher):
                 "weekly retrospective automated-identity registry snapshot",
             ),
             "post_close_benchmarks": post_close_benchmarks,
+            "verified_vote_scopes": deepcopy(dict(verified_vote_scopes)),
         }
 
     def weekly_retrospective_publication(

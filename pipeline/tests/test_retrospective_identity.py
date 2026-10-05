@@ -75,6 +75,9 @@ class RetrospectiveIdentityTests(unittest.TestCase):
         row=dict(post_close_benchmark_row(display_name='fixture-model'),provider='anthropic-api',requested_model_id='fixture-model',config_sha256='c'*64,execution_sha256='d'*64)
         coordinator=SupabaseCoordinator('https://fixture.invalid','fixture-key','private')
         def rpc(name,params):
+            if name=='get_weekly_retrospective_vote_scopes_v1':
+                return {'schema_version':'foldarium.retrospective-vote-scopes/v1','round_id':ROUND_ID,
+                        'blind_manifest_sha256':'a'*64,'votes':[]}
             return [row] if name=='get_weekly_selector_benchmarks_v1' else [proof()]
         with patch.object(SupabaseCoordinator,'_rpc',side_effect=rpc),patch.object(SupabaseCoordinator,'_get_all_json_rows',return_value=[]):
             result=coordinator.weekly_retrospective_source_rows(ROUND_ID)

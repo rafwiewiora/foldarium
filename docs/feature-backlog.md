@@ -206,6 +206,21 @@ Prepared source remains **planned** until its production flow is verified.
 - **Verified:** portable tests cover nested call identity, uncertainty, terminal
   errors, receipt preservation, and the run-claim race. Deployment is separate.
 
+### Typed vote archival and composed lifecycle verification
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** verified typed selection provenance is authoritative even when
+  optional UI telemetry is absent or contradictory. Legacy source bytes remain
+  unchanged; malformed typed proof cannot fall back to telemetry.
+- **Prepared:** a private scoped getter validates immutable attempts/resolutions,
+  exact manifest identity and complete audit counts, including SQL NULL edges.
+- **Prepared:** offline composed PostgreSQL acceptance exercises full six-item
+  model/benchmark population, five persisted human votes, bounded inference
+  recovery, ingestion, reveal, publication and strict public projections.
+- **Pending:** accepted private release, deployment and public CI. No paid calls,
+  hosted launchers, live credentials or runtime settings are part of this bundle.
+
 ### Sparse deposited receptor proof and publication protection
 
 - **Status:** planned
@@ -221,7 +236,9 @@ Prepared source remains **planned** until its production flow is verified.
 - **Prepared:** generic claimed-worker failure cannot authorize a retry while
   completed native science may await publication. SQL and Python preserve the
   exact run/attempt for artifact recovery.
-- **Pending:** production deployment/migration verification and public CI.
+- **Verified:** production worker deployment, migration through `20261005030000`,
+  and all seven public CI jobs. The preserved evaluation completed successfully
+  with 37 items, 370 choices, 31 scorable items and six reference exclusions.
 
 ### Supported Node CI coverage
 

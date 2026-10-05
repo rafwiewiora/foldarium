@@ -505,6 +505,10 @@ class SupabasePublisherTests(unittest.TestCase):
             def __call__(self, request: object, *, timeout: float) -> FakeResponse:
                 self.calls.append((request, timeout))
                 url = request.full_url  # type: ignore[attr-defined]
+                if "/rpc/get_weekly_retrospective_vote_scopes_v1" in url:
+                    return FakeResponse(json.dumps({"schema_version": "foldarium.retrospective-vote-scopes/v1",
+                        "round_id": json.loads(request.data)["p_round_id"],
+                        "blind_manifest_sha256": "a" * 64, "votes": []}).encode())
                 if "/weekly_quiz_votes?" in url:
                     rows = [
                         {
@@ -551,7 +555,14 @@ class SupabasePublisherTests(unittest.TestCase):
         )
         self.assertNotIn("legacy_sessions", rows)
         self.assertEqual(rows["post_close_benchmarks"], [])
-        self.assertEqual(len(opener.calls), 5)
+        self.assertEqual(len(opener.calls), 6)
+        scope_request = next(call[0] for call in opener.calls
+                             if "get_weekly_retrospective_vote_scopes_v1" in call[0].full_url)
+        self.assertEqual(json.loads(scope_request.data), {"p_round_id": "weekly-2026-08-08"})
+        vote_request = next(call[0] for call in opener.calls if "/weekly_quiz_votes?" in call[0].full_url)
+        for field in ("selection_kind", "selection_id", "selection_source_attempt_id",
+                      "selection_source", "selection_resolution_id", "submitted_at"):
+            self.assertIn(field, vote_request.full_url)
         urls = "\n".join(call[0].full_url for call in opener.calls)
         self.assertIn("weekly_retrospective_automated_identities", urls)
         self.assertIn("get_weekly_selector_benchmarks_v1", urls)
@@ -578,6 +589,10 @@ class SupabasePublisherTests(unittest.TestCase):
             def __call__(self, request: object, *, timeout: float) -> FakeResponse:
                 self.calls.append((request, timeout))
                 url = request.full_url  # type: ignore[attr-defined]
+                if "/rpc/get_weekly_retrospective_vote_scopes_v1" in url:
+                    return FakeResponse(json.dumps({"schema_version": "foldarium.retrospective-vote-scopes/v1",
+                        "round_id": json.loads(request.data)["p_round_id"],
+                        "blind_manifest_sha256": "a" * 64, "votes": []}).encode())
                 if "/rpc/get_weekly_selector_benchmarks_v1" in url:
                     rows = [
                         {
