@@ -258,4 +258,32 @@ credential/private-runtime scan of all ten changed files. The broad shared-sourc
 review found no omitted accepted portable implementation; existing public
 provider-neutral defaults, local development support and access boundaries are
 preserved. A pre-existing public-side prepared-evaluation concurrency guard is
-retained unchanged. Pending: exact-head public review and all seven CI checks.
+retained unchanged. Completed: exact-head review and all seven public CI checks
+in merged PR32.
+
+
+## Prepared follow-up: metadata concurrency and read-only lease diagnostics
+
+Starting from public main `94483d0`, portable source prevents stale whole-object
+metadata writes during delayed-window extension, evaluation preparation and
+successor activation. Exact metadata comparison preserves concurrent accepted
+changes; the public preparation guard and idempotent replay behavior remain.
+
+The service-only snapshot adds a bounded expired-running lease list, exact count
+and observation time. The engine refreshes health after a pass without treating
+an expired lease as execution failure or permission to retry. Migration
+`20261005060000` retains the predecessor snapshot payload and restricts both
+wrapper and predecessor access. No action reset, state sweep or hosted scheduler
+is introduced.
+
+Portable regressions cover losing-writer interleavings and lost acknowledgements;
+the real PostgreSQL harness checks unchanged rows, predecessor payload parity,
+bounded diagnostics and role permissions across the full migration chain. The
+new database check joins the existing scientific job without changing the seven
+public check identities. Completed: 665 JavaScript tests (one optional WebAssembly
+skip), 772 scientific Python tests, 769 dependency-light tests (163 optional
+skips), both 49-migration database checks, the 2,481-file public boundary audit,
+changed-file credential scan and shared browser parity. Pending: exact-head
+review and CI. Deployment SDK tests, cloud verification tools,
+private operational documentation, profiles, schedules, credentials and live
+artifacts are excluded. Public defaults and browser shells remain unchanged.

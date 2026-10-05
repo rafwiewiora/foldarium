@@ -8,6 +8,22 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Prepared portable reliability changes
 
+### Concurrent round metadata and expired lease visibility
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** delayed-window extension, evaluation preparation and successor
+  activation compare the complete metadata they read before replacing it.
+  Concurrent writers retain their accepted changes; exact replay stays idempotent.
+- **Prepared:** the service-only reconciliation snapshot reports a bounded list
+  and exact count of expired running leases, without resetting actions, granting
+  retries or exposing action parameters and error text.
+- **Verified:** portable scientific and dependency-light suites, JavaScript,
+  49-migration diagnostics and lifecycle acceptance, public boundary audit and
+  changed-file credential scan.
+- **Pending:** exact-head review and seven public CI checks. Hosted execution
+  remains excluded.
+
 ### Fresh source checks for new live intake
 
 - **Status:** planned
@@ -21,8 +37,8 @@ Prepared source remains **planned** until its production flow is verified.
   remains available without inventing release provenance.
 - **Verified:** portable scientific, lightweight, JavaScript and composed database
   acceptance suites, source boundary audit and changed-file secret scan.
-- **Pending:** public mirror CI and review. This guard does not establish an
-  upstream date attestation or add a hosted scheduler.
+- **Verified:** public review and all seven CI checks in merged PR32. This guard
+  does not establish an upstream date attestation or add a hosted scheduler.
 
 ## Shipped
 

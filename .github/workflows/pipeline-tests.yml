@@ -62,6 +62,10 @@ jobs:
           node pipeline/tests/check_weekly_benchmark_scope.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js"
           node pipeline/tests/check_weekly_lifecycle_acceptance.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js" "$(command -v python)"
 
+      - name: Check read-only expired automation lease diagnostics
+        timeout-minutes: 5
+        run: node pipeline/tests/check_automation_lease_diagnostics.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js"
+
   selector-wasm:
     runs-on: ubuntu-latest
     steps:
