@@ -55,10 +55,11 @@ jobs:
           node-version: 24
       - name: Install isolated PostgreSQL acceptance dependency
         run: npm install --prefix "$RUNNER_TEMP/foldarium-pglite" --no-save --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
-      - name: Test typed vote provenance and composed weekly lifecycle
+      - name: Test vote provenance, scoped enrollment and composed lifecycle
         timeout-minutes: 5
         run: |
           node pipeline/tests/check_typed_retrospective_votes_database.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js"
+          node pipeline/tests/check_weekly_benchmark_scope.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js"
           node pipeline/tests/check_weekly_lifecycle_acceptance.mjs "$RUNNER_TEMP/foldarium-pglite/node_modules/@electric-sql/pglite/dist/index.js" "$(command -v python)"
 
   selector-wasm:

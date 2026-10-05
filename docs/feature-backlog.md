@@ -57,6 +57,27 @@ Prepared source remains **planned** until its production flow is verified.
 
 ## Planned
 
+### Scoped automatic benchmark enrollment
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** opt-in v2 policy confines new automatic enrollment to canonical
+  production weeks with open voting windows, exact manifest/method binding, one
+  immutable enrollment per campaign and a combined configured execution cap.
+  Existing v1 authority and already-frozen work remain unchanged.
+- **Prepared:** executor revalidation and service-only atomic database checks
+  reject stale or out-of-scope work; portable tests cover both boundaries.
+- **Pending:** public review and CI; no driver, policy or schedule is enabled.
+
+### Reusable offline acceptance bootstrap
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** extract the composed lifecycle test's local PostgreSQL bootstrap,
+  fixture SHA/HMAC adapters and external-network denial into one portable helper.
+  The existing scenario, migrations and seven CI jobs remain unchanged.
+- **Pending:** public review and CI acceptance; no runtime behavior changes.
+
 ### Featured assignment comparisons
 
 - **Status:** planned

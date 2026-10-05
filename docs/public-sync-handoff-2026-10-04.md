@@ -196,6 +196,39 @@ ACLs. Both checks join the scientific CI job; existing seven checks remain intac
 Completed: 665 JavaScript tests (one optional WebAssembly skip), 743 scientific
 Python tests, 740 dependency-light tests (163 optional skips), the 2,469-file
 public audit and 14-file credential/runtime scan. Node 24 real PostgreSQL scope
-guards and composed lifecycle pass all 47 migrations. Pending: private release
-and deployment acceptance before public push, followed by full public CI. No private operations records, deployment wrappers, schedules,
+guards and composed lifecycle pass all 47 migrations. Completed: all seven exact-head public CI checks passed and the portable
+change was merged. No private operations records, deployment wrappers, schedules,
 credentials, environment values or live artifacts are copied.
+
+## Prepared follow-up: reusable offline acceptance bootstrap
+
+The existing composed lifecycle test imports a portable local PostgreSQL and
+network-denial helper. Its application contracts and CI invocation are unchanged.
+The helper imports only Node standard modules and the existing pinned PGlite
+dependency; it needs no deployment SDK or credentials.
+
+Completed: 665 JavaScript tests pass with one optional WebAssembly skip.
+The refactored composed lifecycle passes all 47 migrations with Node 24,
+Python 3.11 and PGlite 0.3.14. All five changed files pass the credential/runtime
+scan; the public-tree boundary audit passes. Pending: public review and CI.
+The separate hosted-intake
+scenario, deployment-dependent fixtures and CI step, operational documentation,
+provider settings and live receipts are intentionally excluded.
+
+## Prepared follow-up: scoped new benchmark enrollment
+
+Portable source adds the optional v2 enrollment policy, executor revalidation,
+append-only campaign authority, service-only migration and offline Python/SQL
+regressions. New enrollment requires the exact canonical production identity,
+open stored window, bound manifest and a nonempty method set within the cap.
+Existing v1 bytes, receipts and already-frozen obligations remain unchanged.
+
+The scoped database check uses the shared portable bootstrap and joins the
+existing scientific CI job; all seven job identities remain intact. Completed: 665 JavaScript tests pass
+with one optional WebAssembly skip; 750 scientific Python tests pass, and the
+dependency-light suite passes 747 tests with 163 optional skips. Scoped enrollment,
+typed-vote provenance and composed lifecycle database checks pass across all
+48 migrations. Independent import/boundary review and shared browser parity pass.
+Pending: public review and CI. No deployment
+adapter/profile, activation policy, hosted-intake fixture, private operational
+record, credential, provider receipt or live artifact is included.
