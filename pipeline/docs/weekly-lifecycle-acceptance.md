@@ -99,6 +99,8 @@ Prerelease download readiness and prediction execution remain separate boundarie
 `test_weekly.py` covers incomplete advertising and missing prerelease inputs;
 `test_weekly_reconciliation.py` verifies that a successful transport response
 without a durable state change remains waiting instead of falsely completing an
-action. Those tests do not justify inventing a new Saturday clock gate. Actual
+action. The [live-intake readiness guard](live-intake-readiness.md) uses the
+official release window and validated immediately prior snapshot hashes; fixture
+availability alone is not evidence of a new release. Actual
 Modal worker dispatch, GPU outputs and Storage failures retain their focused
 dispatch, worker and assembly tests rather than being mocked into this scenario.

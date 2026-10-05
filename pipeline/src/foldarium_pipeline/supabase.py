@@ -834,6 +834,11 @@ class SupabaseCoordinator(SupabasePublisher):
             raise SupabasePublicationError(
                 "prior prerelease snapshot is not strictly earlier than the requested week"
             )
+        if (prior_date.isoformat() != stored_release_date or prior_date.weekday() != 5
+                or campaign_id != f"wwpdb-{stored_release_date}"):
+            raise SupabasePublicationError(
+                "prior prerelease snapshot is not a canonical weekly campaign"
+            )
         files = _json_object(row.get("files"), "prior prerelease snapshot files")
         metadata = _json_object(
             row.get("metadata"), "prior prerelease snapshot metadata"

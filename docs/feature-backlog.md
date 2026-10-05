@@ -6,6 +6,24 @@ here until they are promoted into an implementation plan or explicitly declined.
 Statuses: **idea**, **candidate**, **planned**, **shipped**, or **declined**.
 Prepared source remains **planned** until its production flow is verified.
 
+## Prepared portable reliability changes
+
+### Fresh source checks for new live intake
+
+- **Status:** planned
+- **Added:** 2026-10-05
+- **Prepared:** new live intake requires the Saturday 03:00–Wednesday 00:00 UTC
+  window, a validated immediately preceding Saturday snapshot, and changes to
+  both prerelease files. Missing baselines, unchanged files, and zero eligible
+  targets wait without consuming the outbox failure allowance.
+- **Prepared:** existing campaigns return before new-input checks, including dry
+  runs; the hook checks time again after acquisition. Explicit saved-byte replay
+  remains available without inventing release provenance.
+- **Verified:** portable scientific, lightweight, JavaScript and composed database
+  acceptance suites, source boundary audit and changed-file secret scan.
+- **Pending:** public mirror CI and review. This guard does not establish an
+  upstream date attestation or add a hosted scheduler.
+
 ## Shipped
 
 ### Retrospective Play for fun

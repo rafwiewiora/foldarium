@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest.mock import Mock, patch
 
 from foldarium_pipeline.cameo import CAMEO_SITEMAP_URL, target_url
@@ -128,9 +128,18 @@ class PublicPlanTests(unittest.TestCase):
 
 
 class DeploymentWeeklyHookTests(unittest.TestCase):
+    def setUp(self):
+        clock = patch("foldarium_pipeline.weekly.datetime")
+        self.addCleanup(clock.stop)
+        clock.start().now.return_value = datetime(2026, 8, 8, 4, tzinfo=timezone.utc)
+
     @staticmethod
     def _registration_conflict_coordinator(*, campaign_exists_after: bool) -> Mock:
         coordinator = Mock()
+        coordinator.latest_prior_prerelease_snapshot.return_value = {
+            "release_date": "2026-08-01", "sequence_sha256": "a" * 64,
+            "nonpolymer_sha256": "b" * 64,
+        }
         coordinator.weekly_campaign_exists.side_effect = [
             False,
             campaign_exists_after,
@@ -146,7 +155,7 @@ class DeploymentWeeklyHookTests(unittest.TestCase):
             campaign_exists_after=False
         )
         plan = {"tasks": [{"task_id": "run_fixture"}]}
-        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}, "snapshot": {"sequence_sha256": "c" * 64, "nonpolymer_sha256": "d" * 64}}
 
         with (
             patch.dict(
@@ -179,7 +188,7 @@ class DeploymentWeeklyHookTests(unittest.TestCase):
             campaign_exists_after=True
         )
         plan = {"tasks": [{"task_id": "run_fixture"}]}
-        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}, "snapshot": {"sequence_sha256": "c" * 64, "nonpolymer_sha256": "d" * 64}}
 
         with (
             patch.dict(
@@ -205,13 +214,17 @@ class DeploymentWeeklyHookTests(unittest.TestCase):
 
     def test_non_conflict_registration_error_remains_fatal(self) -> None:
         coordinator = Mock()
+        coordinator.latest_prior_prerelease_snapshot.return_value = {
+            "release_date": "2026-08-01", "sequence_sha256": "a" * 64,
+            "nonpolymer_sha256": "b" * 64,
+        }
         coordinator.weekly_campaign_exists.return_value = False
         coordinator.register_weekly_plan.side_effect = SupabasePublicationError(
             "register_weekly_prediction_plan failed with HTTP 503",
             http_status=503,
         )
         plan = {"tasks": [{"task_id": "run_fixture"}]}
-        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}}
+        replay = {"source_files": {"fixture": (b"fixture", "text/plain")}, "snapshot": {"sequence_sha256": "c" * 64, "nonpolymer_sha256": "d" * 64}}
 
         with (
             patch.dict(
