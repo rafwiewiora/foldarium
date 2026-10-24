@@ -77,18 +77,48 @@ export function createReplayHandler({ env = process.env, fetchImpl = fetch } = {
         ));
       }
       if (body.action === 'suggestions') {
-        return send(response, 200, await fetchRows(
+        const suggestions = await fetchRows(
           '/rest/v1/replay_user_suggestions_safe?select=suggestion_id,participant_hash,'
           + 'display_name_hash,quiz_session_id,weekly_session_id,context,item_id,page_path,'
           + 'suggestion_text,app_state,viewer_snapshot,viewer_trace_tail,submitted_at'
           + '&order=submitted_at.desc&limit=100',
-        ));
+        );
+        return send(response, 200, await attributeSuggestionNames(suggestions, fetchRows));
       }
       return send(response, 400, { error: 'Invalid action' });
     } catch {
       return send(response, 502, { error: 'Replay data unavailable' });
     }
   };
+}
+
+async function attributeSuggestionNames(suggestions, fetchRows) {
+  const classicIds = validIds(suggestions, 'quiz_session_id');
+  const weeklyIds = validIds(suggestions, 'weekly_session_id');
+  const [classicNames, weeklyNames] = await Promise.all([
+    fetchDisplayNames(fetchRows, 'quiz_sessions', 'id', classicIds),
+    fetchDisplayNames(fetchRows, 'weekly_quiz_sessions', 'session_id', weeklyIds),
+  ]);
+  return suggestions.map(suggestion => ({
+    ...suggestion,
+    display_name: classicNames.get(suggestion.quiz_session_id)
+      || weeklyNames.get(suggestion.weekly_session_id)
+      || null,
+  }));
+}
+
+function validIds(rows, field) {
+  return [...new Set(rows.map(row => row?.[field]).filter(validSessionId))];
+}
+
+async function fetchDisplayNames(fetchRows, table, idColumn, ids) {
+  if (!ids.length) return new Map();
+  const rows = await fetchRows(
+    `/rest/v1/${table}?select=${idColumn},display_name&${idColumn}=in.(${ids.join(',')})`,
+  );
+  return new Map(rows
+    .filter(row => validSessionId(row?.[idColumn]) && typeof row?.display_name === 'string')
+    .map(row => [row[idColumn], row.display_name]));
 }
 
 function validSessionId(value) {

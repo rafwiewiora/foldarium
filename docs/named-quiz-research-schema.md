@@ -49,7 +49,7 @@ not produce a shared correlation key. A plaintext display name is retained on it
 owned session; replay-safe views exclude both plaintext names and Supabase Auth user
 IDs.
 
-The service-side replay API should query only:
+The service-side replay API queries these bounded, server-only views:
 
 - `replay_quiz_sessions_safe`
 - `replay_weekly_sessions_safe`
@@ -57,6 +57,12 @@ The service-side replay API should query only:
 - `replay_weekly_vote_attempts_safe`
 - `replay_weekly_trace_batches_safe`
 - `replay_user_suggestions_safe`
+
+For the password-protected `suggestions` action only, the API uses each suggestion's
+session ID to look up `display_name` from the corresponding raw session table. This
+operator-only enrichment associates historical and future feedback with the name
+entered at quiz start without adding plaintext names to suggestion rows or
+browser-readable database views. Supabase Auth user IDs remain excluded.
 
 Suggestions are free text and display names are personal data. Before production,
 set and document retention/deletion periods, update the participant notice, and
