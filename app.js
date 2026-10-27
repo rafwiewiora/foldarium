@@ -277,6 +277,7 @@ let quizSource = WEEKLY_ONLY ? 'weekly' : 'cameo', difficulty = WEEKLY_ONLY ? 'h
 let WEEKLY_ROUND = null;
 let weeklyQuestionScope = { mode: 'all' };
 let weeklyFeaturedScope = null;
+let weeklyDruglikeScope = null;
 let WEEKLY_VOTES = new Map(), WEEKLY_TOTALS = new Map();
 let WEEKLY_LEADERBOARD = null;
 let WEEKLY_FEATURED_RESULTS = null;
@@ -501,26 +502,44 @@ function nextSessionQuestionIndex() {
   return indexes[indexes.indexOf(idx) + 1] ?? null;
 }
 
+async function initializeWeeklyQuestionScopes() {
+  weeklyFeaturedScope = window.foldariumFeaturedQuestions.featuredQuestionScope(WEEKLY_ROUND);
+  weeklyDruglikeScope = isRetrospectiveReview() ? null
+    : await window.foldariumFeaturedQuestions.loadDruglikeQuestionScope?.(WEEKLY_ROUND) || null;
+  weeklyQuestionScope = weeklyDruglikeScope || weeklyFeaturedScope || { mode: 'all' };
+}
+
 function syncWeeklyQuestionScope() {
   const box = $('#weekly-question-scope');
   if (!box) return;
-  box.hidden = quizSource !== 'weekly' || isRetrospectiveReview() || !weeklyFeaturedScope;
+  const druglikeScope = typeof weeklyDruglikeScope === 'undefined' ? null : weeklyDruglikeScope;
+  box.hidden = quizSource !== 'weekly' || isRetrospectiveReview() || !(weeklyFeaturedScope || druglikeScope);
   if (box.hidden) return;
-  const count = weeklyFeaturedScope.item_ids.length;
+  const count = weeklyFeaturedScope?.item_ids.length || 0;
   const select = $('#weekly-question-scope-select');
   select.value = weeklyQuestionScope.mode;
   select.disabled = viewerTransitionBusy || revealRequested;
-  select.options[0].textContent = `This week's ${count}`;
+  select.options[0].textContent = druglikeScope ? `Original weekly ${count}` : `This week's ${count}`;
+  select.options[0].hidden = !weeklyFeaturedScope;
+  if (select.options[2]) {
+    select.options[2].hidden = !druglikeScope;
+    select.options[2].textContent = `Drug-like picks (${druglikeScope?.item_ids.length || 0})`;
+  }
   select.options[1].textContent = `Explore all ${POOLS.weekly.length} questions`;
-  $('#weekly-question-scope-hint').textContent = weeklyQuestionScope.mode === 'featured'
+  $('#weekly-question-scope-hint').textContent = weeklyQuestionScope.mode === 'druglike'
+    ? 'A medicinal-chemistry sampler. Votes count toward the full round; the original weekly assignment stays available.'
+    : weeklyQuestionScope.mode === 'featured'
     ? `${count} featured questions. Votes count toward the full round; you can explore more anytime.`
     : 'Full round. Your saved votes stay available when switching views.';
 }
 
 async function setWeeklyQuestionScope(mode) {
-  if (!weeklyFeaturedScope || !['featured', 'all'].includes(mode)
-      || viewerTransitionBusy || revealRequested) return;
-  weeklyQuestionScope = mode === 'featured' ? weeklyFeaturedScope : { mode: 'all' };
+  if (!['featured', 'druglike', 'all'].includes(mode) || viewerTransitionBusy || revealRequested) return;
+  const nextScope = mode === 'druglike' ? weeklyDruglikeScope
+    : mode === 'featured' ? weeklyFeaturedScope : { mode: 'all' };
+  if (!nextScope) return;
+  weeklyQuestionScope = nextScope;
+  if (mode === 'druglike') weeklyResultsScope = 'full';
   syncWeeklyQuestionScope();
   if (cur) {
     recordAppEvent('question_scope_changed');
@@ -3887,7 +3906,7 @@ function renderUI() {
   hideActivePoseInfoTooltip();
   const filteredIndexes = retrospectiveQuestionIndexes();
   const filteredPosition = filteredIndexes.indexOf(idx);
-  const questionOrdinal = (isRetrospectiveReview() || weeklyQuestionScope.mode === 'featured') && filteredPosition >= 0
+  const questionOrdinal = (isRetrospectiveReview() || ['featured', 'druglike'].includes(weeklyQuestionScope.mode)) && filteredPosition >= 0
     ? `${filteredPosition + 1} / ${filteredIndexes.length}`
     : `${idx + 1} / ${ITEMS.length}`;
   $('#progress').textContent = DEV ? `item ${questionOrdinal} · dev` : `question ${questionOrdinal}`;
@@ -4083,7 +4102,9 @@ function showIntro() {
           : 'Shown on the results leaderboard after release.');
       nameHint.classList.toggle('action-required', showRevealedModes);
     }
-    $('#ligand').innerHTML = weeklyQuestionScope.mode === 'featured'
+    $('#ligand').innerHTML = weeklyQuestionScope.mode === 'druglike'
+      ? `${weeklyQuestionScope.item_ids.length} drug-like picks`
+      : weeklyQuestionScope.mode === 'featured'
       ? `${weeklyQuestionScope.item_ids.length} questions this week`
       : isArchivePlayForFun()
       ? `${pool.length} historical weekly ensembles`
@@ -4871,7 +4892,8 @@ function renderWeeklyLeaderboard() {
   const localAccuracy = localAnswered ? Math.round(100 * localCorrect / localAnswered) : null;
   const localCoverage = total ? Math.round(100 * localAnswered / total) : null;
   const sections = [];
-  if (WEEKLY_FEATURED_RESULTS) {
+  const druglikeSampler = typeof weeklyQuestionScope !== 'undefined' && weeklyQuestionScope.mode === 'druglike';
+  if (WEEKLY_FEATURED_RESULTS && !druglikeSampler) {
     sections.push(`<div class="weekly-scorecard-section"><div class="segmented" aria-label="Weekly result population">
       <button type="button" data-weekly-result-scope="featured" aria-pressed="${weeklyResultsScope === 'featured'}">${WEEKLY_FEATURED_RESULTS.assignment_total} featured</button>
       <button type="button" data-weekly-result-scope="full" aria-pressed="${weeklyResultsScope === 'full'}">Full round</button>
@@ -4891,7 +4913,7 @@ function renderWeeklyLeaderboard() {
       <p class="weekly-scorecard-note">For fun · recorded separately from blind-week rankings.</p>
     </div>`);
   }
-  if (WEEKLY_FEATURED_RESULTS && weeklyResultsScope === 'featured') {
+  if (WEEKLY_FEATURED_RESULTS && weeklyResultsScope === 'featured' && !druglikeSampler) {
     sections.push('<p class="weekly-scorecard-note">Blind-week results on the same featured questions for every player, model, and baseline. Exact choices score the selected pose; cluster choices accept a correct member.</p>');
     for (const [kind, heading] of [['human', 'Featured players'], ['automated', 'Featured models and baselines']]) {
       const rows = WEEKLY_FEATURED_RESULTS.participants.filter(row => kind === 'human'
@@ -4904,7 +4926,9 @@ function renderWeeklyLeaderboard() {
     bindWeeklyResultsScope(host);
     return;
   }
-  sections.push(`<p class="weekly-scorecard-note">${WEEKLY_FEATURED_RESULTS
+  sections.push(`<p class="weekly-scorecard-note">${druglikeSampler
+    ? 'Drug-like sampler · these results cover the full round, not the original featured assignment.'
+    : WEEKLY_FEATURED_RESULTS
     ? 'Full-round coverage · optional questions beyond the featured assignment are included.'
     : 'Full-round history · completion requires every scorable question in this round.'}</p>`);
   const complete = WEEKLY_LEADERBOARD?.complete_runs || [];
@@ -5193,15 +5217,17 @@ async function resumeWeeklyQuizIfAvailable() {
   try {
     const backend = researchBackend();
     if (!backend) throw new Error('Quiz persistence is unavailable.');
-    if (token.scope.mode === 'featured') {
+    if (['featured', 'druglike'].includes(token.scope.mode)) {
       if (token.scope.blind_manifest_sha256 !== WEEKLY_ROUND.blind_manifest_sha256) {
         throw new Error('The saved question selection belongs to a different manifest.');
       }
       const indexes = window.foldariumFeaturedQuestions.scopedWeeklyQuestionIndexes(POOLS.weekly, token.scope);
       if (!indexes.includes(token.question_index)) throw new Error('The saved question is outside its selection.');
-      weeklyFeaturedScope = token.scope;
+      if (token.scope.mode === 'druglike') weeklyDruglikeScope = token.scope;
+      else weeklyFeaturedScope = token.scope;
     }
     weeklyQuestionScope = token.scope;
+    if (token.scope.mode === 'druglike') weeklyResultsScope = 'full';
     const resumed = await backend.resumeNamedWeeklySession({
       sessionId: token.session_id,
       roundId: token.round_id,
@@ -5750,8 +5776,9 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
     ? 'Vote saved. Loading next question…'
     : 'Vote saved.', 'saved');
   recordAppEvent('vote_recorded');
-  if (nextIndex === null) recordAppEvent(weeklyQuestionScope.mode === 'featured'
-    ? 'featured_questions_finished' : 'quiz_completed');
+  if (nextIndex === null) recordAppEvent(weeklyQuestionScope.mode === 'druglike'
+    ? 'druglike_picks_finished'
+    : weeklyQuestionScope.mode === 'featured' ? 'featured_questions_finished' : 'quiz_completed');
   viewerTraceRecorder?.stop({ appState: currentReplayableAppState() });
   void weeklyTraceStream?.endVisit?.(nextIndex !== null ? 'vote' : 'completion');
   WEEKLY_VOTES.set(cur.item.id, {
@@ -5774,7 +5801,7 @@ async function finalizeWeeklyVote({ postReveal = false } = {}) {
     const scopeIndexes = weeklyScopeQuestionIndexes();
     const answered = scopeIndexes.filter(index => WEEKLY_VOTES.has(ITEMS[index].id)).length;
     verdict.textContent = `${answered} of ${scopeIndexes.length} ${
-      weeklyQuestionScope.mode === 'featured' ? 'featured ' : ''
+      weeklyQuestionScope.mode === 'druglike' ? 'drug-like sampler ' : weeklyQuestionScope.mode === 'featured' ? 'featured ' : ''
     }votes saved. ${answered === scopeIndexes.length
       ? 'You’re done for now. Review your votes or explore all questions above.'
       : 'Use the arrows to return to the remaining questions.'}`;
@@ -6111,12 +6138,13 @@ function finish() {
   hideGrid();
   const revisableForFunSession = quizSource === 'weekly'
     && WEEKLY_ROUND?.public_status === 'revealed';
-  if (!revisableForFunSession && !(quizSource === 'weekly' && weeklyQuestionScope.mode === 'featured')) {
+  if (!revisableForFunSession && !(quizSource === 'weekly' && ['featured', 'druglike'].includes(weeklyQuestionScope.mode))) {
     researchBackend()?.completeSession(remoteSessionId);
   }
   const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
-  $('#ligand').textContent = quizSource === 'weekly' && weeklyQuestionScope.mode === 'featured'
-    ? 'Featured questions complete' : 'Quiz complete';
+  $('#ligand').textContent = quizSource === 'weekly' && weeklyQuestionScope.mode === 'druglike'
+    ? 'Drug-like picks complete'
+    : quizSource === 'weekly' && weeklyQuestionScope.mode === 'featured' ? 'Featured questions complete' : 'Quiz complete';
   $('#instruction').style.display = 'none'; $('#view-options').hidden = true; $('#answer-details').hidden = true;
   $('#choices').innerHTML = ''; $('#lock').style.display = 'none'; $('#next').style.display = 'none';
   $('#uncluster').style.display = 'none'; $('#mode').style.display = 'none'; $('#protmode').style.display = 'none';
@@ -6133,7 +6161,9 @@ function finish() {
     $('#verdict').innerHTML = isReadOnlyPreview()
       ? '<b>Read-only Preview complete.</b> No names or votes were saved.'
       : WEEKLY_ROUND?.public_status === 'revealed'
-      ? `<b>${weeklyQuestionScope?.mode === 'featured' ? 'Featured questions complete.' : 'Full-round results complete.'}</b> These scores use the Wednesday released coordinates.`
+      ? `<b>${weeklyQuestionScope?.mode === 'druglike' ? 'Drug-like sampler complete.' : weeklyQuestionScope?.mode === 'featured' ? 'Featured questions complete.' : 'Full-round results complete.'}</b> These scores use the Wednesday released coordinates.`
+      : weeklyQuestionScope.mode === 'druglike'
+      ? '<b>Your drug-like sampler votes are saved.</b> Votes count toward the full round; the original weekly assignment remains separate.'
       : '<b>Your weekly votes are saved.</b> Return Wednesday for released-coordinate results.';
     return;
   }
@@ -6566,8 +6596,7 @@ async function init() {
   } catch (error) {
     console.warn('Weekly quiz unavailable:', error.message);
   }
-  weeklyFeaturedScope = window.foldariumFeaturedQuestions.featuredQuestionScope(WEEKLY_ROUND);
-  weeklyQuestionScope = weeklyFeaturedScope || { mode: 'all' };
+  await initializeWeeklyQuestionScopes();
   const weeklyButton = document.querySelector('#quizsrc button[data-q="weekly"]');
   if (weeklyButton) weeklyButton.disabled = !POOLS.weekly.length;
   if (WEEKLY_ONLY) {

@@ -1,0 +1,20 @@
+{
+  "schema": "foldarium.weekly-question-recommendations/v1",
+  "recommendations": [
+    {
+      "round_id": "weekly-2026-10-24-beta-v2",
+      "blind_manifest_sha256": "01ee35493595a943b33f4530613c811646c7f866fc82b669082df9407d57604d",
+      "policy": "foldarium.medchem-presentation-preference/v1",
+      "selection_sha256": "7aef929bf7495614678fe5995d231c0bb31ae818bcd87354413b6886d11b0a00",
+      "source_item_count": 40,
+      "selected_question_count": 5,
+      "item_ids": [
+        "27WI",
+        "28FN",
+        "9QY6",
+        "9SYP",
+        "9YUB"
+      ]
+    }
+  ]
+}
