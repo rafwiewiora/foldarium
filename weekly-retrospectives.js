@@ -193,6 +193,12 @@ function roundHref(roundId) {
   return `/weekly/retrospectives/${encodeURIComponent(roundId)}`;
 }
 
+function appendLlmBenchmarkAvailability(host, entries, tag = 'p') {
+  if (Array.isArray(entries) && !entries.some(entry => entry.participant_kind === 'llm')) {
+    host.append(element(tag, 'empty compact', 'No LLM benchmark is available for this round.'));
+  }
+}
+
 function makeRoundRow(publication, compact = false) {
   const row = element('a', compact ? 'chooser-round' : 'round-row');
   row.href = roundHref(publication.round_id);
@@ -216,6 +222,7 @@ function makeRoundRow(publication, compact = false) {
     );
     meta.append(winner);
   }
+  appendLlmBenchmarkAvailability(meta, summary.automated_entries, 'span');
   if (compact) {
     row.append(date, meta);
     return row;
@@ -542,6 +549,7 @@ function renderAutomatedLeaderboard(host, detail) {
     ));
   });
   section.append(list);
+  appendLlmBenchmarkAvailability(section, detail.retrospective?.automated_entries);
   host.append(section);
 }
 
