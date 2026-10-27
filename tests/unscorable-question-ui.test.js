@@ -107,3 +107,15 @@ test('missing disposition cannot turn null correctness into a successful None an
     { id: 'p', correct: null, accepted_correct: null },
   ] }] }, { allowUnscorable: true }), /boolean correctness/);
 });
+
+
+test('missing bridge UI explains disconnected fragments without claiming insufficient coverage', async () => {
+  const context = await appContext(['function unscorableReferenceMessage(item = cur?.item)'], {
+    cur: { item: { ...item, reference_disposition: { code: 'missing_reference_bridge', observed_heavy_atoms: 38, expected_heavy_atoms: 45 } } },
+  });
+  const message = context.unscorableReferenceMessage();
+  assert.match(message, /missing atoms disconnect/);
+  assert.match(message, /38 of 45/);
+  assert.doesNotMatch(message, /below|insufficient coverage/);
+  assert.match(message, /excluded from score totals/);
+});

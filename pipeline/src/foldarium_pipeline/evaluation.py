@@ -140,13 +140,65 @@ class UnscorableReferenceError(EvaluationError):
     """A proven incomplete released reference; no pose correctness is defined."""
 
     def __init__(self, disposition):
-        super().__init__("released reference has explicitly unobserved atoms below the coverage floor")
+        super().__init__("released reference has a proven unscorable missing-atom disposition")
         self.disposition = disposition
 
 
+def _graph_components(names, neighbors):
+    """Connected components of one explicitly named induced CCD graph."""
+    unseen = set(names)
+    components = []
+    while unseen:
+        stack = [min(unseen)]
+        component = set()
+        while stack:
+            name = stack.pop()
+            if name not in unseen:
+                continue
+            unseen.remove(name)
+            component.add(name)
+            stack.extend(neighbors[name] & unseen)
+        components.append(component)
+    return components
+
+
+def _missing_reference_bridge_proof(elements, edges, observed):
+    """Prove deposited missing atoms disconnect an otherwise connected ligand.
+
+    This uses deposited component bonds, never distance-inferred bonds or a
+    failed prediction score. A missing component must join at least two distinct
+    observed components. The existing terminal-omission RMSD rule stays intact.
+    """
+    from .contracts import canonical_json
+    neighbors = {name: set() for name in elements}
+    for left, right in edges:
+        neighbors[left].add(right)
+        neighbors[right].add(left)
+    if len(_graph_components(elements, neighbors)) != 1:
+        return None
+    observed_components = _graph_components(observed, neighbors)
+    if len(observed_components) < 2:
+        return None
+    component_by_name = {name: index for index, component in enumerate(observed_components)
+                         for name in component}
+    missing = set(elements) - set(observed)
+    missing_components = _graph_components(missing, neighbors)
+    boundaries = sorted(len({component_by_name[neighbor] for name in component
+                             for neighbor in neighbors[name] if neighbor in observed})
+                        for component in missing_components)
+    if not boundaries or min(boundaries) < 1 or max(boundaries) < 2:
+        return None
+    graph = {"atoms": [[name, elements[name]] for name in sorted(elements)],
+             "bonds": [list(edge) for edge in sorted(edges)]}
+    return {"missing_heavy_atom_ids": sorted(missing),
+            "observed_component_count": len(observed_components),
+            "missing_component_boundary_counts": boundaries,
+            "ccd_heavy_atom_graph_sha256": hashlib.sha256(canonical_json(graph).encode()).hexdigest()}
+
+
 def _proven_unscorable_reference(reference_path, model, component_id, heavy_atoms, ligand_smiles):
-    """Recognize deposited missing atoms, never infer a disposition from a scoring error."""
-    from .reference_disposition import REFERENCE_DISPOSITION_POLICY
+    """Recognize deposited missing atoms, never disposition a generic scoring error."""
+    from .reference_disposition import REFERENCE_DISPOSITION_POLICY, REFERENCE_BRIDGE_DISPOSITION_POLICY
     gemmi, _numpy, Chem, _rd = _dependencies()
     try:
         block = gemmi.cif.read(str(reference_path)).sole_block()
@@ -159,9 +211,14 @@ def _proven_unscorable_reference(reference_path, model, component_id, heavy_atom
         ccd = Chem.RWMol()
         for name in names:
             ccd.AddAtom(Chem.Atom(elements[name]))
+        edges = set()
         for r in block.find("_chem_comp_bond.", ["comp_id", "atom_id_1", "atom_id_2"]):
             left, right = gemmi.cif.as_string(r[1]), gemmi.cif.as_string(r[2])
             if r[0] == component_id and left in elements and right in elements:
+                edge = tuple(sorted((left, right)))
+                if left == right or edge in edges:
+                    return None
+                edges.add(edge)
                 ccd.AddBond(names.index(left), names.index(right), Chem.BondType.SINGLE)
         source = Chem.MolFromSmiles(ligand_smiles or "")
         if source is None:
@@ -195,16 +252,26 @@ def _proven_unscorable_reference(reference_path, model, component_id, heavy_atom
                         and gemmi.cif.as_string(r[6]) == residue.seqid.icode.strip()}
                     if set(elements) - set(observed) != missing & set(elements):
                         return None
-                    conformers.append(len(observed))
-        observed_count = max(conformers, default=0)
-        if not 0 < observed_count / heavy_atoms < PARTIAL_REFERENCE_COVERAGE_MIN:
+                    coverage = len(observed) / heavy_atoms
+                    proof = _missing_reference_bridge_proof(elements, edges, observed) if coverage >= PARTIAL_REFERENCE_COVERAGE_MIN else None
+                    # Any usable deposited copy/conformer prevents whole-item exclusion.
+                    if coverage >= PARTIAL_REFERENCE_COVERAGE_MIN and proof is None:
+                        return None
+                    conformers.append((len(observed), proof))
+        observed_count = max((count for count, _proof in conformers), default=0)
+        if not 0 < observed_count < heavy_atoms:
             return None
-        return {"policy": REFERENCE_DISPOSITION_POLICY, "code": "insufficient_reference_coverage",
-                "component_id": component_id, "expected_heavy_atoms": heavy_atoms,
-                "observed_heavy_atoms": observed_count,
-                "explicitly_unobserved_heavy_atoms": heavy_atoms - observed_count,
-                "reference_coverage": observed_count / heavy_atoms,
-                "minimum_reference_coverage": PARTIAL_REFERENCE_COVERAGE_MIN}
+        common = {"component_id": component_id, "expected_heavy_atoms": heavy_atoms,
+                  "observed_heavy_atoms": observed_count,
+                  "explicitly_unobserved_heavy_atoms": heavy_atoms - observed_count,
+                  "reference_coverage": observed_count / heavy_atoms,
+                  "minimum_reference_coverage": PARTIAL_REFERENCE_COVERAGE_MIN}
+        if observed_count / heavy_atoms < PARTIAL_REFERENCE_COVERAGE_MIN:
+            return {"policy": REFERENCE_DISPOSITION_POLICY, "code": "insufficient_reference_coverage", **common}
+        proofs = [proof for count, proof in conformers if count == observed_count]
+        if not proofs or any(proof is None or proof != proofs[0] for proof in proofs):
+            return None
+        return {"policy": REFERENCE_BRIDGE_DISPOSITION_POLICY, "code": "missing_reference_bridge", **common, **proofs[0]}
     except (ValueError, RuntimeError, KeyError, TypeError):
         return None
 
@@ -1888,6 +1955,12 @@ def evaluate_ligand_pose(
         raise EvaluationError(f"prediction contains no ligand with {heavy_atoms} heavy atoms")
     if not reference_polymers or not predicted_polymers:
         raise EvaluationError("reference and prediction must both contain a receptor polymer")
+    # A high-coverage partial ligand may still omit an internal bridge. This is
+    # a deposited-reference fact, independent of all predicted coordinates.
+    if any(candidate[4] == "partial" for candidate in reference_ligands):
+        disposition = _proven_unscorable_reference(reference_path, reference_model, component_id, heavy_atoms, ligand_smiles)
+        if disposition is not None and disposition["code"] == "missing_reference_bridge":
+            raise UnscorableReferenceError(disposition)
 
     best: dict[str, Any] | None = None
     mapping_cache: dict[tuple[Any, ...], Any] = {}

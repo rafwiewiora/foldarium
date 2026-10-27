@@ -481,7 +481,10 @@ function renderQuestionRow(row, methods) {
   node.append(title);
   if (row.outcome === 'unscorable') {
     const d = row.question.reference_disposition || row.revealItem?.reference_disposition;
-    node.append(element('p', 'empty compact', `Not scored: the released reference contains ${d?.observed_heavy_atoms ?? 'too few'} of ${d?.expected_heavy_atoms ?? 'the expected'} ligand heavy atoms. Selections are preserved and excluded from score totals.`));
+    const reason = d?.code === 'missing_reference_bridge'
+      ? `missing atoms disconnect the released ligand reference into separate fragments (${d.observed_heavy_atoms} of ${d.expected_heavy_atoms} heavy atoms observed)`
+      : `the released reference contains ${d?.observed_heavy_atoms ?? 'too few'} of ${d?.expected_heavy_atoms ?? 'the expected'} ligand heavy atoms`;
+    node.append(element('p', 'empty compact', `Not scored: ${reason}. Selections are preserved and excluded from score totals.`));
   }
   const similarity = buildSimilarityMeta(row.similarity);
   if (similarity) node.append(similarity);

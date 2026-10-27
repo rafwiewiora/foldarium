@@ -24,7 +24,7 @@ from .methods.openfold3 import (
     OPENFOLD3_OUTPUT_POLICY,
     OPENFOLD3_VERSION,
 )
-from .selection import HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand, validate_selection_policy_version
+from .selection import AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION, HEAVY_ATOM_MINIMUM, SELECTION_POLICY_VERSION, select_ligand, validate_selection_policy_version
 from .sizing import SizingError, count_tokens, resolve_gpu_class, validate_gpu_class
 
 WWPDB_SEQUENCE_URL = "https://www.wwpdb.org/files/new_release_structure_sequence_canonical.tsv"
@@ -34,6 +34,9 @@ ADAPTER_VERSION = "foldarium-pipeline/0.4"
 
 POLYMER_TYPES = {"protein": "protein", "peptide": "protein", "dna": "dna", "rna": "rna"}
 NUCLEIC_ACID_CANONICAL_ALPHABET = frozenset("ACGTUIN")
+# Canonical prerelease sequences use X for modified/unknown residues. In v6 an
+# X cannot be the sole evidence that an otherwise nucleic sequence is protein.
+NUCLEIC_ACID_UNKNOWN_ALPHABET = NUCLEIC_ACID_CANONICAL_ALPHABET | {"X"}
 
 
 class IntakeError(ValueError):
@@ -268,7 +271,10 @@ def target_from_wwpdb(
         sequence = "".join(str(raw).split()).upper()
         if not sequence or not sequence.isalpha():
             raise IntakeError(f"wwPDB entry {pdb_id} has an invalid canonical sequence")
-        if set(sequence) <= NUCLEIC_ACID_CANONICAL_ALPHABET:
+        nucleic_alphabet = (NUCLEIC_ACID_UNKNOWN_ALPHABET
+                            if policy.selection_policy_version == AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION
+                            else NUCLEIC_ACID_CANONICAL_ALPHABET)
+        if set(sequence) <= nucleic_alphabet:
             raise IntakeError("ambiguous-or-nucleic-acid-polymer")
         if sequence not in seen:
             seen.add(sequence)
@@ -303,7 +309,11 @@ def target_from_wwpdb(
                     "inchi": selected.get("inchi"),
                 },
                 "stoichiometry_policy": "one-copy-per-distinct-prerelease-sequence/v1",
-                "polymer_type_policy": "reject-nucleic-alphabet-otherwise-protein/v1",
+                "polymer_type_policy": (
+                    "reject-nucleic-and-unknown-alphabet-otherwise-protein/v2"
+                    if policy.selection_policy_version == AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION
+                    else "reject-nucleic-alphabet-otherwise-protein/v1"
+                ),
                 "selection_policy_version": policy.selection_policy_version,
             },
         }

@@ -44,7 +44,10 @@ function renderDetail(artifact) {
     const details = element('details'); details.append(element('summary', `${item.target_id} · ${item.choices.length} poses${item.evaluation_status === 'unscorable' ? ' · Unscorable reference' : ''}`));
     if (item.reference_disposition) {
       const d = item.reference_disposition;
-      details.append(element('p', `${d.observed_heavy_atoms} of ${d.expected_heavy_atoms} ligand heavy atoms were observed in the released reference, below the ${d.minimum_reference_coverage * 100}% coverage requirement. All poses remain in this archive with no assigned score.`, 'note'));
+      const reason = d.code === 'missing_reference_bridge'
+        ? `Missing atoms disconnect the released ligand reference into separate fragments (${d.observed_heavy_atoms} of ${d.expected_heavy_atoms} heavy atoms observed).`
+        : `${d.observed_heavy_atoms} of ${d.expected_heavy_atoms} ligand heavy atoms were observed in the released reference, below the ${d.minimum_reference_coverage * 100}% coverage requirement.`;
+      details.append(element('p', `${reason} All poses remain in this archive with no assigned score.`, 'note'));
     }
     details.append(table('Pose evaluation', ['Method', 'Version', 'RMSD (Å)', 'Accepted'], item.choices.map(c => [c.method, c.method_version, c.rmsd == null ? 'Unscorable' : c.rmsd.toFixed(3), c.accepted_correct == null ? 'Not scored' : c.accepted_correct ? 'Yes' : 'No'])));
     content.append(details);

@@ -17,8 +17,9 @@ from .sizing import count_smiles_heavy_atoms, count_smiles_heavy_atoms_v5
 # Existing deployments stay on v4 until an explicit reviewed intake opt-in.
 LEGACY_SELECTION_POLICY_VERSION = "cameo-drug-like/v4"
 HYDROGEN_AWARE_SELECTION_POLICY_VERSION = "cameo-drug-like/v5"
+AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION = "cameo-drug-like/v6"
 SELECTION_POLICY_VERSION = LEGACY_SELECTION_POLICY_VERSION
-SUPPORTED_SELECTION_POLICY_VERSIONS = frozenset({LEGACY_SELECTION_POLICY_VERSION, HYDROGEN_AWARE_SELECTION_POLICY_VERSION})
+SUPPORTED_SELECTION_POLICY_VERSIONS = frozenset({LEGACY_SELECTION_POLICY_VERSION, HYDROGEN_AWARE_SELECTION_POLICY_VERSION, AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION})
 HEAVY_ATOM_MINIMUM = 15
 
 # Pose quizzes need one drug-like organic molecule, not a disconnected salt,
@@ -105,7 +106,7 @@ def ligand_heavy_atoms(ligand: Mapping[str, Any], *, policy_version: str = SELEC
     if not isinstance(smiles, str) or not smiles.strip():
         raise SelectionError("ligand SMILES must be a non-empty string")
     policy_version = validate_selection_policy_version(policy_version)
-    counter = count_smiles_heavy_atoms_v5 if policy_version == HYDROGEN_AWARE_SELECTION_POLICY_VERSION else count_smiles_heavy_atoms
+    counter = count_smiles_heavy_atoms_v5 if policy_version != LEGACY_SELECTION_POLICY_VERSION else count_smiles_heavy_atoms
     return counter(smiles)
 
 
@@ -181,6 +182,7 @@ __all__ = [
     "SELECTION_POLICY_VERSION",
     "LEGACY_SELECTION_POLICY_VERSION",
     "HYDROGEN_AWARE_SELECTION_POLICY_VERSION",
+    "AMBIGUOUS_NUCLEIC_SELECTION_POLICY_VERSION",
     "SUPPORTED_SELECTION_POLICY_VERSIONS",
     "validate_selection_policy_version",
     "target_selection_policy_version",

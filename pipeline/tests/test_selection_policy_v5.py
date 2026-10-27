@@ -57,14 +57,14 @@ class SelectionV5Tests(unittest.TestCase):
         self.assertEqual(selected['component_id'],'DRG')
 
     def test_unknown_policy_fails_including_empty_candidate_list(self):
-        for value in ('latest','cameo-drug-like/v6',None,{}):
+        for value in ('latest','cameo-drug-like/v7',None,{}):
             with self.subTest(value=value),self.assertRaises(SelectionError):
                 select_ligand([],policy_version=value)
         with self.assertRaises(SelectionError):
             WeeklyPolicy(selection_policy_version='latest').validate()
 
     def test_sizing_rejects_unknown_policy_instead_of_silently_using_v4(self):
-        for policy in ('latest', 'cameo-drug-like/v6', None, {}):
+        for policy in ('latest', 'cameo-drug-like/v7', None, {}):
             package = target()
             package['metadata']['selection_policy_version'] = policy
             with self.subTest(policy=policy), self.assertRaises(SizingError):
