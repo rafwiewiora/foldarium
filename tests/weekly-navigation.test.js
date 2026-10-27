@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { scopedWeeklyQuestionIndexes } from '../weekly-featured-questions.js';
 
 const readApp = () => readFile(new URL('../app.js', import.meta.url), 'utf8');
 
@@ -278,4 +279,69 @@ test('comment preference changes invalidate only the pending vote, not question 
   assert.equal(context.weeklyCommentPromptEnabled, true);
   assert.equal(invalidations, 2);
   assert.deepEqual(events, ['vote_comment_disabled', 'vote_comment_enabled']);
+});
+
+
+test('question arrow clicks stay within a sparse five-question assignment across all 40 questions', async () => {
+  const app = await readApp();
+  const elements = navigationElements();
+  const featuredIndexes = [0, 7, 15, 26, 39];
+  const items = Array.from({ length: 40 }, (_, index) => ({ id: `item-${index}` }));
+  const visited = [];
+  let context;
+  const sandbox = {
+    cur: { item: items[0] },
+    quizSource: 'weekly', idx: 0, ITEMS: items,
+    viewerTransitionBusy: false, revealRequested: false,
+    weeklyQuestionScope: { mode: 'featured', item_ids: featuredIndexes.map(index => items[index].id) },
+    retrospectiveQuestionFilter: 'all', retrospective: false,
+    isRetrospectiveReview: () => context.retrospective,
+    isArchiveRetrospective: () => false,
+    retrospectiveQuestionMatches: item => ['item-3', 'item-9'].includes(item.id),
+    window: { foldariumFeaturedQuestions: { scopedWeeklyQuestionIndexes } },
+    $: selector => elements.get(selector),
+    syncWeeklyQuestionScope() {}, syncRetrospectiveQuestionFilter() {},
+    syncWeeklyGuideContent() {}, rememberWeeklyItemState() {}, recordAppEvent() {},
+    async loadQuestion(index) {
+      visited.push(index);
+      context.idx = index;
+      context.cur = { item: items[index] };
+      context.syncQuestionNavigation();
+    },
+  };
+  context = installDeclarations(app, [
+    'function weeklyScopeQuestionIndexes(items = ITEMS)',
+    'function retrospectiveQuestionIndexes(filter = retrospectiveQuestionFilter)',
+    'function adjacentRetrospectiveQuestionIndex(direction)',
+    'async function navigateWeeklyQuestion(',
+    'function syncQuestionNavigation()',
+  ], sandbox);
+  for (const selector of ['#question-prev', '#question-next']) {
+    vm.runInContext(declaration(app, `$('${selector}').onclick = () =>`), context);
+  }
+
+  context.syncQuestionNavigation();
+  for (let position = 0; position < featuredIndexes.length; position += 1) {
+    assert.equal(context.idx, featuredIndexes[position], 'retain the full-round item index');
+    assert.equal(elements.get('#question-prev').disabled, position === 0);
+    assert.equal(elements.get('#question-next').disabled, position === 4);
+    if (position < 4) await elements.get('#question-next').onclick();
+  }
+  assert.deepEqual(visited, [7, 15, 26, 39], 'arrows skip every optional question');
+  for (const expected of [26, 15, 7, 0]) {
+    await elements.get('#question-prev').onclick();
+    assert.equal(context.idx, expected, 'previous arrow uses the same assignment ordering');
+  }
+
+  context.weeklyQuestionScope = { mode: 'all' };
+  context.syncQuestionNavigation();
+  await elements.get('#question-next').onclick();
+  assert.equal(context.idx, 1, 'Explore all restores ordinary full-round navigation');
+
+  context.retrospective = true;
+  context.idx = 3;
+  context.syncQuestionNavigation();
+  await elements.get('#question-next').onclick();
+  assert.equal(context.idx, 9, 'retrospective filters retain their existing ordering');
+  assert.equal(elements.get('#question-next').disabled, true);
 });

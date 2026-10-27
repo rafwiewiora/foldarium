@@ -6709,11 +6709,11 @@ async function init() {
   $('#next').onclick = next;
   $('#prev').onclick = prevDev;
   $('#question-prev').onclick = () => {
-    const target = isRetrospectiveReview() ? adjacentRetrospectiveQuestionIndex(-1) : idx - 1;
+    const target = adjacentRetrospectiveQuestionIndex(-1);
     if (target != null) void navigateWeeklyQuestion(target, 'question_previous');
   };
   $('#question-next').onclick = () => {
-    const target = isRetrospectiveReview() ? adjacentRetrospectiveQuestionIndex(1) : idx + 1;
+    const target = adjacentRetrospectiveQuestionIndex(1);
     if (target != null) void navigateWeeklyQuestion(target, 'question_next');
   };
   $('#retrospective-question-filter-select').onchange = event => {
