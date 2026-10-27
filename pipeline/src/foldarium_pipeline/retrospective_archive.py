@@ -1100,7 +1100,7 @@ def build_retrospective_artifacts(
         if has_exclusions:
             evaluation_scope = {"evaluation_status": "scored" if answer_key[item_id]["score_eligible"] else "unscorable"}
             if not answer_key[item_id]["score_eligible"]:
-                evaluation_scope["reference_disposition"] = {key: value for key, value in answer_key[item_id]["reference_disposition"].items() if key != "reference_sha256"}
+                evaluation_scope["reference_disposition"] = {key: value for key, value in answer_key[item_id]["reference_disposition"].items() if key not in {"reference_sha256", "ccd_heavy_atom_graph_sha256"}}
             public_questions[-1].update(evaluation_scope)
             admin_questions[-1].update(evaluation_scope)
             public_questions[-1]["human_aggregate"]["scorable_answered_count"] = len(human_responses) if answer_key[item_id]["score_eligible"] else 0

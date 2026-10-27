@@ -94,3 +94,25 @@ test('exact model accuracy uses raw correctness even when its cluster is accepte
   f.artifact.benchmarks[0].decisions[0].unclustered_correct = true; rehash(f);
   assert.throws(() => verifyHistoricalArtifact(f.bytes, f.catalog, f.summary));
 });
+
+
+test('historical missing-bridge proof retains null outcomes and explicit scientific provenance', () => {
+  const f = fixture();
+  const item = f.artifact.items[0];
+  Object.assign(item.reference_disposition, {
+    policy: 'foldarium.released-reference-disposition/v2', code: 'missing_reference_bridge',
+    expected_heavy_atoms: 45, observed_heavy_atoms: 38, explicitly_unobserved_heavy_atoms: 7,
+    reference_coverage: 38 / 45,
+    missing_heavy_atom_ids: ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'SI1'],
+    observed_component_count: 2, missing_component_boundary_counts: [2],
+    ccd_heavy_atom_graph_sha256: 'a'.repeat(64),
+  });
+  rehash(f);
+  const result = verifyHistoricalArtifact(f.bytes, f.catalog, f.summary);
+  assert.equal(result.counts.scorable_item_count, 0);
+  assert.ok(result.items[0].choices.every(choice => choice.correct === null && choice.rmsd === null));
+  assert.equal(result.items[0].reference_disposition.ccd_heavy_atom_graph_sha256, 'a'.repeat(64));
+  delete item.reference_disposition.ccd_heavy_atom_graph_sha256;
+  rehash(f);
+  assert.throws(() => verifyHistoricalArtifact(f.bytes, f.catalog, f.summary));
+});

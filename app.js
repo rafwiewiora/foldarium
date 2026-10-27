@@ -52,6 +52,9 @@ function weeklyItemUnscorable(item = cur?.item) {
 
 function unscorableReferenceMessage(item = cur?.item) {
   const d = item?.reference_disposition;
+  if (d?.code === 'missing_reference_bridge') {
+    return `Not scored: missing atoms disconnect the released ligand reference into separate fragments (${d.observed_heavy_atoms} of ${d.expected_heavy_atoms} heavy atoms observed). This question and your selection are preserved and excluded from score totals.`;
+  }
   return `Not scored: the released crystal reference contains ${d?.observed_heavy_atoms ?? 'too few'} of ${d?.expected_heavy_atoms ?? 'the expected'} ligand heavy atoms. This question and your selection are preserved and excluded from score totals.`;
 }
 function weeklyLigandPlddt(choice) {

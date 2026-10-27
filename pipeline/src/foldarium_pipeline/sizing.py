@@ -125,11 +125,11 @@ def count_tokens(target: Mapping[str, Any]) -> int:
 
     normalized = validate_target(target)
     # Keep frozen v4/unversioned resource estimates reproducible. Only targets
-    # explicitly enrolled in the v5 policy get the corrected hydrogen count.
+    # explicitly enrolled in v5 or later get the corrected hydrogen count.
     policy = normalized.get("metadata", {}).get("selection_policy_version", "cameo-drug-like/v4")
-    if not isinstance(policy, str) or policy not in {"cameo-drug-like/v4", "cameo-drug-like/v5"}:
+    if not isinstance(policy, str) or policy not in {"cameo-drug-like/v4", "cameo-drug-like/v5", "cameo-drug-like/v6"}:
         raise SizingError("unsupported ligand selection policy for token sizing")
-    hydrogen_aware = policy == "cameo-drug-like/v5"
+    hydrogen_aware = policy != "cameo-drug-like/v4"
     return sum(_entity_tokens(entity, hydrogen_aware=hydrogen_aware) for entity in normalized["entities"])
 
 
