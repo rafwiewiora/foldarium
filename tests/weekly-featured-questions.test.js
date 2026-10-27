@@ -155,3 +155,40 @@ test('featured result display validates assignment and scored populations indepe
     v => { v.round_id = 'different'; },
   ]) { const copy = structuredClone(result); mutate(copy); assert.throws(() => validateFeaturedResults(copy, round)); }
 });
+
+test('off-scope state from the old arrow bug returns to setup and a fresh start selects the first featured question', async () => {
+  const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+  const round = roundFixture();
+  const scope = featuredQuestionScope(round);
+  let cleared = 0, loaded = null;
+  const context = vm.createContext({
+    DEV: false, PERFORMANCE_RECORDING_REQUESTED: false, quizSource: 'weekly',
+    WEEKLY_ROUND: { round_id: 'round', public_status: 'open', blind_manifest_sha256: round.blind_manifest_sha256 },
+    POOLS: { weekly: round.blind_manifest.items }, ITEMS: [], WEEKLY_PREPARED_SESSION: null,
+    weeklyQuestionScope: scope, remoteSessionId: null,
+    isReadOnlyPreview: () => false, isRetrospectiveReview: () => false, isArchiveRetrospective: () => false,
+    window: {
+      foldariumFeaturedQuestions: { scopedWeeklyQuestionIndexes },
+      foldariumWeeklySessionResume: {
+        read: () => ({ round_id: 'round', phase: 'blind', session_id: 'existing', question_index: 0, scope }),
+        clear: () => { cleared += 1; },
+      },
+    },
+    researchBackend: () => ({ resumeNamedWeeklySession: () => assert.fail('off-scope position must not resume') }),
+    beginQuiz: () => assert.fail('off-scope position must not start'),
+    console: { warn() {} },
+    drawSession: () => round.blind_manifest.items,
+    $: () => ({ style: {}, classList: { remove() {} } }),
+    rememberView() {}, startWeeklyThinkingTrace() {},
+    weeklyViewerInstruction: () => '', oppLabel: () => '', loadQuestion: index => { loaded = index; },
+  });
+  vm.runInContext(declaration(app, 'async function resumeWeeklyQuizIfAvailable()'), context);
+  assert.equal(await context.resumeWeeklyQuizIfAvailable(), false);
+  assert.equal(cleared, 1);
+  assert.equal(context.remoteSessionId, null);
+  for (const signature of ['function weeklyScopeQuestionIndexes(items = ITEMS)', 'function beginQuiz(initialQuestionIndex = null)']) {
+    vm.runInContext(declaration(app, signature), context);
+  }
+  context.beginQuiz();
+  assert.equal(loaded, 1, 'a fresh start selects the first featured item, not the stale raw position');
+});
