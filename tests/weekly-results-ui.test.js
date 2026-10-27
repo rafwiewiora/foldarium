@@ -825,7 +825,7 @@ test('revealed Weekly records answer-informed votes before showing results', asy
   assert.match(app, /loadWeeklyPlayForFunLeaderboard\(\)\.then\(renderWeeklyLeaderboard\)/);
   assert.match(
     app,
-    /revisableForFunSession = quizSource === 'weekly'[\s\S]*public_status === 'revealed'[\s\S]*if \(!revisableForFunSession && !\(quizSource === 'weekly' && weeklyQuestionScope\.mode === 'featured'\)\)[\s\S]*researchBackend\(\)\?\.completeSession/,
+    /revisableForFunSession = quizSource === 'weekly'[\s\S]*public_status === 'revealed'[\s\S]*if \(!revisableForFunSession && !\(quizSource === 'weekly' && \['featured', 'druglike'\]\.includes\(weeklyQuestionScope\.mode\)\)\)[\s\S]*researchBackend\(\)\?\.completeSession/,
   );
   assert.match(html, /\.post-reveal-vote-note\{/);
 });

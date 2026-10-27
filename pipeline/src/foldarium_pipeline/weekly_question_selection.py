@@ -274,6 +274,38 @@ def public_featured_questions(audit: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _preserved_featured_marker(row: Mapping[str, Any], round_id: str) -> dict[str, Any]:
+    """Validate the immutable database marker before acknowledging an old draw."""
+    marker = row.get("featured_questions")
+    blind = row.get("blind_manifest")
+    if (row.get("round_id") != round_id or not isinstance(marker, Mapping) or not isinstance(blind, Mapping)
+        or blind.get("round_id") != round_id or blind.get("schema_version") != 1):
+        raise WeeklyQuestionSelectionError("existing featured selection source is invalid")
+    items = blind.get("items")
+    if (not isinstance(items, list) or not items or any(not isinstance(item, Mapping) for item in items)
+        or isinstance(row.get("item_count"), bool) or row.get("item_count") != len(items)):
+        raise WeeklyQuestionSelectionError("existing featured population is invalid")
+    ids = {_identifier(item.get("id"), "item.id") for item in items}
+    chosen = marker.get("item_ids")
+    candidates, requested, selected = (marker.get(key) for key in
+        ("candidate_count", "requested_question_count", "selected_question_count"))
+    digests = (marker.get("blind_manifest_sha256"), marker.get("candidate_population_sha256"), marker.get("selection_sha256"))
+    if (marker.get("schema_version") != 1 or marker.get("policy") != QUESTION_SELECTION_POLICY
+        or not isinstance(marker.get("mode"), str) or marker["mode"] not in QUESTION_SELECTION_MODES
+        or not isinstance(marker.get("seed"), str) or not marker["seed"].strip() or marker["seed"] != marker["seed"].strip()
+        or any(not isinstance(d, str) or len(d) != 64 or any(c not in "0123456789abcdef" for c in d) for d in digests)
+        or marker["blind_manifest_sha256"] != row.get("blind_manifest_sha256")
+        or marker["blind_manifest_sha256"] != manifest_sha256(blind)
+        or isinstance(marker.get("source_item_count"), bool) or marker.get("source_item_count") != len(items) or len(ids) != len(items)
+        or any(isinstance(n, bool) or not isinstance(n, int) for n in (candidates, requested, selected))
+        or not 1 <= candidates <= len(items) or not 1 <= requested <= 5 or selected != min(candidates, requested)
+        or not isinstance(chosen, list) or len(chosen) != selected
+        or any(not isinstance(item_id, str) or item_id not in ids for item_id in chosen)
+        or len(set(chosen)) != len(chosen)):
+        raise WeeklyQuestionSelectionError("existing featured selection binding is invalid")
+    return dict(marker)
+
+
 def freeze_weekly_featured_questions(
     coordinator: Any,
     round_id: str,
@@ -282,6 +314,9 @@ def freeze_weekly_featured_questions(
     question_count: int = DEFAULT_WEEKLY_QUESTION_COUNT,
     mode: str = "uniform",
     dry_run: bool = False,
+    preference_policy: str | None = None,
+    expected_blind_manifest_sha256: str | None = None,
+    expected_environment: str | None = None,
 ) -> dict[str, Any]:
     """Resolve one full published round and idempotently register its human draw.
 
@@ -289,23 +324,64 @@ def freeze_weekly_featured_questions(
     ``selection_sha256``. Both its descriptor and the exact final round/private
     digests are checked by the service-only RPC. No manifests, selector kits,
     votes, or benchmark denominators are changed. A dry run performs no writes.
+    A versioned ligand preference applies only to a new draw; an existing frozen
+    marker is returned unchanged before chemistry or private-index work. The
+    legacy default remains available for exact historical algorithm replay.
     """
 
     import json
 
     round_id = _identifier(round_id, "round_id")
+    if expected_blind_manifest_sha256 is not None and (
+        not isinstance(expected_blind_manifest_sha256, str) or len(expected_blind_manifest_sha256) != 64
+        or any(c not in "0123456789abcdef" for c in expected_blind_manifest_sha256)
+    ):
+        raise WeeklyQuestionSelectionError("expected blind manifest digest is invalid")
+    if expected_environment is not None and expected_environment not in ("production", "preview"):
+        raise WeeklyQuestionSelectionError("expected round environment is invalid")
+
+    def require_expected_binding(row):
+        if ((expected_blind_manifest_sha256 is not None and row.get("blind_manifest_sha256") != expected_blind_manifest_sha256)
+            or (expected_environment is not None and row.get("environment") != expected_environment)):
+            raise WeeklyQuestionSelectionError("featured source binding changed")
+
+    if preference_policy is not None:
+        from .druglike_selection import DRUGLIKE_PREFERENCE_POLICY
+        if preference_policy != DRUGLIKE_PREFERENCE_POLICY:
+            raise WeeklyQuestionSelectionError("unsupported featured ligand preference")
+        existing = coordinator.weekly_featured_question_selection(round_id)
+        if existing is not None:
+            if not isinstance(existing, Mapping):
+                raise WeeklyQuestionSelectionError("existing featured selection row is invalid")
+            require_expected_binding(existing)
+            marker = _preserved_featured_marker(existing, round_id)
+            return {"status": "already-registered", "round_id": round_id,
+                    "featured_questions": marker, "preserved_existing": True}
     source, private_content = coordinator.weekly_quiz_reveal_inputs(round_id)
+    require_expected_binding(source)
     if source.get("round_id") != round_id or source.get("status") != "open" or source.get("reveal_manifest") is not None:
         raise WeeklyQuestionSelectionError("featured questions require the exact unrevealed weekly round")
     try:
         private_index = json.loads(private_content)
     except (TypeError, ValueError) as exc:
         raise WeeklyQuestionSelectionError("source private index is invalid JSON") from exc
+    preference = None
+    if preference_policy is not None:
+        from .druglike_selection import assess_druglike_candidates
+        preference = assess_druglike_candidates(source["blind_manifest"], private_index)
     selection = select_weekly_questions(
         source["blind_manifest"], private_index,
         seed=f"weekly-featured:{round_id}" if seed is None else seed,
         question_count=question_count, mode=mode,
+        eligible_item_ids=preference["eligible_item_ids"] if preference is not None else None,
     )
+    if preference is not None:
+        if (preference.get("policy") != preference_policy
+            or preference.get("source_blind_manifest_sha256") != selection["source_blind_manifest_sha256"]
+            or preference.get("source_private_index_sha256") != selection["source_private_index_sha256"]):
+            raise WeeklyQuestionSelectionError("ligand preference differs from the exact source")
+        selection["ligand_preference"] = preference
+        selection["selection_sha256"] = _digest({key: value for key, value in selection.items() if key != "selection_sha256"})
     private_object = source.get("metadata", {}).get("private_index", {})
     if (
         selection["source_blind_manifest_sha256"] != source.get("blind_manifest_sha256")
@@ -343,8 +419,12 @@ def freeze_weekly_featured_questions(
         or receipt.get("selection_sha256") != digest
     ):
         raise WeeklyQuestionSelectionError("featured registration receipt differs from its exact draw")
+    preference_summary = ({"ligand_preference_status": preference["status"],
+                           "preferred_candidate_count": preference["preferred_count"],
+                           "preference_fallback_reason": preference["fallback_reason"]}
+                          if preference is not None else {})
     return {"status": receipt["status"], "round_id": round_id, "featured_questions": marker,
-            "selection_artifact": expected}
+            "selection_artifact": expected, **preference_summary}
 
 
 __all__ = [

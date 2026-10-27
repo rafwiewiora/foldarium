@@ -3571,6 +3571,33 @@ class SupabaseCoordinator(SupabasePublisher):
                 )
         return row
 
+    def weekly_featured_question_selection(self, round_id: str) -> dict[str, Any] | None:
+        """Read an exact frozen public marker without accessing answer artifacts.
+
+        The immutable selection remains authoritative after policy upgrades or
+        lost acknowledgements. This also reads closed/revealed rounds, unlike
+        current-round discovery, so callers never select a replacement draw.
+        """
+        round_id = _safe_identifier(round_id, "round_id")
+        query = urlencode({
+            "select": "round_id,environment,blind_manifest_sha256,item_count,blind_manifest,featured_questions",
+            "round_id": f"eq.{round_id}", "limit": "2",
+        })
+        rows = self._get_json_rows(
+            f"/rest/v1/public_weekly_quiz_rounds?{query}", "frozen featured question query"
+        )
+        if not rows:
+            return None
+        if len(rows) != 1 or rows[0].get("round_id") != round_id:
+            raise SupabasePublicationError("frozen featured question query returned an ambiguous identity")
+        row = rows[0]
+        marker = row.get("featured_questions")
+        if marker is None:
+            return None
+        if not isinstance(marker, Mapping):
+            raise SupabasePublicationError("frozen featured question marker is invalid")
+        return row
+
     def register_weekly_featured_questions(
         self,
         *,
