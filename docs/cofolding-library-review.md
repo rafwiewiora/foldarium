@@ -19,6 +19,9 @@ the preferred complexes and their provenance. No correctness label, crystal RMSD
 binding affinity, or fictitious answer is assigned.
 Changing a decision or note preserves the current 3D camera and viewer; only
 changing compound, page or comparison mode rebuilds the displayed structures.
+Each pose labels its prediction model and execution backend. Comparison bundles
+can therefore include native and browser predictions together; each record must
+retain its own protocol and provenance. Confidence scores remain model-specific.
 
 Each pose retains its own predicted receptor. A least-squares rigid fit using
 matching protein Cα atoms places complexes in one frame; the same transform moves
