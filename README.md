@@ -1,5 +1,10 @@
 # Foldarium
 
+The [local cofolding library reviewer](docs/cofolding-library-review.md) accepts
+Molarium library exports at `library-review.html`: compare independently seeded
+protein–ligand predictions, record preferred poses and notes, and export a
+shortlist. It runs locally and assigns no experimental correctness labels.
+
 Foldarium is an open-source molecular pose-triage quiz and a portable pipeline
 for assembling, scoring, and revealing blind weekly co-folding rounds.
 

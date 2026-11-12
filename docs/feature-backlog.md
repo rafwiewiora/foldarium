@@ -1,5 +1,21 @@
 # Feature backlog
 
+## Local compound-library review
+
+- **Status:** planned (source and Molarium-hosted integration prepared; native
+  production Foldarium rollout remains separate)
+- **Added:** 2026-11-12
+- **Goal:** review batches of protein–ligand cofolding predictions by exact pose
+  ID, with human preferences and a portable shortlist.
+- **Prepared:** standalone local library format/store, lazy per-compound loading,
+  grid and single-pose views, protein-frame alignment, component-graph ligand
+  rendering, prefer/reject/unreviewed/none decisions, notes and JSON round-trip.
+- **Verified:** unit tests and actual WebGPU-generated 20- and 76-residue
+  libraries reviewed through Molarium's same-origin copy. No quiz truth,
+  retrospective RMSD or leaderboard behavior is introduced.
+- **Pending:** operational acceptance and native production route rollout.
+- **Reference:** [scope and format](cofolding-library-review.md).
+
 This is the durable running list of potential Foldarium features. Items remain
 here until they are promoted into an implementation plan or explicitly declined.
 
