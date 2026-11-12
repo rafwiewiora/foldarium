@@ -51,7 +51,7 @@ function list() {
   }));
 }
 async function decide(p,value,note='') {
-  const c=bundle.run.compounds[compoundIndex];
+  const c=p?bundle.run.compounds.find(c=>c.id===p.compoundId):bundle.run.compounds[compoundIndex];
   const d={id:p?`pose:${p.id}`:`compound:${c.id}`,compoundId:c.id,poseId:p?.id??null,value,note};
   await store.decide(bundle.run.id,d);bundle.decisions=await store.records('decisions',bundle.run.id);list();paintDecisions();
 }
