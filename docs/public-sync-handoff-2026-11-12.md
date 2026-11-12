@@ -26,6 +26,10 @@ end-to-end review checks.
 The release follow-up preserves inspected cameras when changing a preference,
 note or none-of-these decision; a Molarium browser regression checks that the
 same viewer canvas survives a vote. The README now points to this handoff.
+The method-comparison follow-up labels each pose's model and execution backend,
+so native and quantized browser predictions can share a review library. Unknown
+per-pose inference timing is shown as unavailable. It makes no claim that native
+predictions are experimental truth or that confidence is calibrated across models.
 
 Pending: separately operated production Foldarium route acceptance/rollout.
 The Molarium-hosted route can ship independently. Public source availability
