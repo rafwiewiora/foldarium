@@ -17,6 +17,8 @@ locally. “None” clears existing preferences for that compound; preferring a 
 clears “none.” Export the full library with decisions, or a shortlist containing
 the preferred complexes and their provenance. No correctness label, crystal RMSD,
 binding affinity, or fictitious answer is assigned.
+Changing a decision or note preserves the current 3D camera and viewer; only
+changing compound, page or comparison mode rebuilds the displayed structures.
 
 Each pose retains its own predicted receptor. A least-squares rigid fit using
 matching protein Cα atoms places complexes in one frame; the same transform moves

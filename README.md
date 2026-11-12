@@ -22,7 +22,7 @@ provider-specific deployment configuration are included.
 
 Current feature status and mirror boundaries are recorded in the
 [`feature backlog`](docs/feature-backlog.md) and latest
-[`public sync handoff`](docs/public-sync-handoff-2026-08-29.md).
+[`public sync handoff`](docs/public-sync-handoff-2026-11-12.md).
 
 ## Quick start: local-only viewer
 

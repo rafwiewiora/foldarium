@@ -13,6 +13,16 @@ function download(content,name) {
 }
 const decision = p => bundle.decisions.find(d=>d.poseId===p.id);
 const isNone = id => bundle.decisions.find(d=>!d.poseId&&d.compoundId===id)?.value==='none';
+function paintDecisions() {
+  const c=bundle.run.compounds[compoundIndex];
+  $('compound-title').textContent=c.id+(isNone(c.id)?' · none of these poses':'');
+  for(const card of document.querySelectorAll('.pose')) {
+    const value=bundle.decisions.find(d=>d.poseId===card.dataset.poseId)?.value??'unreviewed';
+    card.classList.toggle('preferred',value==='preferred');card.classList.toggle('rejected',value==='rejected');
+    card.classList.toggle('selected',card.dataset.poseId===selected);
+    for(const b of card.querySelectorAll('[data-decision]'))b.classList.toggle('active',b.dataset.decision===value);
+  }
+}
 function message(text) {$('message').textContent=text;}
 async function refreshLibraries(preferred) {
   const runs=(await store.listRuns()).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
@@ -43,7 +53,7 @@ function list() {
 async function decide(p,value,note='') {
   const c=bundle.run.compounds[compoundIndex];
   const d={id:p?`pose:${p.id}`:`compound:${c.id}`,compoundId:c.id,poseId:p?.id??null,value,note};
-  await store.decide(bundle.run.id,d);bundle.decisions=await store.records('decisions',bundle.run.id);list();
+  await store.decide(bundle.run.id,d);bundle.decisions=await store.records('decisions',bundle.run.id);list();paintDecisions();
 }
 async function clearNone() {
   const c=bundle.run.compounds[compoundIndex],db=await store.database();
@@ -93,7 +103,7 @@ function render() {
     if(!visible.some(p=>p.id===selected))selected=visible[0]?.id;
     for(const p of visible) {
       if(token!==generation)return;
-      selected??=p.id;const card=document.createElement('article');card.className=`pose ${decision(p)?.value??''} ${selected===p.id?'selected':''}`;
+      selected??=p.id;const card=document.createElement('article');card.dataset.poseId=p.id;card.className=`pose ${decision(p)?.value??''} ${selected===p.id?'selected':''}`;
       const head=document.createElement('div');head.className='pose-head';const title=document.createElement('strong');title.textContent=`Pose ${p.sample+1} · seed ${p.seed}`;
       const meta=document.createElement('p'), confidence=ligandConfidence(p.result);
       const aligned=alignComplexPdb(p.result.pdb,reference);
@@ -102,8 +112,8 @@ function render() {
       const canvas=document.createElement('div');canvas.className='viewer';card.append(canvas);
       const choices=document.createElement('div');choices.className='choices';
       for(const [value,label] of [['preferred','Prefer'],['rejected','Reject'],['unreviewed','Unreviewed']]){
-        const b=document.createElement('button');b.textContent=label;b.className=decision(p)?.value===value?'active':'';
-        b.onclick=async()=>{selected=p.id;await decide(p,value,decision(p)?.note??'');await render();};choices.append(b);
+        const b=document.createElement('button');b.textContent=label;b.dataset.decision=value;b.className=decision(p)?.value===value?'active':'';
+        b.onclick=async()=>{selected=p.id;await decide(p,value,decision(p)?.note??'');};choices.append(b);
       }
       const pdb=document.createElement('button');pdb.textContent='PDB';pdb.onclick=()=>{
         const u=URL.createObjectURL(new Blob([p.result.pdb],{type:'chemical/x-pdb'})),a=document.createElement('a');a.href=u;a.download=`${c.id}-pose-${p.sample+1}.pdb`;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);
@@ -121,14 +131,14 @@ $('import').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;
 $('filter').oninput=list;$('mode').onchange=()=>{page=0;render();};
 function move(delta){if(!bundle)return;compoundIndex=(compoundIndex+delta+bundle.run.compounds.length)%bundle.run.compounds.length;page=0;selected=null;list();render();}
 $('previous').onclick=()=>move(-1);$('next').onclick=()=>move(1);
-$('none').onclick=async()=>{await decide(null,'none');await render();};
-$('clear-none').onclick=async()=>{await clearNone();list();await render();};
+$('none').onclick=async()=>{await decide(null,'none');};
+$('clear-none').onclick=async()=>{await clearNone();list();paintDecisions();};
 $('match').onclick=()=>{const snapshot=viewers[0]?.canvas3d?.camera.getSnapshot();if(snapshot)for(const p of viewers.slice(1))p.canvas3d.requestCameraReset({snapshot,durationMs:0});};
 $('export').onclick=async()=>download(stringifyLibrary(await store.bundle(bundle.run.id)),`foldarium-${bundle.run.id}.json`);
 $('shortlist').onclick=async()=>{const current=await store.overview(bundle.run.id),poses=await Promise.all(current.decisions.filter(d=>d.value==='preferred').map(d=>store.pose(current.run.id,d.poseId)));
   download(JSON.stringify({schema:'foldarium.cofolding-shortlist.v1',sourceRun:current.run,poses,decisions:current.decisions},(_k,v)=>ArrayBuffer.isView(v)?Array.from(v):v),`foldarium-shortlist-${current.run.id}.json`);};
 document.addEventListener('keydown',async e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key==='ArrowRight')move(1);if(e.key==='ArrowLeft')move(-1);
-  const value={p:'preferred',r:'rejected',u:'unreviewed'}[e.key.toLowerCase()],p=bundle?.poses.find(p=>p.id===selected);if(value&&p){await decide(p,value,decision(p)?.note??'');render();}});
+  const value={p:'preferred',r:'rejected',u:'unreviewed'}[e.key.toLowerCase()],p=bundle?.poses.find(p=>p.id===selected);if(value&&p){await decide(p,value,decision(p)?.note??'');}});
 refreshLibraries(new URLSearchParams(location.search).get('run')).catch(e=>message(e.message));
 // A running queue can announce new checkpoints without sending molecular data.
 const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('foldarium-library-updates'):null;
