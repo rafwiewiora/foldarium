@@ -10,6 +10,8 @@
 - **Prepared:** standalone local library format/store, lazy per-compound loading,
   grid and single-pose views, protein-frame alignment, component-graph ligand
   rendering, prefer/reject/unreviewed/none decisions, notes and JSON round-trip.
+- **Follow-up:** preference/none/note changes update controls in place, preserving
+  the inspected cameras and WebGL viewers instead of rebuilding them on a vote.
 - **Verified:** unit tests and actual WebGPU-generated 20- and 76-residue
   libraries reviewed through Molarium's same-origin copy. No quiz truth,
   retrospective RMSD or leaderboard behavior is introduced.
